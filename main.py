@@ -165,7 +165,6 @@ async def generate_pdf_base64(analysis_data: Dict[str, Any]):
         
         if ai_analysis:
             # Yhteenveto / Summary
-            summary_key = 'yhteenveto' if language == 'fi' else 'summary'
             if ai_analysis.get('yhteenveto') or ai_analysis.get('summary'):
                 story.append(Paragraph(t['summary'], heading_style))
                 summary_text = ai_analysis.get('yhteenveto', ai_analysis.get('summary', ''))
@@ -176,7 +175,6 @@ async def generate_pdf_base64(analysis_data: Dict[str, Any]):
             story.append(Paragraph(t['swot_analysis'], heading_style))
             
             # Vahvuudet / Strengths
-            strengths_key = 'vahvuudet' if language == 'fi' else 'strengths'
             if ai_analysis.get('vahvuudet') or ai_analysis.get('strengths'):
                 story.append(Paragraph(t['strengths'], subheading_style))
                 strengths = ai_analysis.get('vahvuudet', ai_analysis.get('strengths', []))
@@ -185,7 +183,6 @@ async def generate_pdf_base64(analysis_data: Dict[str, Any]):
                 story.append(Spacer(1, 10))
             
             # Heikkoudet / Weaknesses
-            weaknesses_key = 'heikkoudet' if language == 'fi' else 'weaknesses'
             if ai_analysis.get('heikkoudet') or ai_analysis.get('weaknesses'):
                 story.append(Paragraph(t['weaknesses'], subheading_style))
                 weaknesses = ai_analysis.get('heikkoudet', ai_analysis.get('weaknesses', []))
@@ -194,7 +191,6 @@ async def generate_pdf_base64(analysis_data: Dict[str, Any]):
                 story.append(Spacer(1, 10))
             
             # Mahdollisuudet / Opportunities
-            opportunities_key = 'mahdollisuudet' if language == 'fi' else 'opportunities'
             if ai_analysis.get('mahdollisuudet') or ai_analysis.get('opportunities'):
                 story.append(Paragraph(t['opportunities'], subheading_style))
                 opportunities = ai_analysis.get('mahdollisuudet', ai_analysis.get('opportunities', []))
@@ -203,7 +199,6 @@ async def generate_pdf_base64(analysis_data: Dict[str, Any]):
                 story.append(Spacer(1, 10))
             
             # Uhat / Threats
-            threats_key = 'uhat' if language == 'fi' else 'threats'
             if ai_analysis.get('uhat') or ai_analysis.get('threats'):
                 story.append(Paragraph(t['threats'], subheading_style))
                 threats = ai_analysis.get('uhat', ai_analysis.get('threats', []))
@@ -212,7 +207,6 @@ async def generate_pdf_base64(analysis_data: Dict[str, Any]):
                 story.append(Spacer(1, 20))
             
             # Digitaalinen jalanjälki / Digital Footprint
-            digi_key = 'digitaalinen_jalanjalki' if language == 'fi' else 'digital_footprint'
             if ai_analysis.get('digitaalinen_jalanjalki') or ai_analysis.get('digital_footprint'):
                 story.append(Paragraph(t['digital_footprint'], heading_style))
                 digi = ai_analysis.get('digitaalinen_jalanjalki', ai_analysis.get('digital_footprint', {}))
@@ -234,7 +228,6 @@ async def generate_pdf_base64(analysis_data: Dict[str, Any]):
                 story.append(Spacer(1, 20))
             
             # Toimenpidesuositukset / Recommendations
-            recs_key = 'toimenpidesuositukset' if language == 'fi' else 'recommendations'
             if ai_analysis.get('toimenpidesuositukset') or ai_analysis.get('recommendations'):
                 story.append(PageBreak())  # Uusi sivu toimenpiteille
                 story.append(Paragraph(t['recommendations'], heading_style))
@@ -278,7 +271,6 @@ async def generate_pdf_base64(analysis_data: Dict[str, Any]):
                     story.append(Spacer(1, 15))
             
             # Erottautumiskeinot / Differentiation
-            diff_key = 'erottautumiskeinot' if language == 'fi' else 'differentiation'
             if ai_analysis.get('erottautumiskeinot') or ai_analysis.get('differentiation'):
                 story.append(Paragraph(t['differentiation'], heading_style))
                 methods = ai_analysis.get('erottautumiskeinot', ai_analysis.get('differentiation', []))
