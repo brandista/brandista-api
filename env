@@ -1,0 +1,4 @@
+# .env.example
+OPENAI_API_KEY=sk-your-api-key-here
+DATABASE_URL=your-database-url
+REDIS_URL=your-redis-url
