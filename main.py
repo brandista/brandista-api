@@ -56,7 +56,7 @@ async def add_security_headers(request, call_next):
 openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY")) if (AsyncOpenAI and os.getenv("OPENAI_API_KEY")) else None
 
 # Feature flag: JS render on/off (default OFF for stability)
-SMART_JS_RENDER = os.getenv("SMART_JS_RENDER", "0").lower() in ("1", "true", "yes")
+SMART_JS_RENDER = os.getenv("SMART_JS_RENDER", "1").lower() in ("1", "true", "yes")
 
 # ========== MODELS ==========
 
