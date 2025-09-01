@@ -579,7 +579,7 @@ Perustele havaintosi datalla. Vastaa VAIN JSON-muodossa SUOMEKSI.
                 ai_full = {}
                 ai_reco = []
 
-                # 3) Palauta legacy-ystävällinen muoto + smart-dataset
+        # 3) Palauta legacy-ystävällinen muoto + smart-dataset
 
         # Nosta kilpailijaprofiilin vahvuusalueet/strengths yhdeksi listaksi
         kilpailijaprofiili = ai_full.get("kilpailijaprofiili") or ai_full.get("competitor_profile") or {}
@@ -587,6 +587,18 @@ Perustele havaintosi datalla. Vastaa VAIN JSON-muodossa SUOMEKSI.
             erottautumiskeinot = kilpailijaprofiili.get("vahvuusalueet", kilpailijaprofiili.get("strengths", []))
         else:
             erottautumiskeinot = []
+
+        # KORJATTU quick_wins käsittely - tukee molemmat kielet
+        quick_wins_list = []
+        if ai_reco or result["smart"]["actions"]:
+            for a in (ai_reco or result["smart"]["actions"])[:3]:
+                if isinstance(a, dict):
+                    # Kokeile ensin otsikko, sitten title, sitten tyhjä
+                    win = a.get("otsikko", a.get("title", ""))
+                else:
+                    win = str(a)
+                if win:
+                    quick_wins_list.append(win)
 
         return {
             "success": True,
@@ -619,8 +631,7 @@ Perustele havaintosi datalla. Vastaa VAIN JSON-muodossa SUOMEKSI.
                     "sisaltostrategia": "Aktiivinen" if len(result["smart"].get("content_analysis", {}).get("services_hints", [])) > 2 else "Kehitettävä"
                 },
                 "erottautumiskeinot": erottautumiskeinot,
-                "quick_wins": [a["otsikko"] for a in (ai_reco or result["smart"]["actions"])[:3]]
-                               if (ai_reco or result["smart"]["actions"]) else []
+                "quick_wins": quick_wins_list  # Käytä korjattua listaa
             },
             "smart": result["smart"]
         }
