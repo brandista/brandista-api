@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+pythonfrom fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, List, Optional
@@ -89,4 +89,62 @@ async def analyze_competitor(request: AnalysisRequest):
         
         # Kerää otsikot
         h1_tags = [h1.text.strip() for h1 in soup.find_all('h1')][:5]
-        h2_tags = [h2.t
+        h2_tags = [h2.text.strip() for h2 in soup.find_all('h2')][:10]
+        
+        # Laske pisteet (yksinkertainen algoritmi)
+        score = 50  # Perus
+        if title: score += 10
+        if meta_desc: score += 10
+        if len(h1_tags) > 0: score += 10
+        if len(h2_tags) > 3: score += 10
+        if len(response.text) > 10000: score += 10
+        
+        # Rakenna analyysi
+        analysis_data = {
+            "title": title_text,
+            "description": description,
+            "headings": {
+                "h1": h1_tags,
+                "h2": h2_tags
+            },
+            "insights": {
+                "has_seo": bool(title and meta_desc),
+                "content_length": len(response.text),
+                "heading_count": len(h1_tags) + len(h2_tags),
+                "strengths": [],
+                "weaknesses": []
+            }
+        }
+        
+        # Analysoi vahvuudet ja heikkoudet
+        if len(h1_tags) > 0:
+            analysis_data["insights"]["strengths"].append("Selkeä otsikointi")
+        else:
+            analysis_data["insights"]["weaknesses"].append("Ei H1-otsikoita")
+            
+        if len(description) > 100:
+            analysis_data["insights"]["strengths"].append("Hyvä meta-kuvaus")
+        else:
+            analysis_data["insights"]["weaknesses"].append("Lyhyt tai puuttuva kuvaus")
+        
+        return AnalysisResponse(
+            success=True,
+            url=url,
+            data=analysis_data,
+            score=score,
+            message="Analyysi valmis!"
+        )
+        
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=400, detail=f"Virhe haussa: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Analyysi epäonnistui: {str(e)}")
+
+@app.get("/test")
+def test_endpoint():
+    """Testaa että API toimii"""
+    return {
+        "message": "API toimii!",
+        "timestamp": "2024",
+        "test": True
+    }
