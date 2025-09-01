@@ -3,7 +3,7 @@ uvicorn==0.27.0
 httpx==0.26.0
 beautifulsoup4==4.12.2
 pydantic==2.5.3
-python-dotenv==1.0.0
+
 # Lisää nämä rivit requirements.txt tiedostoon:
 openai==1.54.0
 python-dotenv==1.0.1
