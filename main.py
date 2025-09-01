@@ -352,8 +352,10 @@ async def ai_analyze_compat(req: CompetitorAnalysisRequest):
         smart_resp = await analyze_competitor(AnalyzeRequest(url=target_url))
         result = smart_resp.dict()
 
-        # 2) (Optional) AI-rikastus – lisätään mukaan recommendations_ai
-        ai_reco: List[Dict[str, Any]] = []
+        # 2) (Optional) AI-rikastus
+        ai_full = {}
+        ai_reco = []
+        
         if openai_client and req.use_ai:
             # Rakenna tiivis prompt smart-datasta
             summary = {
@@ -364,12 +366,21 @@ async def ai_analyze_compat(req: CompetitorAnalysisRequest):
                 "tech_cro": result["smart"]["tech_cro"],
                 "head_signals": result["smart"]["head_signals"],
             }
-            prompt = (
-                "Laadi 5 konkreettista toimenpidettä prioriteetin ja vaikutuksen mukaan. "
-                "Muotoile JSON-listana, jokaisessa: otsikko, kuvaus, prioriteetti (korkea/keskitaso/matala), "
-                "aikataulu (heti/1–3kk/3–6kk), mittari (KPI). Perusta ehdotukset tähän dataan:\n"
-                + json.dumps(summary, ensure_ascii=False)
-            )
+            prompt = f"""
+Analysoi tämä kilpailijan verkkosivusto ja luo kattava JSON-muotoinen analyysi.
+
+SIVUSTON DATA:
+{json.dumps(summary, ensure_ascii=False, indent=2)}
+
+Luo JSON-objekti jossa on:
+1. "yhteenveto": 2-3 lauseen kuvaus sivustosta ja sen tilasta
+2. "vahvuudet": lista 3-5 vahvuutta (esim. hyvä SEO, analytiikka käytössä, jne)
+3. "heikkoudet": lista 3-5 heikkoutta perustuen löydöksiin
+4. "mahdollisuudet": lista 3-4 mahdollisuutta parantaa
+5. "toimenpidesuositukset": lista 5 toimenpidettä, jokainen objekti: otsikko, kuvaus, prioriteetti, aikataulu
+
+Vastaa VAIN JSON-muodossa.
+"""
 
             try:
                 resp = await openai_client.chat.completions.create(
@@ -383,10 +394,14 @@ async def ai_analyze_compat(req: CompetitorAnalysisRequest):
                     max_tokens=900,
                 )
                 parsed = json.loads(resp.choices[0].message.content)
-                ai_reco = parsed.get("actions", parsed if isinstance(parsed, list) else [])
+                # Käytä koko AI-vastausta
+                ai_full = parsed if isinstance(parsed, dict) else {}
+                ai_reco = ai_full.get("toimenpidesuositukset", [])
             except Exception as e:
-                ai_reco = [{"otsikko":"AI-rikastus epäonnistui","kuvaus":str(e)}]
-
+                print(f"AI enhancement failed: {str(e)}")
+                ai_full = {}
+                ai_reco = []
+        
         # 3) Palauta legacy-ystävällinen muoto + smart-dataset
         return {
             "success": True,
@@ -401,11 +416,11 @@ async def ai_analyze_compat(req: CompetitorAnalysisRequest):
                 "has_market_position": bool(req.market_position),
             },
             "ai_analysis": {
-                "yhteenveto": f"Yhteenveto kohteesta {req.company_name or target_url}.",
-                "vahvuudet": req.strengths or [],
-                "heikkoudet": req.weaknesses or [],
-                "mahdollisuudet": [],
-                "uhat": [],
+                "yhteenveto": ai_full.get("yhteenveto", f"Sivusto {req.company_name} sai {result['smart']['scores']['total']}/100 pistettä digitaalisessa analyysissä."),
+                "vahvuudet": ai_full.get("vahvuudet", []),
+                "heikkoudet": ai_full.get("heikkoudet", []),
+                "mahdollisuudet": ai_full.get("mahdollisuudet", []),
+                "uhat": ai_full.get("uhat", []),
                 "toimenpidesuositukset": ai_reco or result["smart"]["actions"],
                 "digitaalinen_jalanjalki": {
                     "arvio": result["smart"]["scores"]["total"] // 10,
@@ -413,9 +428,9 @@ async def ai_analyze_compat(req: CompetitorAnalysisRequest):
                     "sisaltostrategia": "—"
                 },
                 "erottautumiskeinot": [],
-                "quick_wins": [a["otsikko"] for a in result["smart"]["actions"][:3]] if result["smart"]["actions"] else []
+                "quick_wins": [a["otsikko"] for a in (ai_reco or result["smart"]["actions"])[:3]] if (ai_reco or result["smart"]["actions"]) else []
             },
-            "smart": result["smart"]  # koko rikas dataset saatavilla frontille
+            "smart": result["smart"]  # koko smart data mukaan
         }
 
     except HTTPException:
