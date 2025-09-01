@@ -412,10 +412,10 @@ async def analyze_competitor(request: AnalyzeRequest):
     try:
         url = request.url if request.url.startswith("http") else f"https://{request.url}"
         
-        # Tarkista välimuisti
-        cached = get_cached_analysis(url)
-        if cached:
-            return SmartAnalyzeResponse(**cached)
+        # Välimuisti pois käytöstä toistaiseksi
+        # cached = get_cached_analysis(url)
+        # if cached:
+        #     return SmartAnalyzeResponse(**cached)
 
         # 1) Nopea haku
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
@@ -469,8 +469,8 @@ async def analyze_competitor(request: AnalyzeRequest):
             smart=smart
         )
         
-        # Tallenna välimuistiin
-        save_to_cache(url, result.dict())
+        # Välimuisti pois käytöstä toistaiseksi
+        # save_to_cache(url, result.dict())
         
         return result
     except httpx.RequestError as e:
