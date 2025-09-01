@@ -525,7 +525,7 @@ WEBSITE DATA:
 {json.dumps(summary, ensure_ascii=False, indent=2)}
 
 Create a JSON object with:
-1. "summary": 4-5 sentence description of the site, its condition and services/products found
+1. "summary": 4-6 sentence description of the site, its condition and services/products found
 2. "strengths": list of 4-6 strengths based on data (e.g. good SEO, analytics, trust signals)
 3. "weaknesses": list of 4-6 weaknesses based on findings
 4. "opportunities": list of 4-5 opportunities to improve
@@ -544,7 +544,7 @@ SIVUSTODATA:
 {json.dumps(summary, ensure_ascii=False, indent=2)}
 
 Luo JSON-objekti, jossa on:
-1. "yhteenveto": 4–5 lausetta sivuston tilasta ja palveluista/tuotteista
+1. "yhteenveto": 4–6 lausetta sivuston tilasta ja palveluista/tuotteista
 2. "vahvuudet": 4–6 vahvuutta datan perusteella (esim. SEO, analytiikka, luottamussignaalit)
 3. "heikkoudet": 4–6 heikkoutta löydösten perusteella
 4. "mahdollisuudet": 4–5 mahdollisuutta parantaa
