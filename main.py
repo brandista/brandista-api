@@ -2,16 +2,28 @@ import os
 import re
 import json
 import base64
+import hashlib
+import logging
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
+from functools import lru_cache
+from collections import defaultdict
 
 import httpx
 from bs4 import BeautifulSoup
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
+
+# System monitoring (optional)
+try:
+    import psutil
+    import platform
+    MONITORING_AVAILABLE = True
+except ImportError:
+    MONITORING_AVAILABLE = False
 
 # OpenAI (optional)
 try:
@@ -28,7 +40,31 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.platypus.flowables import HRFlowable
 from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
 
-APP_VERSION = "4.1.0"
+# Logging configuration
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+APP_VERSION = "4.3.0"
+
+def get_cached_analysis(url: str):
+    """Hae välimuistista jos alle 24h vanha"""
+    key = cache_key(url)
+    if key in analysis_cache:
+        cached = analysis_cache[key]
+        if datetime.now() - cached['timestamp'] < timedelta(hours=24):
+            return cached['data']
+    return None
+
+def save_to_cache(url: str, data: dict):
+    """Tallenna välimuistiin"""
+    key = cache_key(url)
+    analysis_cache[key] = {
+        'timestamp': datetime.now(),
+        'data': data
+    }
 
 app = FastAPI(
     title="Brandista Competitive Intel API",
@@ -248,6 +284,98 @@ def score_and_recommend(head_sig, tech_cro, word_count):
         "actions":actions[:8]
     }
 
+def analyze_content(soup: BeautifulSoup, url: str):
+    """
+    Analysoi sivuston sisältöä syvällisemmin
+    """
+    content_analysis = {
+        "headings": {},
+        "images": {"total": 0, "with_alt": 0, "without_alt": 0},
+        "links": {"internal": 0, "external": 0, "total": 0},
+        "text_content": "",
+        "services_hints": [],
+        "trust_signals": [],
+        "content_quality": {}
+    }
+    
+    # Kerää otsikot
+    for i in range(1, 7):
+        h_tags = soup.find_all(f'h{i}')
+        if h_tags:
+            content_analysis["headings"][f'h{i}'] = [tag.get_text(strip=True)[:100] for tag in h_tags[:5]]
+    
+    # Analysoi kuvat
+    images = soup.find_all('img')
+    content_analysis["images"]["total"] = len(images)
+    content_analysis["images"]["with_alt"] = len([img for img in images if img.get('alt')])
+    content_analysis["images"]["without_alt"] = len(images) - content_analysis["images"]["with_alt"]
+    
+    # Linkit
+    links = soup.find_all('a', href=True)
+    for link in links:
+        href = link['href']
+        if href.startswith('http://') or href.startswith('https://'):
+            if url in href:
+                content_analysis["links"]["internal"] += 1
+            else:
+                content_analysis["links"]["external"] += 1
+        elif not href.startswith('#') and not href.startswith('mailto:'):
+            content_analysis["links"]["internal"] += 1
+    content_analysis["links"]["total"] = len(links)
+    
+    # Kerää keskeinen tekstisisältö
+    main_content = soup.find('main') or soup.find('article') or soup.find('div', class_=re.compile('content|main'))
+    if main_content:
+        text = main_content.get_text(separator=' ', strip=True)
+    else:
+        text = soup.get_text(separator=' ', strip=True)
+    
+    # Puhdista ja rajaa teksti
+    text = re.sub(r'\s+', ' ', text)
+    content_analysis["text_content"] = text[:3000]
+    
+    # Tunnista palvelut/tuotteet
+    service_keywords = [
+        'palvelu', 'tuote', 'ratkaisu', 'tarjoa', 'toiminta', 'asiantuntija',
+        'service', 'product', 'solution', 'offer', 'expert', 'consulting'
+    ]
+    text_lower = text.lower()
+    for keyword in service_keywords:
+        if keyword in text_lower:
+            sentences = text.split('.')
+            for sentence in sentences:
+                if keyword in sentence.lower() and len(sentence) < 200:
+                    content_analysis["services_hints"].append(sentence.strip())
+                    if len(content_analysis["services_hints"]) >= 5:
+                        break
+    
+    # Tunnista luottamussignaalit
+    trust_patterns = [
+        (r'\d{4,}-\d{4,}', 'Y-tunnus'),
+        (r'(?:perustettu|founded|since) \d{4}', 'Perustamisvuosi'),
+        (r'ISO[ -]?\d{4,}', 'ISO-sertifikaatti'),
+        (r'palkinto|award|voittaja|winner', 'Palkinnot'),
+        (r'asiakasta|clients|customers', 'Asiakasreferenssit'),
+        (r'henkilö|työntekijä|employees|team', 'Tiimitieto'),
+        ('yhteystiedot', 'Yhteystiedot'),
+        ('testimo|referenssi|case', 'Asiakastarinat')
+    ]
+    
+    for pattern, signal_type in trust_patterns:
+        if re.search(pattern, text_lower, re.IGNORECASE):
+            content_analysis["trust_signals"].append(signal_type)
+    
+    # Arvioi sisällön laatua
+    content_analysis["content_quality"] = {
+        "text_length": len(text),
+        "unique_words": len(set(text.lower().split())),
+        "avg_sentence_length": len(text.split()) / max(len(text.split('.')), 1),
+        "has_contact_info": bool(re.search(r'@|puh|tel|phone', text_lower)),
+        "has_address": bool(re.search(r'\d{5}|finland|suomi|helsinki|tampere|turku|oulu', text_lower))
+    }
+    
+    return content_analysis
+
 # ========== ENDPOINTS ==========
 
 @app.get("/")
@@ -283,6 +411,11 @@ def health():
 async def analyze_competitor(request: AnalyzeRequest):
     try:
         url = request.url if request.url.startswith("http") else f"https://{request.url}"
+        
+        # Tarkista välimuisti
+        cached = get_cached_analysis(url)
+        if cached:
+            return SmartAnalyzeResponse(**cached)
 
         # 1) Nopea haku
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
@@ -308,6 +441,10 @@ async def analyze_competitor(request: AnalyzeRequest):
         head_sig = extract_head_signals(soup)
         tech_cro = detect_tech_and_cro(soup, str(soup))
         sitemap_info = await collect_robots_and_sitemap(url)
+        
+        # UUSI: Käytä analyze_content funktiota
+        content_data = analyze_content(soup, url)
+        
         scores = score_and_recommend(head_sig, tech_cro, word_count)
 
         smart = {
@@ -315,13 +452,14 @@ async def analyze_competitor(request: AnalyzeRequest):
             "head_signals": head_sig,
             "tech_cro": tech_cro,
             "sitemap": sitemap_info,
+            "content_analysis": content_data,  # UUSI: Lisää sisältöanalyysi
             "scores": scores["scores"],
             "top_findings": scores["top_findings"],
             "actions": scores["actions"],
-            "flags": {"js_render_enabled": SMART_JS_RENDER}
+            "flags": {"js_render_enabled": SMART_JS_RENDER, "cached": False}
         }
 
-        return SmartAnalyzeResponse(
+        result = SmartAnalyzeResponse(
             success=True,
             url=url,
             title=title or "Ei otsikkoa",
@@ -330,6 +468,11 @@ async def analyze_competitor(request: AnalyzeRequest):
             insights={"word_count": word_count},
             smart=smart
         )
+        
+        # Tallenna välimuistiin
+        save_to_cache(url, result.dict())
+        
+        return result
     except httpx.RequestError as e:
         raise HTTPException(status_code=400, detail=f"Virhe sivun haussa: {str(e)}")
     except Exception as e:
@@ -352,12 +495,13 @@ async def ai_analyze_compat(req: CompetitorAnalysisRequest):
         smart_resp = await analyze_competitor(AnalyzeRequest(url=target_url))
         result = smart_resp.dict()
 
-        # 2) (Optional) AI-rikastus
+        # 2) (Optional) AI-rikastus parannetuilla tiedoilla
         ai_full = {}
         ai_reco = []
         
         if openai_client and req.use_ai:
-            # Rakenna tiivis prompt smart-datasta
+            # Rakenna kattavampi prompt sisältöanalyysilla
+            content_info = result["smart"].get("content_analysis", {})
             summary = {
                 "url": result.get("url"),
                 "scores": result["smart"]["scores"],
@@ -365,7 +509,17 @@ async def ai_analyze_compat(req: CompetitorAnalysisRequest):
                 "actions": result["smart"]["actions"],
                 "tech_cro": result["smart"]["tech_cro"],
                 "head_signals": result["smart"]["head_signals"],
+                "content_summary": {
+                    "headings": content_info.get("headings", {}),
+                    "images": content_info.get("images", {}),
+                    "links": content_info.get("links", {}),
+                    "services_hints": content_info.get("services_hints", []),
+                    "trust_signals": content_info.get("trust_signals", []),
+                    "content_quality": content_info.get("content_quality", {}),
+                    "text_preview": content_info.get("text_content", "")[:500]
+                }
             }
+            
             prompt = f"""
 Analysoi tämä kilpailijan verkkosivusto ja luo kattava JSON-muotoinen analyysi.
 
@@ -373,28 +527,29 @@ SIVUSTON DATA:
 {json.dumps(summary, ensure_ascii=False, indent=2)}
 
 Luo JSON-objekti jossa on:
-1. "yhteenveto": 2-3 lauseen kuvaus sivustosta ja sen tilasta
-2. "vahvuudet": lista 3-5 vahvuutta (esim. hyvä SEO, analytiikka käytössä, jne)
-3. "heikkoudet": lista 3-5 heikkoutta perustuen löydöksiin
-4. "mahdollisuudet": lista 3-4 mahdollisuutta parantaa
-5. "toimenpidesuositukset": lista 5 toimenpidettä, jokainen objekti: otsikko, kuvaus, prioriteetti, aikataulu
+1. "yhteenveto": 3-4 lauseen kuvaus sivustosta, sen tilasta ja löydetyistä palveluista/tuotteista
+2. "vahvuudet": lista 4-6 vahvuutta perustuen dataan (esim. hyvä SEO, analytiikka, trust-signaalit)
+3. "heikkoudet": lista 4-6 heikkoutta perustuen löydöksiin
+4. "mahdollisuudet": lista 4-5 mahdollisuutta parantaa
+5. "uhat": lista 2-3 potentiaalista uhkaa tai riskiä
+6. "toimenpidesuositukset": lista 6-8 toimenpidettä, jokainen objekti: otsikko, kuvaus, prioriteetti, aikataulu
+7. "kilpailijaprofiili": arvio kilpailijasta (kohderyhmä, vahvuusalueet, markkina-asema)
 
-Vastaa VAIN JSON-muodossa.
+Käytä konkreettisia havaintoja datasta. Vastaa VAIN JSON-muodossa.
 """
 
             try:
                 resp = await openai_client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
-                        {"role": "system", "content": "Olet suomalainen digitaalisen kasvun asiantuntija."},
+                        {"role": "system", "content": "Olet suomalainen digitaalisen markkinoinnin ja kilpailija-analyysin asiantuntija. Analysoit dataa tarkasti ja annat konkreettisia suosituksia."},
                         {"role": "user", "content": prompt},
                     ],
                     response_format={"type": "json_object"},
-                    temperature=0.5,
-                    max_tokens=900,
+                    temperature=0.6,
+                    max_tokens=1200,
                 )
                 parsed = json.loads(resp.choices[0].message.content)
-                # Käytä koko AI-vastausta
                 ai_full = parsed if isinstance(parsed, dict) else {}
                 ai_reco = ai_full.get("toimenpidesuositukset", [])
             except Exception as e:
@@ -425,9 +580,9 @@ Vastaa VAIN JSON-muodossa.
                 "digitaalinen_jalanjalki": {
                     "arvio": result["smart"]["scores"]["total"] // 10,
                     "sosiaalinen_media": result["smart"]["tech_cro"]["analytics_pixels"],
-                    "sisaltostrategia": "—"
+                    "sisaltostrategia": "Aktiivinen" if len(result["smart"].get("content_analysis", {}).get("services_hints", [])) > 2 else "Kehitettävä"
                 },
-                "erottautumiskeinot": [],
+                "erottautumiskeinot": ai_full.get("kilpailijaprofiili", {}).get("vahvuusalueet", []),
                 "quick_wins": [a["otsikko"] for a in (ai_reco or result["smart"]["actions"])[:3]] if (ai_reco or result["smart"]["actions"]) else []
             },
             "smart": result["smart"]  # koko smart data mukaan
@@ -437,6 +592,7 @@ Vastaa VAIN JSON-muodossa.
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI analyze failed: {str(e)}")
+
 @app.get("/api/v1/test-openai")
 async def test_openai():
     """Test OpenAI API connection"""
@@ -471,6 +627,331 @@ async def test_openai():
             "message": f"OpenAI API error: {str(e)}",
             "error_type": type(e).__name__
         }
+
+@app.post("/api/v1/batch-analyze")
+async def batch_analyze_competitors(urls: List[str]):
+    """
+    Analysoi useita kilpailijoita kerralla
+    """
+    results = []
+    for url in urls[:10]:  # Max 10 kerralla
+        try:
+            result = await analyze_competitor(AnalyzeRequest(url=url))
+            results.append(result.dict())
+        except Exception as e:
+            results.append({
+                "success": False,
+                "url": url,
+                "error": str(e)
+            })
+    
+    # Laske yhteenveto
+    successful = [r for r in results if r.get('success')]
+    avg_score = sum(r.get('score', 0) for r in successful) / len(successful) if successful else 0
+    
+    return {
+        "success": True,
+        "analyzed_count": len(results),
+        "successful_count": len(successful),
+        "average_score": round(avg_score, 1),
+        "results": results,
+        "summary": {
+            "best_performer": max(successful, key=lambda x: x.get('score', 0)) if successful else None,
+            "common_weaknesses": _find_common_patterns([r['smart']['top_findings'] for r in successful if 'smart' in r]),
+            "tech_stack_distribution": _analyze_tech_distribution(successful)
+        }
+    }
+
+def _find_common_patterns(findings_lists):
+    """Tunnista yleisimmät löydökset"""
+    all_findings = []
+    for findings in findings_lists:
+        all_findings.extend(findings)
+    
+    # Laske yleisimmät teemat
+    patterns = {}
+    keywords = ['canonical', 'CTA', 'analytiikka', 'sisältö', 'OG-meta']
+    for keyword in keywords:
+        count = sum(1 for f in all_findings if keyword.lower() in f.lower())
+        if count > 0:
+            patterns[keyword] = count
+    
+    return patterns
+
+def _analyze_tech_distribution(results):
+    """Analysoi teknologiajakauma"""
+    tech_dist = {
+        'cms': {},
+        'frameworks': {},
+        'analytics': {}
+    }
+    
+    for r in results:
+        if 'smart' in r and 'tech_cro' in r['smart']:
+            tech = r['smart']['tech_cro']
+            
+            # CMS
+            cms = tech.get('cms')
+            if cms:
+                tech_dist['cms'][cms] = tech_dist['cms'].get(cms, 0) + 1
+            
+            # Framework
+            fw = tech.get('framework')
+            if fw:
+                tech_dist['frameworks'][fw] = tech_dist['frameworks'].get(fw, 0) + 1
+            
+            # Analytics
+            for pixel in tech.get('analytics_pixels', []):
+                tech_dist['analytics'][pixel] = tech_dist['analytics'].get(pixel, 0) + 1
+    
+    return tech_dist
+
+@app.get("/api/v1/compare/{url1}/{url2}")
+async def compare_competitors(url1: str, url2: str):
+    """
+    Vertaa kahta kilpailijaa keskenään
+    """
+    try:
+        # Analysoi molemmat
+        result1 = await analyze_competitor(AnalyzeRequest(url=url1))
+        result2 = await analyze_competitor(AnalyzeRequest(url=url2))
+        
+        r1 = result1.dict()
+        r2 = result2.dict()
+        
+        # Vertailu
+        comparison = {
+            "competitor1": {
+                "url": url1,
+                "score": r1['score'],
+                "title": r1['title']
+            },
+            "competitor2": {
+                "url": url2,
+                "score": r2['score'],
+                "title": r2['title']
+            },
+            "winner": url1 if r1['score'] > r2['score'] else url2,
+            "score_difference": abs(r1['score'] - r2['score']),
+            "detailed_comparison": {
+                "seo": {
+                    "competitor1": r1['smart']['scores']['seo'],
+                    "competitor2": r2['smart']['scores']['seo'],
+                    "winner": 1 if r1['smart']['scores']['seo'] > r2['smart']['scores']['seo'] else 2
+                },
+                "content": {
+                    "competitor1": r1['smart']['scores']['content'],
+                    "competitor2": r2['smart']['scores']['content'],
+                    "winner": 1 if r1['smart']['scores']['content'] > r2['smart']['scores']['content'] else 2
+                },
+                "cro": {
+                    "competitor1": r1['smart']['scores']['cro'],
+                    "competitor2": r2['smart']['scores']['cro'],
+                    "winner": 1 if r1['smart']['scores']['cro'] > r2['smart']['scores']['cro'] else 2
+                },
+                "tech": {
+                    "competitor1": r1['smart']['scores']['tech'],
+                    "competitor2": r2['smart']['scores']['tech'],
+                    "winner": 1 if r1['smart']['scores']['tech'] > r2['smart']['scores']['tech'] else 2
+                }
+            },
+            "tech_comparison": {
+                "competitor1": {
+                    "cms": r1['smart']['tech_cro'].get('cms'),
+                    "framework": r1['smart']['tech_cro'].get('framework'),
+                    "analytics": r1['smart']['tech_cro'].get('analytics_pixels', [])
+                },
+                "competitor2": {
+                    "cms": r2['smart']['tech_cro'].get('cms'),
+                    "framework": r2['smart']['tech_cro'].get('framework'),
+                    "analytics": r2['smart']['tech_cro'].get('analytics_pixels', [])
+                }
+            },
+            "recommendations": {
+                "for_weaker": _generate_improvement_tips(
+                    r1 if r1['score'] < r2['score'] else r2,
+                    r2 if r1['score'] < r2['score'] else r1
+                )
+            }
+        }
+        
+        return comparison
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Vertailu epäonnistui: {str(e)}")
+
+def _generate_improvement_tips(weaker, stronger):
+    """Generoi parannusehdotuksia heikommalle"""
+    tips = []
+    
+    # Vertaa pistemääriä kategorioittain
+    for category in ['seo', 'content', 'cro', 'tech']:
+        if weaker['smart']['scores'][category] < stronger['smart']['scores'][category]:
+            if category == 'seo':
+                tips.append(f"Paranna SEO:ta - kilpailijalla {stronger['smart']['scores'][category]} pistettä vs sinun {weaker['smart']['scores'][category]}")
+            elif category == 'content':
+                tips.append(f"Lisää sisältöä - kilpailijalla parempi sisältöpisteet")
+            elif category == 'cro':
+                tips.append(f"Paranna konversiota - lisää CTA-elementtejä")
+            elif category == 'tech':
+                tips.append(f"Päivitä analytiikka - kilpailijalla parempi seuranta")
+    
+    # Teknologiasuositukset
+    if stronger['smart']['tech_cro'].get('analytics_pixels') and not weaker['smart']['tech_cro'].get('analytics_pixels'):
+        tips.append("Asenna analytiikkapikselit (GA4, Meta Pixel)")
+    
+    return tips[:5]  # Max 5 vinkkiä
+
+@app.get("/api/v1/docs")
+def api_documentation():
+    """
+    API-dokumentaatio
+    """
+    return {
+        "version": APP_VERSION,
+        "endpoints": {
+            "/api/v1/analyze": {
+                "method": "POST",
+                "description": "Analysoi yksittäinen kilpailijan sivusto",
+                "body": {"url": "string"},
+                "response": "SmartAnalyzeResponse"
+            },
+            "/api/v1/ai-analyze": {
+                "method": "POST", 
+                "description": "Analysoi AI-rikastuksella (vaatii OPENAI_API_KEY)",
+                "body": {
+                    "company_name": "string",
+                    "url": "string",
+                    "industry": "string (optional)",
+                    "use_ai": "boolean (default: true)"
+                }
+            },
+            "/api/v1/batch-analyze": {
+                "method": "POST",
+                "description": "Analysoi max 10 URL:ia kerralla",
+                "body": ["url1", "url2", "..."],
+                "response": "Batch analysis with summary"
+            },
+            "/api/v1/compare/{url1}/{url2}": {
+                "method": "GET",
+                "description": "Vertaa kahta kilpailijaa",
+                "params": "url1 ja url2 pathissa",
+                "response": "Comparison report"
+            },
+            "/api/v1/generate-pdf": {
+                "method": "POST",
+                "description": "Luo PDF-raportti analyysista",
+                "body": "analysis_data object",
+                "response": "PDF file stream"
+            },
+            "/api/v1/generate-pdf-base64": {
+                "method": "POST",
+                "description": "Luo PDF base64-muodossa",
+                "body": "analysis_data + language",
+                "response": {"pdf_base64": "string", "filename": "string"}
+            },
+            "/api/v1/test-openai": {
+                "method": "GET",
+                "description": "Testaa OpenAI-yhteys",
+                "response": "Connection status"
+            },
+            "/health": {
+                "method": "GET",
+                "description": "Tarkista API:n tila",
+                "response": "Health status"
+            }
+        },
+        "features": {
+            "smart_analysis": "Automaattinen SEO, CRO ja teknologia-analyysi",
+            "ai_enrichment": "GPT-4 pohjainen SWOT ja suositukset",
+            "caching": "24h välimuisti analyyseille",
+            "js_rendering": "JavaScript-sivujen tuki (jos SMART_JS_RENDER=1)",
+            "pdf_generation": "Automaattinen PDF-raportointi",
+            "batch_processing": "Usean kilpailijan analyysi kerralla",
+            "comparison": "Kilpailijavertailu"
+        },
+        "environment_variables": {
+            "OPENAI_API_KEY": "OpenAI API avain (valinnainen)",
+            "SMART_JS_RENDER": "JavaScript rendering on/off (default: 1)"
+        },
+        "rate_limits": {
+            "analyze": "100 requests/hour per IP",
+            "batch": "10 requests/hour per IP",
+            "ai_analyze": "50 requests/hour per IP"
+        }
+    }
+
+# Rate limiting helper (yksinkertainen toteutus)
+from collections import defaultdict
+from datetime import datetime, timedelta
+
+request_counts = defaultdict(list)
+
+def check_rate_limit(ip: str, limit: int = 100) -> bool:
+    """Tarkista rate limit"""
+    now = datetime.now()
+    hour_ago = now - timedelta(hours=1)
+    
+    # Siivoa vanhat
+    request_counts[ip] = [t for t in request_counts[ip] if t > hour_ago]
+    
+    # Tarkista raja
+    if len(request_counts[ip]) >= limit:
+        return False
+    
+    # Lisää uusi
+    request_counts[ip].append(now)
+    return True
+
+@app.middleware("http")
+async def rate_limit_middleware(request, call_next):
+    """Rate limiting middleware"""
+    # Hae IP (huomioi proxyt)
+    ip = request.headers.get("X-Forwarded-For", request.client.host) if request.client else "unknown"
+    
+    # Tarkista vain API-endpointit
+    if request.url.path.startswith("/api/v1/"):
+        # Eri rajat eri endpointeille
+        limits = {
+            "/api/v1/batch-analyze": 10,
+            "/api/v1/ai-analyze": 50,
+            "/api/v1/analyze": 100
+        }
+        
+        limit = next((v for k, v in limits.items() if request.url.path.startswith(k)), 100)
+        
+        if not check_rate_limit(ip, limit):
+            return JSONResponse(
+                status_code=429,
+                content={"detail": f"Rate limit exceeded. Max {limit} requests/hour"}
+            )
+    
+    return await call_next(request)
+
+# Lisää tarvittavat importit alkuun
+from fastapi.responses import JSONResponse
+
+# Virheiden käsittely
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    """Globaali virhekäsittelijä"""
+    import traceback
+    error_id = hashlib.md5(f"{datetime.now()}{str(exc)}".encode()).hexdigest()[:8]
+    
+    # Logi virhe (tuotannossa lähetä esim. Sentryyn)
+    print(f"ERROR {error_id}: {traceback.format_exc()}")
+    
+    # Palauta käyttäjäystävällinen virhe
+    return JSONResponse(
+        status_code=500,
+        content={
+            "success": False,
+            "error": "Sisäinen virhe",
+            "error_id": error_id,
+            "message": "Jotain meni pieleen. Ota yhteyttä tukeen virhekoodilla."
+        }
+    )
+
 # ========== PDF GENERATION (säilytetty) ==========
 
 @app.post("/api/v1/generate-pdf")
