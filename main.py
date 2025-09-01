@@ -579,7 +579,15 @@ Perustele havaintosi datalla. Vastaa VAIN JSON-muodossa SUOMEKSI.
                 ai_full = {}
                 ai_reco = []
 
-        # 3) Palauta legacy-ystävällinen muoto + smart-dataset
+                # 3) Palauta legacy-ystävällinen muoto + smart-dataset
+
+        # Nosta kilpailijaprofiilin vahvuusalueet/strengths yhdeksi listaksi
+        kilpailijaprofiili = ai_full.get("kilpailijaprofiili") or ai_full.get("competitor_profile") or {}
+        if isinstance(kilpailijaprofiili, dict):
+            erottautumiskeinot = kilpailijaprofiili.get("vahvuusalueet", kilpailijaprofiili.get("strengths", []))
+        else:
+            erottautumiskeinot = []
+
         return {
             "success": True,
             "company_name": req.company_name,
@@ -610,8 +618,9 @@ Perustele havaintosi datalla. Vastaa VAIN JSON-muodossa SUOMEKSI.
                     "sosiaalinen_media": result["smart"]["tech_cro"]["analytics_pixels"],
                     "sisaltostrategia": "Aktiivinen" if len(result["smart"].get("content_analysis", {}).get("services_hints", [])) > 2 else "Kehitettävä"
                 },
-                "erottautumiskeinot": ai_full.get("kilpailijaprofiili", ai_full.get("competitor_profile", {})).get("vahvuusalueet", []),
-                "quick_wins": [a["otsikko"] for a in (ai_reco or result["smart"]["actions"])[:3]] if (ai_reco or result["smart"]["actions"]) else []
+                "erottautumiskeinot": erottautumiskeinot,
+                "quick_wins": [a["otsikko"] for a in (ai_reco or result["smart"]["actions"])[:3]]
+                               if (ai_reco or result["smart"]["actions"]) else []
             },
             "smart": result["smart"]
         }
@@ -1099,17 +1108,17 @@ async def generate_pdf_base64(analysis_data: Dict[str, Any]):
                         story.append(Paragraph(f"{idx}. {rec}", normal_style))
                     story.append(Spacer(1, 15))
 
-            methods = ai_analysis.get('erottautumiskeinot', ai_analysis.get('differentiation', []))
-            if methods:
-                story.append(Paragraph(t['differentiation'], heading_style))
-                for m in (methods if isinstance(methods, list) else [methods]):
-                    story.append(Paragraph(f"• {m}", normal_style))
-                story.append(Spacer(1, 20))
+        methods = ai_analysis.get('erottautumiskeinot', ai_analysis.get('differentiation', []))
+        if methods:
+            story.append(Paragraph(t['differentiation'], heading_style))  # Korjattu sisennys
+            for m in (methods if isinstance(methods, list) else [methods]):
+                story.append(Paragraph(f"• {m}", normal_style))
+            story.append(Spacer(1, 20))
 
-            if ai_analysis.get('quick_wins'):
-                story.append(Paragraph(t['quick_wins'], heading_style))
-                for win in ai_analysis.get('quick_wins', []):
-                    story.append(Paragraph(f"✓ {win}", normal_style))
+        if ai_analysis.get('quick_wins'):  # Korjattu sisennys
+            story.append(Paragraph(t['quick_wins'], heading_style))
+            for win in ai_analysis.get('quick_wins', []):
+                story.append(Paragraph(f"✓ {win}", normal_style))
 
         doc.build(story)
         buffer.seek(0)
