@@ -422,7 +422,40 @@ async def ai_analyze_compat(req: CompetitorAnalysisRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI analyze failed: {str(e)}")
-
+@app.get("/api/v1/test-openai")
+async def test_openai():
+    """Test OpenAI API connection"""
+    if not openai_client:
+        return {
+            "status": "error",
+            "message": "OpenAI client not configured",
+            "api_key_set": bool(os.getenv("OPENAI_API_KEY")),
+            "client_exists": False
+        }
+    
+    try:
+        # Try a simple completion
+        response = await openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a test bot."},
+                {"role": "user", "content": "Reply with just 'OK' if you work."}
+            ],
+            max_tokens=10
+        )
+        
+        return {
+            "status": "success",
+            "message": "OpenAI API works!",
+            "response": response.choices[0].message.content,
+            "model": "gpt-4o-mini"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"OpenAI API error: {str(e)}",
+            "error_type": type(e).__name__
+        }
 # ========== PDF GENERATION (säilytetty) ==========
 
 @app.post("/api/v1/generate-pdf")
