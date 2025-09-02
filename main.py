@@ -1559,7 +1559,7 @@ class TechnicalAnalyzer:
         ]
         
         endpoints = []
-        for pattern in api_patterns# (jatkuu _detect_api_endpoints metodista)
+        for pattern in api_patterns: (jatkuu _detect_api_endpoints metodista)
         endpoints = []
         for pattern in api_patterns:
             matches = re.findall(pattern, html)
