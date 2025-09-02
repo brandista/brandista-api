@@ -1,14 +1,5 @@
-# -*- coding: utf-8 -*-
-"""
-Advanced Competitive Intelligence API - Premium Edition
-Version: 5.0.0
-Author: Brandista AI Team
-Description: Huippuluokan kilpailija-analyysityökalu AI-pohjaisilla näkemyksillä
-"""
-
 # ==================== OSA 1/6 ALKAA ====================
 # IMPORTS JA KONFIGURAATIO
-
 import os
 import re
 import json
