@@ -1559,11 +1559,9 @@ class TechnicalAnalyzer:
         ]
         
         endpoints = []
-        for pattern in api_patterns: #
-        endpoints = []
-        for pattern in api_patterns:
-            matches = re.findall(pattern, html)
-            endpoints.extend(matches)
+    for pattern in api_patterns:
+        matches = re.findall(pattern, html)  # Sisennetty oikein
+        endpoints.extend(matches)             # Sisennetty oikein
         
         # Deduplicate and limit
         return list(set(endpoints))[:20]
