@@ -2084,10 +2084,32 @@ class AIAnalyzer:
             )
             
             # Parse response
-            content = response.choices[0].message.content
-            insights_data = json.loads(content)
-            
-            # Track metrics
+            # Parse response safely (handle code fences and partial JSON)
+            raw = response.choices[0].message.content or "{}"
+            try:
+                # Extract JSON inside ```json ... ``` if present
+                import re, json
+                m = re.search(r"```json\s*(\{[\s\S]*?\})\s*```", raw)
+                if m:
+                    raw_json = m.group(1)
+                else:
+                    # Trim to last closing brace to avoid stray text after JSON
+                    end = raw.rfind('}')
+                    raw_json = raw[:end+1] if end != -1 else raw
+                insights_data = json.loads(raw_json)
+            except Exception as e:
+                logger.error(f"AI enhancement failed: {e}")
+                # Fallback: minimal structure to keep API running
+                insights_data = {
+                    "executive_summary": "",
+                    "strengths": [],
+                    "weaknesses": [],
+                    "opportunities": [],
+                    "threats": [],
+                    "market_position": "",
+                    "competitive_advantages": [],
+                    "improvement_recommendations": []
+                }
             ai_requests.labels(provider='openai', model='gpt-4').inc()
             
             # Create AIInsights object
