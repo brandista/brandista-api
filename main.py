@@ -27,7 +27,7 @@ from enum import Enum
 import httpx
 import numpy as np
 from bs4 import BeautifulSoup
-from fastapi import Body, FastAPI, HTTPException, BackgroundTasks, Request, Depends, Security
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Depends, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -147,8 +147,8 @@ if DB_AVAILABLE:
         analysis_data = Column(JSON, nullable=False)
         scores = Column(JSON, nullable=False)
         ai_insights = Column(JSON, nullable=True)
-        created_at = Column(DateTime, default=datetime.now(datetime.timezone.utc), index=True)
-        updated_at = Column(DateTime, default=datetime.now(datetime.timezone.utc), onupdate=datetime.now(datetime.timezone.utc))
+        created_at = Column(DateTime, default=datetime.utcnow, index=True)
+        updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
         language = Column(String, default='fi')
         version = Column(String, default=APP_VERSION)
         
@@ -157,7 +157,7 @@ if DB_AVAILABLE:
         
         id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
         url = Column(String, nullable=False, index=True)
-        check_date = Column(DateTime, default=datetime.now(datetime.timezone.utc), index=True)
+        check_date = Column(DateTime, default=datetime.utcnow, index=True)
         changes_detected = Column(JSON, nullable=True)
         score_change = Column(Float, nullable=True)
         alert_sent = Column(Boolean, default=False)
@@ -169,7 +169,7 @@ if DB_AVAILABLE:
         report_type = Column(String, nullable=False)  # 'single', 'comparison', 'batch'
         report_data = Column(JSON, nullable=False)
         pdf_url = Column(String, nullable=True)
-        created_at = Column(DateTime, default=datetime.now(datetime.timezone.utc))
+        created_at = Column(DateTime, default=datetime.utcnow)
         created_by = Column(String, nullable=True)
 
 # ==================== PYDANTIC MODELS ====================
@@ -1453,7 +1453,7 @@ class TechnicalAnalyzer:
         
         return structured
     
-    def _analyze_javascript(self, soup: BeautifulSoup) -> Dict[str, Any]:
+    def _analyze_javascript(self, soup: BeautifulSoup, html: str) -> Dict[str, Any]:
         """Analyze JavaScript usage"""
         
         scripts = soup.find_all('script')
@@ -1554,6 +1554,7 @@ class TechnicalAnalyzer:
     
     def _detect_api_endpoints(self, html: str) -> List[str]:
         """Detect API endpoints in HTML/JS"""
+        
         # Common API patterns
         api_patterns = [
             r'/api/[\w/]+',
@@ -1563,12 +1564,15 @@ class TechnicalAnalyzer:
             r'/rest/[\w/]+',
             r'/services/[\w/]+'
         ]
+        
         endpoints = []
         for pattern in api_patterns:
             matches = re.findall(pattern, html)
             endpoints.extend(matches)
+        
         # Deduplicate and limit
         return list(set(endpoints))[:20]
+    
     def _analyze_cookies(self, soup: BeautifulSoup) -> Dict[str, Any]:
         """Analyze cookie usage indicators"""
         
@@ -2919,171 +2923,6 @@ async def analyze_endpoint(
     except Exception as e:
         logger.error(f"Analysis error: {e}")
         raise HTTPException(status_code=500, detail="Analysis failed")
-
-
-@app.post("/api/v1/ai-analyze")
-async def ai_analyze_unified(payload: dict = Body(...)):
-    """
-    Unified endpoint that accepts both shapes:
-    - Minimal: {"url": "https://example.com"}
-    - Compat:  {"company_name": ..., "url"|"website": ..., "industry": ..., "use_ai": true, "language": "fi|en"}
-    Always returns the richer compat-style response with `ai_analysis` + `smart`.
-    """
-    try:
-        # Detect payload shape
-        is_compat = any(k in payload for k in ['company_name', 'industry', 'use_ai'])
-        target_url = payload.get('url') or payload.get('website')
-        if not target_url:
-            raise HTTPException(status_code=400, detail='url or website required')
-        language = (payload.get('language') or 'fi').lower()
-        use_ai = payload.get('use_ai', True)
-        company_name = payload.get('company_name') or payload.get('url') or payload.get('website') or 'Unknown'
-
-        # Run smart analyzer
-        smart_resp = await analyze_competitor(AnalyzeRequest(url=target_url))
-        result = smart_resp.dict() if hasattr(smart_resp, 'dict') else smart_resp
-
-        # Optional AI enrichment
-        ai_full: dict = {}
-        ai_reco: list = []
-        if openai_client and use_ai:
-            try:
-                content_info = result.get('smart', {}).get('content_analysis', {})
-                summary = {
-                    'url': result.get('url'),
-                    'scores': result.get('smart', {}).get('scores', {}),
-                    'top_findings': result.get('smart', {}).get('top_findings', []),
-                    'actions': result.get('smart', {}).get('actions', []),
-                    'tech_cro': result.get('smart', {}).get('tech_cro', {}),
-                    'head_signals': result.get('smart', {}).get('head_signals', {}),
-                    'content_summary': {
-                        'headings': content_info.get('headings', {}),
-                        'images': content_info.get('images', {}),
-                        'links': content_info.get('links', {}),
-                        'services_hints': content_info.get('services_hints', []),
-                        'trust_signals': content_info.get('trust_signals', []),
-                        'content_quality': content_info.get('content_quality', {}),
-                        'text_preview': content_info.get('text_content', '')[:500],
-                    },
-                }
-
-                if language == 'en':
-                    prompt = f'''
-Analyze this competitor website and create a comprehensive JSON analysis.
-
-WEBSITE DATA:
-{json.dumps(summary, ensure_ascii=False, indent=2)}
-
-Create a JSON object with:
-1. "summary": 4-6 sentence description of the site, its condition and services/products found
-2. "strengths": list of 4-6 strengths based on data (e.g. good SEO, analytics, trust signals)
-3. "weaknesses": list of 4-6 weaknesses based on findings
-4. "opportunities": list of 4-5 opportunities to improve
-5. "threats": list of 2-3 potential threats or risks
-6. "recommendations": list of 6-8 actions, each object: title, description, priority, timeline
-7. "competitor_profile": assessment of competitor (target audience, strengths, market position)
-
-Use concrete observations from data. Respond ONLY in JSON format in ENGLISH.
-'''
-                    system_msg = 'You are a digital marketing and competitor analysis expert. Analyze data carefully and provide concrete recommendations in ENGLISH.'
-                else:
-                    prompt = f'''
-Analysoi tämä kilpailijasivusto ja tuota kattava JSON-analyysi.
-
-SIVUSTODATA:
-{json.dumps(summary, ensure_ascii=False, indent=2)}
-
-Luo JSON-objekti, jossa on:
-1. "yhteenveto": 4–6 lausetta sivuston tilasta ja palveluista/tuotteista
-2. "vahvuudet": 4–6 vahvuutta datan perusteella (esim. SEO, analytiikka, luottamussignaalit)
-3. "heikkoudet": 4–6 heikkoutta löydösten perusteella
-4. "mahdollisuudet": 4–5 mahdollisuutta parantaa
-5. "uhat": 2–3 uhkaa/riskitekijää
-6. "toimenpidesuositukset": 6–8 toimenpidettä, jokaisessa: otsikko, kuvaus, prioriteetti, aikataulu
-7. "kilpailijaprofiili": kuvaus kohderyhmästä, vahvuusalueista ja markkina-asemasta
-
-Perustele havaintosi datalla. Vastaa VAIN JSON-muodossa SUOMEKSI.
-'''
-                    system_msg = 'Olet digitaalisen markkinoinnin ja kilpailija-analyysin asiantuntija. Anna konkreettiset suositukset suomeksi.'
-
-                resp = await openai_client.chat.completions.create(
-                    model='gpt-4o-mini',
-                    messages=[
-                        {'role': 'system', 'content': system_msg},
-                        {'role': 'user', 'content': prompt},
-                    ],
-                    response_format={'type': 'json_object'},
-                    temperature=0.6,
-                    max_tokens=1200,
-                )
-                raw = resp.choices[0].message.content or '{}'
-                try:
-                    ai_full = json.loads(raw)
-                except Exception:
-                    import re as _re
-                    m = _re.search(r'```json\s*(\{[\s\S]*?\})\s*```', raw)
-                    if m:
-                        ai_full = json.loads(m.group(1))
-                    else:
-                        end = raw.rfind('}')
-                        ai_full = json.loads(raw[:end+1]) if end != -1 else {}
-                ai_reco = ai_full.get('toimenpidesuositukset') or ai_full.get('recommendations') or []
-            except Exception as e:
-                logger.error(f'AI enhancement failed: {e}')
-                ai_full = {}
-                ai_reco = []
-
-        content_actions = result.get('smart', {}).get('actions', [])
-        kilpailijaprofiili = ai_full.get('kilpailijaprofiili') or ai_full.get('competitor_profile') or {}
-        if isinstance(kilpailijaprofiili, dict):
-            erottautumiskeinot = kilpailijaprofiili.get('vahvuusalueet', kilpailijaprofiili.get('strengths', []))
-        else:
-            erottautumiskeinot = []
-
-        quick_wins_list = []
-        if ai_reco or content_actions:
-            for a in (ai_reco or content_actions)[:3]:
-                if isinstance(a, dict):
-                    win = a.get('otsikko', a.get('title', ''))
-                else:
-                    win = str(a)
-                if win:
-                    quick_wins_list.append(win)
-
-        return {
-            'success': True,
-            'company_name': company_name,
-            'analysis_date': datetime.now().isoformat(),
-            'basic_analysis': {
-                'company': company_name,
-                'website': payload.get('website') or target_url,
-                'industry': payload.get('industry'),
-                'strengths_count': len(payload.get('strengths', [])) if is_compat else 0,
-                'weaknesses_count': len(payload.get('weaknesses', [])) if is_compat else 0,
-                'has_market_position': bool(payload.get('market_position')) if is_compat else False,
-            },
-            'ai_analysis': {
-                'yhteenveto': ai_full.get('yhteenveto', ai_full.get('summary', '')),
-                'vahvuudet': ai_full.get('vahvuudet', ai_full.get('strengths', [])),
-                'heikkoudet': ai_full.get('heikkoudet', ai_full.get('weaknesses', [])),
-                'mahdollisuudet': ai_full.get('mahdollisuudet', ai_full.get('opportunities', [])),
-                'uhat': ai_full.get('uhat', ai_full.get('threats', [])),
-                'toimenpidesuositukset': ai_reco or content_actions,
-                'digitaalinen_jalanjalki': {
-                    'arvio': result.get('smart', {}).get('scores', {}).get('total', 0) // 10,
-                    'sosiaalinen_media': result.get('smart', {}).get('tech_cro', {}).get('analytics_pixels', []),
-                    'sisaltostrategia': 'Aktiivinen' if len(result.get('smart', {}).get('content_analysis', {}).get('services_hints', [])) > 2 else 'Kehitettävä',
-                },
-                'erottautumiskeinot': erottautumiskeinot,
-                'quick_wins': quick_wins_list,
-            },
-            'smart': result.get('smart', {}),
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f'AI analyze failed: {str(e)}')
 
 @app.post("/api/v1/batch")
 async def batch_analyze(
