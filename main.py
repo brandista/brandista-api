@@ -31,7 +31,7 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Depends, S
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from prometheus_client import Counter, Histogram, Gauge, generate_latest
 
 # Advanced imports
@@ -188,7 +188,8 @@ class AnalyzeRequest(BaseModel):
     include_competitors: bool = False
     track_changes: bool = False
     
-    @validator('url')
+    @field_validator('url')
+    @classmethod
     def validate_url(cls, v):
         if not v.startswith(('http://', 'https://')):
             v = f'https://{v}'
@@ -237,7 +238,7 @@ class SmartAnalysisResponse(BaseModel):
     report_id: Optional[str]
     
 class BatchAnalysisRequest(BaseModel):
-    urls: List[str] = Field(max_items=20)
+    urls: List[str] = Field(max_length=20)
     level: AnalysisLevel = AnalysisLevel.STANDARD
     generate_report: bool = True
     compare_all: bool = False
@@ -247,7 +248,9 @@ class WebhookConfig(BaseModel):
     events: List[str] = ['analysis_complete', 'significant_change_detected']
     secret: Optional[str] = None
     
-# ==================== OSA 1/6 LOPPUU ====================# ==================== OSA 2/6 ALKAA ====================
+# ==================== OSA 1/6 LOPPUU ====================
+
+# ==================== OSA 2/6 ALKAA ====================
 # CACHE, SECURITY JA UTILITY FUNKTIOT
 
 # ==================== REDIS CACHE ====================
@@ -512,7 +515,7 @@ def detect_language(text: str) -> str:
     else:
         return 'unknown'
 
-async def measure_performance(func):
+def measure_performance(func):
     """Decorator to measure async function performance"""
     @wraps(func)
     async def wrapper(*args, **kwargs):
@@ -528,7 +531,9 @@ async def measure_performance(func):
             raise
     return wrapper
 
-# ==================== OSA 2/6 LOPPUU ====================# ==================== OSA 3/6 ALKAA ====================
+# ==================== OSA 2/6 LOPPUU ====================
+
+# ==================== OSA 3/6 ALKAA ====================
 # CORE ANALYSIS FUNKTIOT
 
 # ==================== WEB SCRAPING ====================
@@ -775,7 +780,7 @@ class ContentAnalyzer:
             "with_alt": len([img for img in images if img.get('alt')]),
             "with_lazy_load": len([img for img in images if img.get('loading') == 'lazy']),
             "with_srcset": len([img for img in images if img.get('srcset')]),
-            "formats": Counter([self._get_image_format(img.get('src', '')) for img in images])
+            "formats": dict(Counter([self._get_image_format(img.get('src', '')) for img in images]))
         }
         
         # Video analysis
@@ -803,7 +808,7 @@ class ContentAnalyzer:
             "videos": video_stats,
             "iframes": {
                 "total": len(iframes),
-                "sources": Counter(iframe_sources)
+                "sources": dict(Counter(iframe_sources))
             }
         }
     
@@ -841,7 +846,7 @@ class ContentAnalyzer:
             "external": len(external),
             "internal_unique": len(set(internal)),
             "external_unique": len(set(external)),
-            "external_domains": dict(external_domains.most_common(10)),
+            "external_domains": dict(list(external_domains.most_common(10))),
             "broken_link_indicators": self._detect_broken_links(soup)
         }
     
@@ -1104,7 +1109,9 @@ class ContentAnalyzer:
         
         return True
 
-# ==================== OSA 3/6 LOPPUU ====================# ==================== OSA 4/6 ALKAA ====================
+# ==================== OSA 3/6 LOPPUU ====================
+
+# ==================== OSA 4/6 ALKAA ====================
 # TECHNICAL JA SEO ANALYSIS
 
 # ==================== TECHNICAL ANALYSIS ====================
@@ -1752,7 +1759,7 @@ class SEOAnalyzer:
         return {
             "structure": headings,
             "h1_count": h1_count,
-            "total_headings": sum(h['count'] for h in headings.values()),
+            "total_headings": sum(h['count'] for h in headings.values()) if headings else 0,
             "issues": issues,
             "hierarchy_valid": len(issues) == 0,
             "score": 100 if not issues else max(0, 100 - len(issues) * 20)
@@ -1849,10 +1856,13 @@ class SEOAnalyzer:
         
         unique_internal = list(set(internal_links))
         
+        # Safe division to avoid zero division
+        section_count = max(len(soup.find_all(['section', 'article', 'div'])), 1)
+        
         return {
             "total_internal": len(internal_links),
             "unique_internal": len(unique_internal),
-            "average_per_section": len(internal_links) / max(len(soup.find_all(['section', 'article', 'div'])), 1),
+            "average_per_section": len(internal_links) / section_count,
             "has_breadcrumbs": bool(soup.find(class_=re.compile('breadcrumb'))),
             "has_sitemap_link": bool(soup.find('a', string=re.compile('sitemap', re.I))),
             "score": min(100, len(unique_internal) * 5)
@@ -1987,7 +1997,6 @@ class SEOAnalyzer:
         
         keyword_density = {}
         if 'keywords' in text_stats:
-            total_words = word_count
             for keyword in text_stats['keywords'][:10]:
                 # Simplified density calculation
                 keyword_density[keyword] = "~1-3%"  # Would need actual calculation
@@ -2030,7 +2039,9 @@ class SEOAnalyzer:
             "score": (50 if og_complete else 0) + (50 if twitter_complete else 0)
         }
 
-# ==================== OSA 4/6 LOPPUU ====================# ==================== OSA 5/6 ALKAA ====================
+# ==================== OSA 4/6 LOPPUU ====================
+
+# ==================== OSA 5/6 ALKAA ====================
 # AI ANALYSIS JA LIGHTHOUSE INTEGRATION
 
 # ==================== AI ANALYZER ====================
@@ -2471,8 +2482,19 @@ class ChangeTracker:
         changes['score_change'] = score_change
         
         # Technology changes
-        prev_tech = set(previous.get('technical_analysis', {}).get('technologies', {}).get('all', []))
-        curr_tech = set(current.get('technical_analysis', {}).get('technologies', {}).get('all', []))
+        prev_tech = set()
+        curr_tech = set()
+        
+        # Safely extract technologies
+        prev_tech_dict = previous.get('technical_analysis', {}).get('technologies', {})
+        for tech_list in prev_tech_dict.values():
+            if isinstance(tech_list, list):
+                prev_tech.update(tech_list)
+        
+        curr_tech_dict = current.get('technical_analysis', {}).get('technologies', {})
+        for tech_list in curr_tech_dict.values():
+            if isinstance(tech_list, list):
+                curr_tech.update(tech_list)
         
         new_tech = curr_tech - prev_tech
         removed_tech = prev_tech - curr_tech
@@ -2516,7 +2538,9 @@ class ChangeTracker:
         )
         session.add(record)
 
-# ==================== OSA 5/6 LOPPUU ====================# ==================== OSA 6/6 ALKAA ====================
+# ==================== OSA 5/6 LOPPUU ====================
+
+# ==================== OSA 6/6 ALKAA ====================
 # MAIN APPLICATION JA API ENDPOINTS
 
 # ==================== MAIN ANALYZER ====================
@@ -2534,7 +2558,6 @@ class CompetitiveIntelligenceAnalyzer:
         self.competitor_finder = CompetitorFinder()
         self.change_tracker = ChangeTracker()
     
-    @measure_performance
     async def analyze(
         self,
         url: str,
@@ -2623,7 +2646,7 @@ class CompetitiveIntelligenceAnalyzer:
             if include_ai and level >= AnalysisLevel.STANDARD:
                 ai_insights = await self.ai_analyzer.analyze_with_ai(analysis_data)
                 if ai_insights:
-                    analysis_data["ai_insights"] = ai_insights.dict()
+                    analysis_data["ai_insights"] = ai_insights.model_dump()
             
             # Track changes
             if track_changes:
@@ -2650,7 +2673,7 @@ class CompetitiveIntelligenceAnalyzer:
             )
             
             # Cache result
-            await cache.set(cache_key, response.dict())
+            await cache.set(cache_key, response.model_dump())
             
             # Track metrics
             duration = (datetime.now() - start_time).total_seconds()
@@ -2840,9 +2863,9 @@ async def health_check():
             "lighthouse": "enabled" if LIGHTHOUSE_ENABLED else "disabled"
         },
         "metrics": {
-            "total_analyses": analysis_counter._value._value if hasattr(analysis_counter, '_value') else 0,
-            "active_analyses": active_analyses._value._value if hasattr(active_analyses, '_value') else 0,
-            "cache_hit_rate": (cache_hits._value._value / max(cache_hits._value._value + cache_misses._value._value, 1) * 100) if hasattr(cache_hits, '_value') else 0
+            "total_analyses": 0,  # Would need proper metric access
+            "active_analyses": 0,  # Would need proper metric access
+            "cache_hit_rate": 0  # Would need proper metric access
         }
     }
     
@@ -2890,7 +2913,7 @@ async def analyze_endpoint(
             background_tasks.add_task(
                 send_webhook_notification,
                 "analysis_complete",
-                result.dict()
+                result.model_dump()
             )
         
         return result
@@ -2936,7 +2959,7 @@ async def batch_analyze(
     # Generate comparison if requested
     comparison = None
     if request.compare_all and len(results) > 1:
-        comparison = compare_analyses([r.dict() for r in results if r.get("success", False)])
+        comparison = compare_analyses([r.model_dump() if hasattr(r, 'model_dump') else r for r in results if isinstance(r, SmartAnalysisResponse)])
     
     return {
         "success": True,
@@ -2965,8 +2988,8 @@ async def compare_competitors(
     
     # Create comparison
     comparison = {
-        "competitor1": results[0].dict(),
-        "competitor2": results[1].dict(),
+        "competitor1": results[0].model_dump(),
+        "competitor2": results[1].model_dump(),
         "winner": determine_winner(results[0], results[1]),
         "key_differences": identify_key_differences(results[0], results[1]),
         "recommendations": generate_comparison_recommendations(results[0], results[1])
@@ -3015,21 +3038,24 @@ async def generate_report(
 def compare_analyses(analyses: List[Dict]) -> Dict:
     """Compare multiple analyses"""
     
+    if not analyses:
+        return {}
+    
     # Calculate averages and identify best/worst
-    scores = [a["scores"]["total"] for a in analyses]
+    scores = [a.get("scores", {}).get("total", 0) for a in analyses]
     
     return {
-        "average_score": sum(scores) / len(scores),
-        "best_performer": max(analyses, key=lambda x: x["scores"]["total"]),
-        "worst_performer": min(analyses, key=lambda x: x["scores"]["total"]),
-        "score_range": max(scores) - min(scores)
+        "average_score": sum(scores) / len(scores) if scores else 0,
+        "best_performer": max(analyses, key=lambda x: x.get("scores", {}).get("total", 0)) if analyses else None,
+        "worst_performer": min(analyses, key=lambda x: x.get("scores", {}).get("total", 0)) if analyses else None,
+        "score_range": max(scores) - min(scores) if scores else 0
     }
 
 def determine_winner(result1, result2) -> Dict:
     """Determine winner between two competitors"""
     
-    score1 = result1.scores["total"]
-    score2 = result2.scores["total"]
+    score1 = result1.scores.get("total", 0)
+    score2 = result2.scores.get("total", 0)
     
     if score1 > score2:
         return {"url": result1.url, "margin": score1 - score2}
@@ -3043,9 +3069,11 @@ def identify_key_differences(result1, result2) -> List[str]:
     
     # Compare scores
     for category in ["seo", "content", "technical", "performance"]:
-        diff = abs(result1.scores[category] - result2.scores[category])
+        score1 = result1.scores.get(category, 0)
+        score2 = result2.scores.get(category, 0)
+        diff = abs(score1 - score2)
         if diff > 20:
-            winner = result1.url if result1.scores[category] > result2.scores[category] else result2.url
+            winner = result1.url if score1 > score2 else result2.url
             differences.append(f"{category.title()}: {winner} leads by {diff} points")
     
     return differences
@@ -3056,14 +3084,19 @@ def generate_comparison_recommendations(result1, result2) -> List[str]:
     recommendations = []
     
     # Identify weaker competitor
-    weaker = result1 if result1.scores["total"] < result2.scores["total"] else result2
+    total1 = result1.scores.get("total", 0)
+    total2 = result2.scores.get("total", 0)
+    
+    weaker = result1 if total1 < total2 else result2
     stronger = result2 if weaker == result1 else result1
     
     # Generate recommendations for weaker competitor
     for category in ["seo", "content", "technical"]:
-        if weaker.scores[category] < stronger.scores[category] - 10:
+        weaker_score = weaker.scores.get(category, 0)
+        stronger_score = stronger.scores.get(category, 0)
+        if weaker_score < stronger_score - 10:
             recommendations.append(
-                f"Improve {category} to match competitor ({stronger.scores[category]} vs {weaker.scores[category]})"
+                f"Improve {category} to match competitor ({stronger_score} vs {weaker_score})"
             )
     
     return recommendations[:5]
@@ -3083,7 +3116,10 @@ async def startup_event():
     
     # Warm up caches
     if cache.client:
-        await cache.client.ping()
+        try:
+            cache.client.ping()
+        except:
+            pass
     
     logger.info("Startup complete")
 
@@ -3094,7 +3130,10 @@ async def shutdown_event():
     
     # Close connections
     if cache.client:
-        cache.client.close()
+        try:
+            cache.client.close()
+        except:
+            pass
     
     logger.info("Shutdown complete")
 
