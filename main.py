@@ -1553,25 +1553,25 @@ class TechnicalAnalyzer:
         return css_analysis
     
     def _detect_api_endpoints(self, html: str) -> List[str]:
-        """Detect API endpoints in HTML/JS"""
-        
-        # Common API patterns
-        api_patterns = [
-            r'/api/[\w/]+',
-            r'/v\d+/[\w/]+',
-            r'\.json\b',
-            r'/graphql',
-            r'/rest/[\w/]+',
-            r'/services/[\w/]+'
-        ]
-        
-        endpoints = []
-        for pattern in api_patterns:
-            matches = re.findall(pattern, html)
-            endpoints.extend(matches)
-        
-        # Deduplicate and limit
-        return list(set(endpoints))[:20]
+    """Detect API endpoints in HTML/JS"""
+    
+    # Common API patterns
+    api_patterns = [
+        r'/api/[\w/]+',
+        r'/v\d+/[\w/]+',
+        r'\.json\b',
+        r'/graphql',
+        r'/rest/[\w/]+',
+        r'/services/[\w/]+'
+    ]
+    
+    endpoints = []
+    for pattern in api_patterns:
+        matches = re.findall(pattern, html)  # Tämä rivi pitää olla sisennetty
+        endpoints.extend(matches)            # Myös tämä
+    
+    # Deduplicate and limit
+    return list(set(endpoints))[:20]
     
     def _analyze_cookies(self, soup: BeautifulSoup) -> Dict[str, Any]:
         """Analyze cookie usage indicators"""
