@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Advanced Competitive Intelligence API - Premium Edition
 Version: 5.0.0
@@ -17,7 +18,7 @@ import logging
 import asyncio
 import pickle
 from io import BytesIO
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Any, Tuple
 from functools import lru_cache, wraps
 from collections import defaultdict, Counter
@@ -147,8 +148,8 @@ if DB_AVAILABLE:
         analysis_data = Column(JSON, nullable=False)
         scores = Column(JSON, nullable=False)
         ai_insights = Column(JSON, nullable=True)
-        created_at = Column(DateTime, default=datetime.utcnow, index=True)
-        updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+        created_at = Column(DateTime, default=datetime.now(datetime.timezone.utc), index=True)
+        updated_at = Column(DateTime, default=datetime.now(datetime.timezone.utc), onupdate=datetime.now(datetime.timezone.utc))
         language = Column(String, default='fi')
         version = Column(String, default=APP_VERSION)
         
@@ -157,7 +158,7 @@ if DB_AVAILABLE:
         
         id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
         url = Column(String, nullable=False, index=True)
-        check_date = Column(DateTime, default=datetime.utcnow, index=True)
+        check_date = Column(DateTime, default=datetime.now(datetime.timezone.utc), index=True)
         changes_detected = Column(JSON, nullable=True)
         score_change = Column(Float, nullable=True)
         alert_sent = Column(Boolean, default=False)
@@ -169,7 +170,7 @@ if DB_AVAILABLE:
         report_type = Column(String, nullable=False)  # 'single', 'comparison', 'batch'
         report_data = Column(JSON, nullable=False)
         pdf_url = Column(String, nullable=True)
-        created_at = Column(DateTime, default=datetime.utcnow)
+        created_at = Column(DateTime, default=datetime.now(datetime.timezone.utc))
         created_by = Column(String, nullable=True)
 
 # ==================== PYDANTIC MODELS ====================
@@ -1453,7 +1454,7 @@ class TechnicalAnalyzer:
         
         return structured
     
-    def _analyze_javascript(self, soup: BeautifulSoup, html: str) -> Dict[str, Any]:
+    def _analyze_javascript(self, soup: BeautifulSoup) -> Dict[str, Any]:
         """Analyze JavaScript usage"""
         
         scripts = soup.find_all('script')
@@ -1553,26 +1554,22 @@ class TechnicalAnalyzer:
         return css_analysis
     
     def _detect_api_endpoints(self, html: str) -> List[str]:
-    """Detect API endpoints in HTML/JS"""
-    
-    # Common API patterns
-    api_patterns = [
-        r'/api/[\w/]+',
-        r'/v\d+/[\w/]+',
-        r'\.json\b',
-        r'/graphql',
-        r'/rest/[\w/]+',
-        r'/services/[\w/]+'
-    ]
-    
-    endpoints = []
-    for pattern in api_patterns:
-        matches = re.findall(pattern, html)  # Tämä rivi pitää olla sisennetty
-        endpoints.extend(matches)            # Myös tämä
-    
-    # Deduplicate and limit
-    return list(set(endpoints))[:20]
-    
+        """Detect API endpoints in HTML/JS"""
+        # Common API patterns
+        api_patterns = [
+            r'/api/[\w/]+',
+            r'/v\d+/[\w/]+',
+            r'\.json\b',
+            r'/graphql',
+            r'/rest/[\w/]+',
+            r'/services/[\w/]+'
+        ]
+        endpoints = []
+        for pattern in api_patterns:
+            matches = re.findall(pattern, html)
+            endpoints.extend(matches)
+        # Deduplicate and limit
+        return list(set(endpoints))[:20]
     def _analyze_cookies(self, soup: BeautifulSoup) -> Dict[str, Any]:
         """Analyze cookie usage indicators"""
         
