@@ -25,7 +25,6 @@ from urllib.parse import urlparse, urljoin
 from enum import Enum
 
 import httpx
-import numpy as np
 from bs4 import BeautifulSoup
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Depends, Security
 from fastapi.middleware.cors import CORSMiddleware
@@ -482,8 +481,8 @@ def calculate_text_stats(text: str) -> Dict[str, Any]:
         "character_count": len(text),
         "word_count": len(words),
         "sentence_count": len(sentences),
-        "avg_word_length": np.mean([len(w) for w in words]) if words else 0,
-        "avg_sentence_length": np.mean([len(s.split()) for s in sentences if s]) if sentences else 0,
+        "avg_word_length": (sum(len(w) for w in words) / len(words)) if words else 0,
+        "avg_sentence_length": (sum(len(s.split()) for s in sentences if s) / len([s for s in sentences if s])) if any(sentences) else 0,
         "unique_words": len(set(words)),
         "lexical_diversity": len(set(words)) / len(words) if words else 0
     }
