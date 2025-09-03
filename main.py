@@ -1739,4 +1739,3 @@ async def compare_enhanced_endpoint(url1: str, url2: str):
                              analysis2.get("ai_analysis", {}).get("content_quality", {}).get("quality_score", 0) else url2,
             "timestamp": datetime.now().isoformat()
         }
-        
