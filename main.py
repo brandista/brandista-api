@@ -1,1741 +1,1143 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Brandista Competitive Intelligence API - Complete AI Enhanced Version
-Version: 5.0.0
-Complete backend with all AI features integrated
-"""
+import os
+import re
+import json
+import base64
+import hashlib
+import logging
+from io import BytesIO
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Any
+from functools import lru_cache
+from collections import defaultdict
 
-# ================== IMPORTS & SETUP ================== #
-
-from fastapi import FastAPI, HTTPException, Response, Request, BackgroundTasks
+import httpx
+from bs4 import BeautifulSoup
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
-from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any, List, Union, Literal
-import httpx
-import json
-import re
-from datetime import datetime, timedelta
-from bs4 import BeautifulSoup
-from urllib.parse import urlparse, urljoin, parse_qs
-import asyncio
+from pydantic import BaseModel
+
+# System monitoring (optional)
+try:
+    import psutil  # noqa: F401
+    import platform  # noqa: F401
+    MONITORING_AVAILABLE = True
+except ImportError:
+    MONITORING_AVAILABLE = False
+
+# OpenAI (optional)
+try:
+    from openai import AsyncOpenAI
+except Exception:  # pragma: no cover
+    AsyncOpenAI = None  # type: ignore
+
+# PDF
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, Image
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch
-from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY
-from io import BytesIO
-import base64
-from collections import defaultdict, Counter
-import time
-import hashlib
-import os
-import logging
-from functools import lru_cache
-import statistics
-import numpy as np
-from textblob import TextBlob
-import openai
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-import warnings
+from reportlab.lib.units import cm
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+from reportlab.platypus.flowables import HRFlowable
+from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
 
-# Suppress warnings
-warnings.filterwarnings("ignore")
-
-# ================== CONFIGURATION ================== #
-
-APP_VERSION = "5.0.0"
-CACHE_TTL = 3600  # 1 hour
-MAX_CACHE_SIZE = 100
-RATE_LIMIT_REQUESTS = 30
-RATE_LIMIT_WINDOW = 60  # seconds
-SMART_JS_RENDER = os.getenv("SMART_JS_RENDER", "true").lower() == "true"
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Logging configuration
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI
+APP_VERSION = "4.3.1"
+
+# ---------- Simple cache helpers ----------
+analysis_cache: Dict[str, Dict[str, Any]] = {}
+
+def cache_key(url: str) -> str:
+    return hashlib.md5(url.strip().lower().encode("utf-8")).hexdigest()
+
+def get_cached_analysis(url: str):
+    """Hae välimuistista jos alle 24h vanha"""
+    key = cache_key(url)
+    cached = analysis_cache.get(key)
+    if cached and (datetime.now() - cached['timestamp'] < timedelta(hours=24)):
+        return cached['data']
+    return None
+
+def save_to_cache(url: str, data: dict):
+    """Tallenna välimuistiin"""
+    key = cache_key(url)
+    analysis_cache[key] = {'timestamp': datetime.now(), 'data': data}
+
+# ---------- App ----------
 app = FastAPI(
-    title="Brandista Competitive Intelligence API",
-    description="Advanced competitive analysis with AI capabilities",
-    version=APP_VERSION
+    title="Brandista Competitive Intel API",
+    version=APP_VERSION,
+    description="Kilpailija-analyysi API with AI ja Smart Analyzer"
 )
 
-# CORS configuration
+# CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # kiristä tarvittaessa
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ================== MODELS ================== #
+# Security header (älä aseta X-Frame meta-tagina frontissa)
+@app.middleware("http")
+async def add_security_headers(request, call_next):
+    resp = await call_next(request)
+    resp.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    return resp
+
+# OpenAI client (optional)
+openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY")) if (AsyncOpenAI and os.getenv("OPENAI_API_KEY")) else None
+
+# Feature flag: JS render on/off (default ON tässä buildissa)
+SMART_JS_RENDER = os.getenv("SMART_JS_RENDER", "1").lower() in ("1", "true", "yes")
+
+# ========== MODELS ==========
 
 class AnalyzeRequest(BaseModel):
     url: str
-    render_js: bool = False
-    timeout: int = 30
-    extract_social: bool = True
-    extract_tech: bool = True
 
-class PDFRequest(BaseModel):
-    urls: List[str]
-    company_name: str = "Target Company"
-    include_tech: bool = True
-    include_social: bool = True
-    include_seo: bool = True
-    language: str = "en"
-
-class AIAnalyzeRequest(BaseModel):
+class SmartAnalyzeResponse(BaseModel):
+    success: bool
     url: str
+    title: str
+    description: str
+    score: int
+    insights: Dict[str, Any]
+    smart: Dict[str, Any]
+
+class CompetitorAnalysisRequest(BaseModel):
     company_name: str
-    use_ai: bool = True
-    render_js: bool = False
-    extract_social: bool = True
-    extract_tech: bool = True
-    include_swot: bool = True
-    include_recommendations: bool = True
-    language: str = "en"
+    website: Optional[str] = None
+    industry: Optional[str] = None
+    strengths: Optional[List[str]] = []
+    weaknesses: Optional[List[str]] = []
+    market_position: Optional[str] = None
+    use_ai: Optional[bool] = True
+    url: Optional[str] = None   # voi käyttää samaa kenttää analyysiin
+    language: Optional[str] = 'fi'
 
-class DeepAnalysisRequest(BaseModel):
-    url: str
-    company_name: str
-    competitors: List[str] = []
-    include_market_research: bool = True
-    include_tech_stack: bool = True
-    include_content_analysis: bool = True
-    include_ai_insights: bool = True
-    language: str = "en"
+# ========== HELPERS ==========
 
-class BatchAnalyzeRequest(BaseModel):
-    urls: List[str]
-    use_ai: bool = True
-    include_comparisons: bool = True
-    language: str = "en"
-
-# ================== CACHE & RATE LIMITING ================== #
-
-cache = {}
-request_counts = defaultdict(lambda: {"count": 0, "window_start": time.time()})
-
-def get_cache_key(url: str, **kwargs) -> str:
-    """Generate cache key from URL and parameters."""
-    params_str = json.dumps(kwargs, sort_keys=True)
-    return hashlib.md5(f"{url}{params_str}".encode()).hexdigest()
-
-def get_from_cache(key: str) -> Optional[Dict]:
-    """Get data from cache if valid."""
-    if key in cache:
-        entry = cache[key]
-        if time.time() - entry["timestamp"] < CACHE_TTL:
-            return entry["data"]
-        else:
-            del cache[key]
-    return None
-
-def set_cache(key: str, data: Dict):
-    """Set data in cache with timestamp."""
-    if len(cache) >= MAX_CACHE_SIZE:
-        oldest_key = min(cache.keys(), key=lambda k: cache[k]["timestamp"])
-        del cache[oldest_key]
-    cache[key] = {"data": data, "timestamp": time.time()}
-
-def check_rate_limit(client_ip: str) -> bool:
-    """Check if client has exceeded rate limit."""
-    current_time = time.time()
-    client_data = request_counts[client_ip]
-    
-    if current_time - client_data["window_start"] > RATE_LIMIT_WINDOW:
-        client_data["count"] = 0
-        client_data["window_start"] = current_time
-    
-    if client_data["count"] >= RATE_LIMIT_REQUESTS:
-        return False
-    
-    client_data["count"] += 1
-    return True
-
-# ================== ENHANCED AI ANALYZER CLASS ================== #
-
-class EnhancedAIAnalyzer:
-    """Enhanced AI analyzer with multiple analysis capabilities."""
-    
-    def __init__(self):
-        self.openai_client = openai.Client(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
-        
-    def analyze_sentiment(self, text: str) -> Dict[str, Any]:
-        """Analyze sentiment of text content."""
-        try:
-            blob = TextBlob(text[:5000])  # Limit text length
-            
-            return {
-                "polarity": float(blob.sentiment.polarity),
-                "subjectivity": float(blob.sentiment.subjectivity),
-                "sentiment_label": self._get_sentiment_label(blob.sentiment.polarity),
-                "confidence": abs(blob.sentiment.polarity)
-            }
-        except Exception as e:
-            logger.error(f"Sentiment analysis error: {e}")
-            return {
-                "polarity": 0,
-                "subjectivity": 0,
-                "sentiment_label": "neutral",
-                "confidence": 0
-            }
-    
-    def _get_sentiment_label(self, polarity: float) -> str:
-        """Convert polarity score to label."""
-        if polarity > 0.3:
-            return "positive"
-        elif polarity < -0.3:
-            return "negative"
-        else:
-            return "neutral"
-    
-    def detect_industry(self, content: Dict) -> Dict[str, Any]:
-        """Detect industry based on content analysis."""
-        industry_keywords = {
-            "technology": ["software", "app", "platform", "digital", "cloud", "AI", "data"],
-            "healthcare": ["health", "medical", "patient", "clinic", "doctor", "therapy"],
-            "finance": ["banking", "investment", "financial", "payment", "insurance"],
-            "retail": ["shop", "store", "product", "buy", "sale", "customer"],
-            "education": ["learn", "course", "student", "education", "training", "academy"],
-            "manufacturing": ["production", "factory", "industrial", "equipment", "supply"],
-            "hospitality": ["hotel", "restaurant", "travel", "tourism", "booking"],
-            "real_estate": ["property", "real estate", "apartment", "house", "rent"],
-            "automotive": ["car", "vehicle", "automotive", "driving", "motor"],
-            "media": ["news", "content", "media", "publishing", "entertainment"]
-        }
-        
-        text = f"{content.get('title', '')} {content.get('description', '')} {' '.join(content.get('headings', []))}".lower()
-        
-        industry_scores = {}
-        for industry, keywords in industry_keywords.items():
-            score = sum(1 for keyword in keywords if keyword in text)
-            if score > 0:
-                industry_scores[industry] = score
-        
-        if industry_scores:
-            primary_industry = max(industry_scores, key=industry_scores.get)
-            confidence = industry_scores[primary_industry] / sum(industry_scores.values())
-        else:
-            primary_industry = "general"
-            confidence = 0.0
-        
-        return {
-            "primary_industry": primary_industry,
-            "confidence": confidence,
-            "all_scores": industry_scores,
-            "detected_at": datetime.now().isoformat()
-        }
-    
-    def analyze_content_quality(self, content: Dict) -> Dict[str, Any]:
-        """Analyze content quality and engagement potential."""
-        quality_score = 0
-        factors = []
-        
-        # Check title
-        if content.get('title'):
-            quality_score += 10
-            if len(content['title']) > 30 and len(content['title']) < 70:
-                quality_score += 5
-                factors.append("optimal_title_length")
-        
-        # Check description
-        if content.get('description'):
-            quality_score += 10
-            if len(content['description']) > 120 and len(content['description']) < 160:
-                quality_score += 5
-                factors.append("optimal_description_length")
-        
-        # Check images
-        images = content.get('images', [])
-        if images:
-            quality_score += 15
-            factors.append("has_images")
-            if len(images) > 5:
-                quality_score += 5
-                factors.append("rich_media")
-        
-        # Check headings structure
-        headings = content.get('headings', [])
-        if headings:
-            quality_score += 10
-            factors.append("structured_content")
-            if len(headings) > 5:
-                quality_score += 10
-                factors.append("comprehensive_structure")
-        
-        # Check social signals
-        social = content.get('social_signals', {})
-        if any(social.values()):
-            quality_score += 10
-            factors.append("social_presence")
-        
-        # Check tech stack
-        tech = content.get('technologies', [])
-        if len(tech) > 3:
-            quality_score += 10
-            factors.append("modern_tech_stack")
-        
-        # Check SSL
-        if content.get('url', '').startswith('https'):
-            quality_score += 5
-            factors.append("secure_connection")
-        
-        # Check mobile optimization
-        viewport = content.get('viewport')
-        if viewport:
-            quality_score += 10
-            factors.append("mobile_optimized")
-        
-        return {
-            "quality_score": min(quality_score, 100),
-            "factors": factors,
-            "grade": self._get_quality_grade(quality_score),
-            "recommendations": self._get_quality_recommendations(factors, quality_score)
-        }
-    
-    def _get_quality_grade(self, score: int) -> str:
-        """Convert quality score to grade."""
-        if score >= 90:
-            return "A+"
-        elif score >= 80:
-            return "A"
-        elif score >= 70:
-            return "B"
-        elif score >= 60:
-            return "C"
-        elif score >= 50:
-            return "D"
-        else:
-            return "F"
-    
-    def _get_quality_recommendations(self, factors: List[str], score: int) -> List[str]:
-        """Generate quality improvement recommendations."""
-        recommendations = []
-        
-        if "optimal_title_length" not in factors:
-            recommendations.append("Optimize title length (30-70 characters)")
-        if "optimal_description_length" not in factors:
-            recommendations.append("Optimize meta description (120-160 characters)")
-        if "has_images" not in factors:
-            recommendations.append("Add relevant images to improve engagement")
-        if "structured_content" not in factors:
-            recommendations.append("Use heading tags for better content structure")
-        if "social_presence" not in factors:
-            recommendations.append("Implement social media integration")
-        if "mobile_optimized" not in factors:
-            recommendations.append("Ensure mobile optimization")
-        if score < 70:
-            recommendations.append("Consider comprehensive content audit")
-        
-        return recommendations[:5]  # Return top 5 recommendations
-    
-    def analyze_competitive_positioning(self, target: Dict, competitors: List[Dict]) -> Dict[str, Any]:
-        """Analyze competitive positioning."""
-        positioning = {
-            "target_strengths": [],
-            "target_weaknesses": [],
-            "opportunities": [],
-            "threats": [],
-            "competitive_advantage": [],
-            "improvement_areas": []
-        }
-        
-        # Analyze target vs competitors
-        target_quality = self.analyze_content_quality(target)
-        target_score = target_quality['quality_score']
-        
-        competitor_scores = []
-        for comp in competitors:
-            comp_quality = self.analyze_content_quality(comp)
-            competitor_scores.append(comp_quality['quality_score'])
-        
-        avg_competitor_score = statistics.mean(competitor_scores) if competitor_scores else 0
-        
-        # Determine positioning
-        if target_score > avg_competitor_score:
-            positioning["competitive_advantage"].append(f"Quality score {target_score:.0f}% vs avg {avg_competitor_score:.0f}%")
-            positioning["target_strengths"].append("Superior content quality")
-        else:
-            positioning["improvement_areas"].append(f"Quality gap: -{avg_competitor_score - target_score:.0f}%")
-            positioning["target_weaknesses"].append("Below average content quality")
-        
-        # Tech analysis
-        target_tech = set(target.get('technologies', []))
-        all_competitor_tech = set()
-        for comp in competitors:
-            all_competitor_tech.update(comp.get('technologies', []))
-        
-        unique_tech = target_tech - all_competitor_tech
-        missing_tech = all_competitor_tech - target_tech
-        
-        if unique_tech:
-            positioning["target_strengths"].append(f"Unique technologies: {', '.join(list(unique_tech)[:3])}")
-        if missing_tech:
-            positioning["opportunities"].append(f"Consider adopting: {', '.join(list(missing_tech)[:3])}")
-        
-        # Social signals comparison
-        target_social = sum(target.get('social_signals', {}).values())
-        competitor_social = [sum(c.get('social_signals', {}).values()) for c in competitors]
-        avg_competitor_social = statistics.mean(competitor_social) if competitor_social else 0
-        
-        if target_social > avg_competitor_social:
-            positioning["target_strengths"].append("Strong social media presence")
-        else:
-            positioning["opportunities"].append("Enhance social media engagement")
-        
-        return positioning
-    
-    def extract_keywords(self, content: Dict, max_keywords: int = 10) -> List[Dict[str, Any]]:
-        """Extract and rank keywords from content."""
-        text = f"{content.get('title', '')} {content.get('description', '')} {' '.join(content.get('headings', []))}".lower()
-        
-        # Remove common words
-        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'is', 'are', 'was', 'were', 'been', 'be', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can', 'could'}
-        
-        words = re.findall(r'\b[a-z]+\b', text)
-        words = [w for w in words if w not in stop_words and len(w) > 2]
-        
-        word_freq = Counter(words)
-        
-        keywords = []
-        for word, count in word_freq.most_common(max_keywords):
-            keywords.append({
-                "keyword": word,
-                "frequency": count,
-                "density": (count / len(words) * 100) if words else 0
-            })
-        
-        return keywords
-
-# ================== CORE ANALYSIS FUNCTIONS ================== #
-
-async def fetch_with_retry(url: str, max_retries: int = 3, timeout: int = 30, render_js: bool = False) -> str:
-    """Fetch URL content with retry logic and optional JS rendering."""
-    
-    # Check if JS rendering needed
-    if render_js or (SMART_JS_RENDER and should_use_js_rendering(url)):
-        return await fetch_with_selenium(url, timeout)
-    
-    # Standard HTTP fetch
-    for attempt in range(max_retries):
-        try:
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-                headers = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                }
-                response = await client.get(url, headers=headers)
-                response.raise_for_status()
-                return response.text
-        except Exception as e:
-            if attempt == max_retries - 1:
-                raise HTTPException(status_code=500, detail=f"Failed to fetch {url}: {str(e)}")
-            await asyncio.sleep(2 ** attempt)
-
-def should_use_js_rendering(url: str) -> bool:
-    """Determine if URL needs JS rendering based on patterns."""
-    js_patterns = [
-        'react', 'angular', 'vue', 'next', 'nuxt',
-        'vercel', 'netlify', 'gatsby', 'spa',
-        '.app', 'dashboard', 'portal', 'admin'
-    ]
-    
-    url_lower = url.lower()
-    return any(pattern in url_lower for pattern in js_patterns)
-
-async def fetch_with_selenium(url: str, timeout: int = 30) -> str:
-    """Fetch content using Selenium for JS-heavy sites."""
+def maybe_scrape_with_javascript(url: str) -> Optional[str]:
+    """
+    Renderöi JS lazyna. Palauttaa HTML-stringin tai None, jos ei saatavilla/onnistunut.
+    """
+    if not SMART_JS_RENDER:
+        return None
     try:
-        chrome_options = Options()
-        chrome_options.add_argument("--headless")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-gpu")
-        
-        driver = webdriver.Chrome(options=chrome_options)
-        driver.set_page_load_timeout(timeout)
-        
-        try:
-            driver.get(url)
-            WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.TAG_NAME, "body"))
-            )
-            await asyncio.sleep(2)  # Wait for dynamic content
-            html = driver.page_source
-            return html
-        finally:
-            driver.quit()
-            
+        # Lazy import, ettei boot kaadu jos deps puuttuu
+        from requests_html import HTMLSession  # type: ignore
     except Exception as e:
-        logger.error(f"Selenium fetch failed for {url}: {e}")
-        # Fallback to regular fetch
-        return await fetch_with_retry(url, render_js=False)
+        print(f"[JS-RENDER] requests_html unavailable: {e}")
+        return None
 
-def extract_head_signals(soup: BeautifulSoup) -> Dict[str, Any]:
-    """Extract important signals from HTML head."""
-    signals = {
-        "title": "",
-        "description": "",
-        "keywords": [],
-        "og_data": {},
-        "twitter_data": {},
-        "structured_data": [],
-        "canonical": "",
-        "lang": "",
-        "viewport": "",
-        "robots": ""
+    try:
+        session = HTMLSession()
+        response = session.get(url, timeout=30)
+        # lataa ensimmäisellä ajolla headless Chromiumin
+        response.html.render(timeout=20, sleep=2)
+        return response.html.html
+    except Exception as e:
+        print(f"[JS-RENDER] Rendering failed: {e}")
+        return None
+
+async def fetch_text(client, url):
+    try:
+        r = await client.get(url, timeout=10.0, follow_redirects=True)
+        r.raise_for_status()
+        return r.text
+    except Exception:
+        return ""
+
+async def collect_robots_and_sitemap(base_url):
+    from urllib.parse import urljoin
+    origin = base_url.split('/', 3)[:3]
+    origin = '/'.join(origin) + '/'
+    client = httpx.AsyncClient(timeout=10.0, follow_redirects=True)
+    robots_txt = await fetch_text(client, urljoin(origin, 'robots.txt'))
+    sitemaps = re.findall(r'(?i)Sitemap:\s*(\S+)', robots_txt) if robots_txt else []
+    sitemap_urls = sitemaps or [urljoin(origin, 'sitemap.xml')]
+    urls, latest_date = [], None
+    for sm in sitemap_urls[:3]:
+        xml = await fetch_text(client, sm)
+        if not xml:
+            continue
+        locs = re.findall(r'<loc>(.*?)</loc>', xml)
+        dates = re.findall(r'<lastmod>(.*?)</lastmod>', xml)
+        urls.extend(locs[:100])
+        for d in dates:
+            try:
+                dt = datetime.fromisoformat(d.replace('Z','+00:00')).date()
+                latest_date = max(latest_date, dt) if latest_date else dt
+            except Exception:
+                pass
+    await client.aclose()
+    return {
+        "sitemap_count": len(sitemap_urls),
+        "url_sample_count": len(urls),
+        "latest_post_date": str(latest_date) if latest_date else None
     }
-    
-    # Title
-    title_tag = soup.find('title')
-    if title_tag:
-        signals['title'] = title_tag.get_text(strip=True)
-    
-    # Meta tags
-    for meta in soup.find_all('meta'):
-        name = meta.get('name', '').lower()
-        property = meta.get('property', '').lower()
-        content = meta.get('content', '')
-        
-        if name == 'description':
-            signals['description'] = content
-        elif name == 'keywords':
-            signals['keywords'] = [k.strip() for k in content.split(',')]
-        elif name == 'viewport':
-            signals['viewport'] = content
-        elif name == 'robots':
-            signals['robots'] = content
-        elif property.startswith('og:'):
-            signals['og_data'][property] = content
-        elif name.startswith('twitter:'):
-            signals['twitter_data'][name] = content
-    
-    # Canonical URL
-    canonical = soup.find('link', {'rel': 'canonical'})
-    if canonical:
-        signals['canonical'] = canonical.get('href', '')
-    
-    # Language
-    html_tag = soup.find('html')
-    if html_tag:
-        signals['lang'] = html_tag.get('lang', '')
-    
-    # Structured data
-    for script in soup.find_all('script', {'type': 'application/ld+json'}):
+
+def extract_head_signals(soup: BeautifulSoup):
+    head = soup.find('head') or soup
+    canonical = (head.find('link', rel='canonical') or {}).get('href') if head else None
+    hreflangs = [l.get('href') for l in head.find_all('link', rel='alternate') if l.get('hreflang')]
+    og = {m.get('property'): m.get('content') for m in head.find_all('meta') if m.get('property','').startswith('og:')}
+    tw = {m.get('name'): m.get('content') for m in head.find_all('meta') if (m.get('name','').startswith('twitter:'))}
+    jsonld = []
+    for tag in head.find_all('script', type='application/ld+json'):
         try:
-            data = json.loads(script.string)
-            signals['structured_data'].append(data)
-        except:
+            data = json.loads(tag.string or '{}')
+            jsonld.append(data)
+        except Exception:
             pass
-    
-    return signals
-
-def extract_social_signals(soup: BeautifulSoup, url: str) -> Dict[str, Any]:
-    """Extract social media signals and links."""
-    social = {
-        "facebook": None,
-        "twitter": None,
-        "linkedin": None,
-        "instagram": None,
-        "youtube": None,
-        "tiktok": None,
-        "pinterest": None,
-        "github": None
-    }
-    
-    social_patterns = {
-        "facebook": r"facebook\.com/[\w\-\.]+",
-        "twitter": r"twitter\.com/[\w\-\.]+|x\.com/[\w\-\.]+",
-        "linkedin": r"linkedin\.com/(?:company|in)/[\w\-\.]+",
-        "instagram": r"instagram\.com/[\w\-\.]+",
-        "youtube": r"youtube\.com/(?:c|channel|user)/[\w\-\.]+",
-        "tiktok": r"tiktok\.com/@[\w\-\.]+",
-        "pinterest": r"pinterest\.com/[\w\-\.]+",
-        "github": r"github\.com/[\w\-\.]+"
-    }
-    
-    all_links = soup.find_all('a', href=True)
-    
-    for link in all_links:
-        href = link['href']
-        for platform, pattern in social_patterns.items():
-            if re.search(pattern, href, re.IGNORECASE):
-                social[platform] = href
-                break
-    
-    return social
-
-def detect_tech_and_cro(soup: BeautifulSoup, html: str) -> Dict[str, Any]:
-    """Detect technologies and CRO elements."""
-    tech_signals = {
-        "technologies": [],
-        "analytics": [],
-        "cro_elements": [],
-        "frameworks": [],
-        "cms": None,
-        "ecommerce": None,
-        "performance": {}
-    }
-    
-    # Technology detection patterns
-    tech_patterns = {
-        "React": [r"react", r"_react", r"React\."],
-        "Vue": [r"vue", r"Vue\."],
-        "Angular": [r"angular", r"ng-"],
-        "jQuery": [r"jquery", r"jQuery"],
-        "Bootstrap": [r"bootstrap"],
-        "Tailwind": [r"tailwind"],
-        "WordPress": [r"wp-content", r"wp-includes"],
-        "Shopify": [r"shopify", r"myshopify"],
-        "Webflow": [r"webflow"],
-        "Next.js": [r"next", r"_next"],
-        "Gatsby": [r"gatsby"],
-        "Nuxt": [r"nuxt", r"_nuxt"]
-    }
-    
-    # Check patterns
-    html_lower = html.lower()
-    for tech, patterns in tech_patterns.items():
-        for pattern in patterns:
-            if re.search(pattern, html_lower):
-                tech_signals["technologies"].append(tech)
-                break
-    
-    # Analytics detection
-    analytics_patterns = {
-        "Google Analytics": [r"google-analytics", r"gtag", r"ga\("],
-        "Google Tag Manager": [r"googletagmanager"],
-        "Facebook Pixel": [r"fbevents", r"facebook.*pixel"],
-        "Hotjar": [r"hotjar"],
-        "Segment": [r"segment", r"analytics\.js"],
-        "Mixpanel": [r"mixpanel"],
-        "Heap": [r"heap"],
-        "Amplitude": [r"amplitude"]
-    }
-    
-    for analytics, patterns in analytics_patterns.items():
-        for pattern in patterns:
-            if re.search(pattern, html_lower):
-                tech_signals["analytics"].append(analytics)
-                break
-    
-    # CRO elements detection
-    cro_elements = {
-        "forms": len(soup.find_all('form')),
-        "buttons": len(soup.find_all('button')),
-        "cta_buttons": len(soup.find_all('a', class_=re.compile(r'btn|button|cta', re.I))),
-        "modals": len(soup.find_all(class_=re.compile(r'modal|popup|overlay', re.I))),
-        "testimonials": len(soup.find_all(class_=re.compile(r'testimonial|review|rating', re.I))),
-        "pricing": bool(soup.find(class_=re.compile(r'pricing|price|plan', re.I))),
-        "chat_widget": bool(re.search(r'intercom|crisp|drift|zendesk|tawk', html_lower))
-    }
-    
-    tech_signals["cro_elements"] = cro_elements
-    
-    # CMS detection
-    if "WordPress" in tech_signals["technologies"]:
-        tech_signals["cms"] = "WordPress"
-    elif "Webflow" in tech_signals["technologies"]:
-        tech_signals["cms"] = "Webflow"
-    elif re.search(r'drupal', html_lower):
-        tech_signals["cms"] = "Drupal"
-    elif re.search(r'joomla', html_lower):
-        tech_signals["cms"] = "Joomla"
-    
-    # E-commerce detection
-    if "Shopify" in tech_signals["technologies"]:
-        tech_signals["ecommerce"] = "Shopify"
-    elif re.search(r'woocommerce', html_lower):
-        tech_signals["ecommerce"] = "WooCommerce"
-    elif re.search(r'magento', html_lower):
-        tech_signals["ecommerce"] = "Magento"
-    elif re.search(r'bigcommerce', html_lower):
-        tech_signals["ecommerce"] = "BigCommerce"
-    
-    return tech_signals
-
-def analyze_content(soup: BeautifulSoup) -> Dict[str, Any]:
-    """Analyze page content structure and elements."""
-    content = {
-        "headings": [],
-        "images": [],
-        "links": {
-            "internal": [],
-            "external": []
+    types = []
+    for block in jsonld:
+        t = block.get('@type')
+        if isinstance(t, list): types.extend(t)
+        elif t: types.append(t)
+    return {
+        "canonical": canonical,
+        "hreflang_count": len(hreflangs),
+        "og_status": {
+            "has_title": bool(og.get('og:title')),
+            "has_desc": bool(og.get('og:description')),
+            "has_image": bool(og.get('og:image'))
         },
-        "forms": [],
-        "videos": [],
-        "word_count": 0,
-        "text_content": ""
+        "twitter_status": {
+            "has_title": bool(tw.get('twitter:title')),
+            "has_desc": bool(tw.get('twitter:description')),
+            "has_image": bool(tw.get('twitter:image'))
+        },
+        "schema_counts": {t: types.count(t) for t in set(types)}
     }
-    
-    # Extract headings
-    for i in range(1, 7):
-        for heading in soup.find_all(f'h{i}'):
-            text = heading.get_text(strip=True)
-            if text:
-                content["headings"].append({
-                    "level": i,
-                    "text": text[:200]  # Limit length
-                })
-    
-    # Extract images
-    for img in soup.find_all('img')[:20]:  # Limit to 20 images
-        src = img.get('src', '')
-        alt = img.get('alt', '')
-        if src:
-            content["images"].append({
-                "src": src,
-                "alt": alt[:100]  # Limit alt text length
-            })
-    
-    # Extract links
-    base_domain = None
-    for link in soup.find_all('a', href=True)[:50]:  # Limit to 50 links
-        href = link['href']
-        text = link.get_text(strip=True)[:50]
-        
-        if href.startswith('http'):
-            parsed = urlparse(href)
-            if not base_domain:
-                base_domain = parsed.netloc
-            
-            if parsed.netloc == base_domain:
-                content["links"]["internal"].append({
-                    "url": href,
-                    "text": text
-                })
-            else:
-                content["links"]["external"].append({
-                    "url": href,
-                    "text": text
-                })
-    
-    # Extract forms
-    for form in soup.find_all('form')[:5]:  # Limit to 5 forms
-        form_data = {
-            "action": form.get('action', ''),
-            "method": form.get('method', 'get'),
-            "inputs": len(form.find_all(['input', 'textarea', 'select']))
-        }
-        content["forms"].append(form_data)
-    
-    # Extract videos
-    for video in soup.find_all(['video', 'iframe']):
-        if video.name == 'iframe':
-            src = video.get('src', '')
-            if 'youtube' in src or 'vimeo' in src:
-                content["videos"].append(src)
-        else:
-            content["videos"].append("embedded_video")
-    
-    # Get text content and word count
-    text = soup.get_text()
-    content["text_content"] = ' '.join(text.split())[:1000]  # First 1000 chars
-    content["word_count"] = len(text.split())
-    
-    return content
 
-async def analyze_competitor_enhanced(url: str, render_js: bool = False, use_ai: bool = True) -> Dict[str, Any]:
-    """Enhanced competitor analysis with AI capabilities."""
-    try:
-        # Check cache
-        cache_key = get_cache_key(url, render_js=render_js, use_ai=use_ai)
-        cached = get_from_cache(cache_key)
-        if cached:
-            logger.info(f"Cache hit for {url}")
-            return cached
-        
-        # Fetch content
-        html = await fetch_with_retry(url, render_js=render_js)
-        soup = BeautifulSoup(html, 'html.parser')
-        
-        # Basic analysis
-        result = {
-            "url": url,
-            "timestamp": datetime.now().isoformat(),
-            "head_signals": extract_head_signals(soup),
-            "social_signals": extract_social_signals(soup, url),
-            "technologies": detect_tech_and_cro(soup, html),
-            "content": analyze_content(soup),
-            "performance": {
-                "page_size": len(html),
-                "load_time": "N/A",
-                "requests": "N/A"
-            }
-        }
-        
-        # AI enhancement if enabled
-        if use_ai:
-            ai_analyzer = EnhancedAIAnalyzer()
-            
-            # Add AI analysis
-            result["ai_analysis"] = {
-                "sentiment": ai_analyzer.analyze_sentiment(result["content"]["text_content"]),
-                "industry": ai_analyzer.detect_industry(result),
-                "content_quality": ai_analyzer.analyze_content_quality(result),
-                "keywords": ai_analyzer.extract_keywords(result)
-            }
-        
-        # Cache result
-        set_cache(cache_key, result)
-        
-        return result
-        
-    except Exception as e:
-        logger.error(f"Error analyzing {url}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+TECH_HINTS = {
+    "cms": [("wordpress","WordPress"),("shopify","Shopify"),("wix","Wix"),("webflow","Webflow"),("woocommerce","WooCommerce"),("squarespace","Squarespace")],
+    "framework": [("__next","Next.js"),("nuxt","Nuxt"),("vite","Vite"),("astro","Astro"),("sapper","Sapper"),("reactRoot","React")],
+    "analytics": [("gtag(","GA4/gtag"),("googletagmanager.com","GTM"),("facebook.net/en_US/fbevents.js","Meta Pixel"),("clarity.ms","MS Clarity"),("hotjar","Hotjar"),("clarity(", "MS Clarity")]
+}
 
-# ================== AI HELPER FUNCTIONS ================== #
+def detect_tech_and_cro(soup: BeautifulSoup, html_text: str):
+    lower = html_text.lower()
+    gen = (soup.find('meta', attrs={'name':'generator'}) or {}).get('content','').lower()
+    cms = next((name for key,name in TECH_HINTS["cms"] if key in gen or key in lower), None)
+    framework = next((name for key,name in TECH_HINTS["framework"] if key in lower), None)
+    analytics_pixels = [name for key,name in TECH_HINTS["analytics"] if key in lower]
 
-def enhanced_ai_analysis(data: Dict, language: str = "en") -> Dict[str, Any]:
-    """Perform enhanced AI analysis on competitor data."""
-    ai_analyzer = EnhancedAIAnalyzer()
-    
-    analysis = {
-        "summary": generate_ai_summary(data, language),
-        "strengths": [],
-        "weaknesses": [],
-        "opportunities": [],
-        "threats": [],
-        "recommendations": [],
-        "competitive_score": 0,
-        "market_position": "unknown"
+    CTA_WORDS = ["osta","tilaa","varaa","lataa","book","buy","subscribe","contact","get started","request a quote","pyydä tarjous","varaa aika","aloita"]
+    cta_count = sum(1 for el in soup.find_all(["a","button"]) if any(w in (el.get_text(" ", strip=True) or "").lower() for w in CTA_WORDS))
+    forms_count = len(soup.find_all("form"))
+
+    contact_channels = []
+    text = soup.get_text(" ", strip=True)
+    if re.search(r'\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b', text, re.I): contact_channels.append("email")
+    if re.search(r'\+?\d[\d\s().-]{6,}', text): contact_channels.append("phone")
+    if "wa.me/" in lower or "api.whatsapp.com" in lower: contact_channels.append("whatsapp")
+
+    languages = set()
+    for a in soup.find_all('a', href=True):
+        href = a['href'].lower()
+        if re.search(r'/fi(/|$)', href): languages.add('fi')
+        if re.search(r'/en(/|$)', href): languages.add('en')
+        if re.search(r'/sv(/|$)', href): languages.add('sv')
+
+    return {
+        "cms": cms, "framework": framework, "analytics_pixels": sorted(list(set(analytics_pixels))),
+        "cta_count": cta_count, "forms_count": forms_count,
+        "contact_channels": sorted(list(set(contact_channels))),
+        "languages": sorted(list(languages))
     }
-    
-    # Analyze quality
-    quality = ai_analyzer.analyze_content_quality(data)
-    analysis["competitive_score"] = quality["quality_score"]
-    
-    # Determine market position
-    if quality["quality_score"] >= 80:
-        analysis["market_position"] = "leader"
-    elif quality["quality_score"] >= 60:
-        analysis["market_position"] = "challenger"
-    elif quality["quality_score"] >= 40:
-        analysis["market_position"] = "follower"
-    else:
-        analysis["market_position"] = "nicher"
-    
-    # Analyze strengths
-    if data.get("head_signals", {}).get("title"):
-        analysis["strengths"].append("SEO optimized title")
-    if len(data.get("technologies", {}).get("technologies", [])) > 5:
-        analysis["strengths"].append("Modern technology stack")
-    if data.get("social_signals"):
-        active_social = [k for k, v in data["social_signals"].items() if v]
-        if len(active_social) > 3:
-            analysis["strengths"].append(f"Strong social presence ({len(active_social)} platforms)")
-    
-    # Analyze weaknesses
-    if not data.get("head_signals", {}).get("description"):
-        analysis["weaknesses"].append("Missing meta description")
-    if data.get("content", {}).get("word_count", 0) < 300:
-        analysis["weaknesses"].append("Thin content")
-    if not data.get("technologies", {}).get("analytics"):
-        analysis["weaknesses"].append("No analytics tracking detected")
-    
-    # Generate recommendations
-    analysis["recommendations"] = generate_ai_recommendations(data, language)
-    
-    return analysis
 
-def generate_ai_summary(data: Dict, language: str = "en") -> str:
-    """Generate AI summary of the analysis."""
-    title = data.get("head_signals", {}).get("title", "Unknown")
-    tech_count = len(data.get("technologies", {}).get("technologies", []))
-    word_count = data.get("content", {}).get("word_count", 0)
-    
-    if language == "fi":
-        return f"Sivusto '{title}' käyttää {tech_count} teknologiaa ja sisältää {word_count} sanaa sisältöä."
-    else:
-        return f"The site '{title}' uses {tech_count} technologies and contains {word_count} words of content."
-
-def generate_ai_recommendations(data: Dict, language: str = "en") -> List[str]:
-    """Generate AI-powered recommendations."""
-    recommendations = []
-    
-    # SEO recommendations
-    if not data.get("head_signals", {}).get("description"):
-        rec = "Add meta description for better SEO" if language == "en" else "Lisää meta-kuvaus paremman SEO:n vuoksi"
-        recommendations.append(rec)
-    
-    # Content recommendations
-    word_count = data.get("content", {}).get("word_count", 0)
-    if word_count < 500:
-        rec = "Increase content depth (current: {} words, recommended: 1000+)".format(word_count) if language == "en" else "Lisää sisällön syvyyttä (nykyinen: {} sanaa, suositus: 1000+)".format(word_count)
-        recommendations.append(rec)
-    
-    # Technology recommendations
-    if not data.get("technologies", {}).get("analytics"):
-        rec = "Implement analytics tracking" if language == "en" else "Ota käyttöön analytiikkaseuranta"
-        recommendations.append(rec)
-    
-    # Social recommendations
-    social = data.get("social_signals", {})
-    if not social.get("facebook") and not social.get("instagram"):
-        rec = "Add social media presence" if language == "en" else "Lisää sosiaalisen median läsnäolo"
-        recommendations.append(rec)
-    
-    # Performance recommendations
-    page_size = data.get("performance", {}).get("page_size", 0)
-    if page_size > 3000000:  # 3MB
-        rec = "Optimize page size for faster loading" if language == "en" else "Optimoi sivun koko nopeampaa latautumista varten"
-        recommendations.append(rec)
-    
-    return recommendations[:5]  # Return top 5 recommendations
-
-def generate_enhanced_swot(data: Dict, competitors: List[Dict] = None) -> Dict[str, List[str]]:
-    """Generate enhanced SWOT analysis."""
-    ai_analyzer = EnhancedAIAnalyzer()
-    
-    swot = {
-        "strengths": [],
-        "weaknesses": [],
-        "opportunities": [],
-        "threats": []
-    }
-    
-    # Analyze content quality
-    quality = ai_analyzer.analyze_content_quality(data)
-    
-    # Strengths
-    if quality["quality_score"] > 70:
-        swot["strengths"].append(f"High content quality score: {quality['quality_score']}%")
-    
-    tech = data.get("technologies", {}).get("technologies", [])
-    if len(tech) > 5:
-        swot["strengths"].append(f"Robust technology stack with {len(tech)} technologies")
-    
-    if data.get("technologies", {}).get("ecommerce"):
-        swot["strengths"].append(f"E-commerce enabled with {data['technologies']['ecommerce']}")
-    
-    # Weaknesses
-    if quality["quality_score"] < 50:
-        swot["weaknesses"].append(f"Low content quality score: {quality['quality_score']}%")
-    
-    if not data.get("head_signals", {}).get("viewport"):
-        swot["weaknesses"].append("No mobile optimization detected")
-    
-    if data.get("content", {}).get("word_count", 0) < 500:
-        swot["weaknesses"].append("Insufficient content depth")
-    
-    # Opportunities
-    missing_social = [k for k, v in data.get("social_signals", {}).items() if not v]
-    if missing_social:
-        swot["opportunities"].append(f"Expand to {len(missing_social)} additional social platforms")
-    
-    if not data.get("technologies", {}).get("analytics"):
-        swot["opportunities"].append("Implement analytics for data-driven decisions")
-    
-    # Threats
-    if competitors:
-        competitor_quality_scores = [ai_analyzer.analyze_content_quality(c)["quality_score"] for c in competitors]
-        avg_competitor_score = sum(competitor_quality_scores) / len(competitor_quality_scores)
-        
-        if quality["quality_score"] < avg_competitor_score:
-            swot["threats"].append(f"Below average quality vs competitors ({quality['quality_score']}% vs {avg_competitor_score:.0f}%)")
-    
-    if not data.get("url", "").startswith("https"):
-        swot["threats"].append("Security: No HTTPS implementation")
-    
-    return swot
-
-def calculate_ai_confidence(data: Dict) -> float:
-    """Calculate confidence score for AI analysis."""
-    confidence = 0.0
-    factors = 0
-    
-    # Check data completeness
-    if data.get("head_signals", {}).get("title"):
-        confidence += 0.15
-        factors += 1
-    
-    if data.get("head_signals", {}).get("description"):
-        confidence += 0.15
-        factors += 1
-    
-    if data.get("content", {}).get("word_count", 0) > 100:
-        confidence += 0.20
-        factors += 1
-    
-    if data.get("technologies", {}).get("technologies"):
-        confidence += 0.15
-        factors += 1
-    
-    if data.get("social_signals"):
-        confidence += 0.10
-        factors += 1
-    
-    if data.get("content", {}).get("headings"):
-        confidence += 0.15
-        factors += 1
-    
-    if data.get("content", {}).get("images"):
-        confidence += 0.10
-        factors += 1
-    
-    return min(confidence, 1.0)
-
-async def get_openai_strategic_insights(data: Dict, language: str = "en") -> Dict[str, Any]:
-    """Get strategic insights using OpenAI if available."""
-    if not OPENAI_API_KEY:
-        return {
-            "available": False,
-            "message": "OpenAI API key not configured"
-        }
-    
-    try:
-        ai_analyzer = EnhancedAIAnalyzer()
-        
-        # Prepare context
-        context = {
-            "url": data.get("url"),
-            "title": data.get("head_signals", {}).get("title"),
-            "description": data.get("head_signals", {}).get("description"),
-            "technologies": data.get("technologies", {}).get("technologies", []),
-            "word_count": data.get("content", {}).get("word_count"),
-            "quality_score": ai_analyzer.analyze_content_quality(data).get("quality_score")
-        }
-        
-        # Create prompt
-        prompt = f"""Analyze this website and provide strategic insights:
-        URL: {context['url']}
-        Title: {context['title']}
-        Technologies: {', '.join(context['technologies'])}
-        Quality Score: {context['quality_score']}%
-        
-        Provide:
-        1. Market positioning assessment
-        2. Key competitive advantages
-        3. Strategic recommendations
-        4. Growth opportunities
-        
-        Language: {language}
-        Format: JSON with keys: positioning, advantages, recommendations, opportunities
-        """
-        
-        response = ai_analyzer.openai_client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are a strategic business analyst."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.7,
-            max_tokens=500
-        )
-        
-        # Parse response
-        insights = json.loads(response.choices[0].message.content)
-        
-        return {
-            "available": True,
-            "insights": insights,
-            "confidence": 0.85
-        }
-        
-    except Exception as e:
-        logger.error(f"OpenAI analysis error: {e}")
-        return {
-            "available": False,
-            "message": f"Analysis failed: {str(e)}"
-        }
-
-def generate_batch_recommendations(analyses: List[Dict]) -> Dict[str, Any]:
-    """Generate recommendations from batch analysis."""
-    recommendations = {
-        "common_strengths": [],
-        "common_weaknesses": [],
-        "industry_trends": [],
-        "best_practices": [],
-        "action_items": []
-    }
-    
-    if not analyses:
-        return recommendations
-    
-    # Analyze common patterns
-    all_tech = []
-    all_analytics = []
-    quality_scores = []
-    
-    for analysis in analyses:
-        all_tech.extend(analysis.get("technologies", {}).get("technologies", []))
-        all_analytics.extend(analysis.get("technologies", {}).get("analytics", []))
-        
-        if "ai_analysis" in analysis:
-            quality = analysis["ai_analysis"].get("content_quality", {})
-            if quality.get("quality_score"):
-                quality_scores.append(quality["quality_score"])
-    
-    # Find common technologies
-    tech_counter = Counter(all_tech)
-    common_tech = [tech for tech, count in tech_counter.most_common(3) if count > len(analyses) * 0.5]
-    
-    if common_tech:
-        recommendations["industry_trends"].append(f"Common technologies: {', '.join(common_tech)}")
-    
-    # Analyze quality scores
-    if quality_scores:
-        avg_quality = sum(quality_scores) / len(quality_scores)
-        recommendations["best_practices"].append(f"Average quality score: {avg_quality:.0f}%")
-        
-        if avg_quality < 60:
-            recommendations["action_items"].append("Industry-wide opportunity for quality improvement")
-    
-    # Common weaknesses
-    missing_analytics = sum(1 for a in analyses if not a.get("technologies", {}).get("analytics"))
-    if missing_analytics > len(analyses) * 0.3:
-        recommendations["common_weaknesses"].append("Lack of analytics implementation")
-    
-    return recommendations
-
-def generate_visual_summary(data: Dict) -> Dict[str, Any]:
-    """Generate data for visual summary charts."""
-    summary = {
-        "quality_metrics": {},
-        "technology_distribution": {},
-        "social_presence": {},
-        "content_metrics": {},
-        "performance_indicators": []
-    }
-    
-    # Quality metrics
-    if "ai_analysis" in data:
-        quality = data["ai_analysis"].get("content_quality", {})
-        summary["quality_metrics"] = {
-            "score": quality.get("quality_score", 0),
-            "grade": quality.get("grade", "N/A"),
-            "factors": len(quality.get("factors", []))
-        }
-    
-    # Technology distribution
-    tech = data.get("technologies", {})
-    summary["technology_distribution"] = {
-        "total": len(tech.get("technologies", [])),
-        "analytics": len(tech.get("analytics", [])),
-        "has_cms": bool(tech.get("cms")),
-        "has_ecommerce": bool(tech.get("ecommerce"))
-    }
-    
-    # Social presence
-    social = data.get("social_signals", {})
-    summary["social_presence"] = {
-        "platforms": sum(1 for v in social.values() if v),
-        "coverage": (sum(1 for v in social.values() if v) / len(social) * 100) if social else 0
-    }
-    
-    # Content metrics
-    content = data.get("content", {})
-    summary["content_metrics"] = {
-        "word_count": content.get("word_count", 0),
-        "images": len(content.get("images", [])),
-        "headings": len(content.get("headings", [])),
-        "forms": len(content.get("forms", [])),
-        "videos": len(content.get("videos", []))
-    }
-    
-    # Performance indicators
-    indicators = []
-    
-    # SEO indicator
+def score_and_recommend(head_sig, tech_cro, word_count):
     seo_score = 0
-    if data.get("head_signals", {}).get("title"):
-        seo_score += 25
-    if data.get("head_signals", {}).get("description"):
-        seo_score += 25
-    if data.get("head_signals", {}).get("canonical"):
-        seo_score += 25
-    if data.get("url", "").startswith("https"):
-        seo_score += 25
-    
-    indicators.append({
-        "name": "SEO Health",
-        "value": seo_score,
-        "max": 100
-    })
-    
-    # Content depth
-    word_count = content.get("word_count", 0)
-    content_score = min(100, (word_count / 1000) * 100)
-    indicators.append({
-        "name": "Content Depth",
-        "value": content_score,
-        "max": 100
-    })
-    
-    # Tech sophistication
-    tech_score = min(100, len(tech.get("technologies", [])) * 10)
-    indicators.append({
-        "name": "Tech Stack",
-        "value": tech_score,
-        "max": 100
-    })
-    
-    summary["performance_indicators"] = indicators
-    
-    return summary
+    seo_score += 10 if head_sig['canonical'] else 0
+    seo_score += 10 if head_sig['og_status']['has_title'] else 0
+    content_score = 15 if word_count > 10000 else 8 if word_count > 5000 else 0
+    cro_score = min(15, tech_cro['cta_count']*2) + (5 if tech_cro['forms_count'] > 0 else 0)
+    trust_score = 5 if 'Organization' in head_sig['schema_counts'] else 0
+    tech_score = 5 if tech_cro['analytics_pixels'] else 0
+    total = min(100, seo_score + content_score + cro_score + trust_score + tech_score)
 
-# ================== PDF GENERATION ================== #
+    findings, actions = [], []
+    if not head_sig['canonical']:
+        findings.append("Canonical puuttuu → riski duplikaateista")
+        actions.append({"otsikko":"Lisää canonical","kuvaus":"Aseta kanoninen osoite kaikille sivuille","prioriteetti":"korkea","aikataulu":"heti","mittari":"Canonical löytyy"})
+    if not (head_sig['og_status']['has_title'] and head_sig['og_status']['has_desc']):
+        findings.append("OG-metat vajaat/puuttuu → heikko jaettavuus")
+        actions.append({"otsikko":"OG-perusmetat kuntoon","kuvaus":"og:title & og:description + 1200×630 og:image","prioriteetti":"keskitaso","aikataulu":"1–3kk","mittari":"OG-validi"})
+    if content_score == 0:
+        findings.append("Sisältö vähäinen → kasvata laadukasta tekstiä")
+        actions.append({"otsikko":"Sisältöohjelma","kuvaus":"2–4 artikkelia/kk, FAQ ja case-tarinat","prioriteetti":"korkea","aikataulu":"1–3kk","mittari":"Julkaisutahti"})
+    if tech_cro['cta_count'] < 2:
+        findings.append("Vähän CTA-elementtejä → heikko ohjaus konversioon")
+        actions.append({"otsikko":"Lisää CTA-napit","kuvaus":"Heroon pää-CTA + osioihin toissijaiset","prioriteetti":"korkea","aikataulu":"heti","mittari":"CTA-tiheys"})
+    if not tech_cro['analytics_pixels']:
+        findings.append("Analytiikka/pikselit puuttuvat → ei seurantaa")
+        actions.append({"otsikko":"Asenna analytiikka & pikselit","kuvaus":"GA4, GTM, Meta Pixel, LinkedIn Insight","prioriteetti":"korkea","aikataulu":"heti","mittari":"Tägien läsnäolo"})
 
-def create_competitive_analysis_pdf(analyses: List[Dict], company_name: str = "Target Company") -> BytesIO:
-    """Create comprehensive PDF report from analyses."""
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4)
-    story = []
-    styles = getSampleStyleSheet()
-    
-    # Custom styles
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Title'],
-        fontSize=24,
-        textColor=colors.HexColor('#1e40af'),
-        spaceAfter=30
-    )
-    
-    heading_style = ParagraphStyle(
-        'CustomHeading',
-        parent=styles['Heading1'],
-        fontSize=16,
-        textColor=colors.HexColor('#1e40af'),
-        spaceAfter=12
-    )
-    
-    # Title
-    story.append(Paragraph(f"Competitive Intelligence Report", title_style))
-    story.append(Paragraph(f"{company_name}", styles['Normal']))
-    story.append(Spacer(1, 0.2*inch))
-    story.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", styles['Normal']))
-    story.append(PageBreak())
-    
-    # Executive Summary
-    story.append(Paragraph("Executive Summary", heading_style))
-    
-    summary_data = [
-        ["Metric", "Value"],
-        ["Sites Analyzed", str(len(analyses))],
-        ["Average Quality Score", f"{sum(a.get('ai_analysis', {}).get('content_quality', {}).get('quality_score', 0) for a in analyses) / len(analyses):.0f}%" if analyses else "N/A"],
-        ["Total Technologies", str(sum(len(a.get('technologies', {}).get('technologies', [])) for a in analyses))],
-        ["Report Date", datetime.now().strftime('%Y-%m-%d')]
+    return {
+        "scores":{"seo":seo_score,"content":content_score,"cro":cro_score,"trust":trust_score,"tech":tech_score,"total":total},
+        "top_findings":findings[:6],
+        "actions":actions[:8]
+    }
+
+def analyze_content(soup: BeautifulSoup, url: str):
+    """
+    Analysoi sivuston sisältöä syvällisemmin
+    """
+    content_analysis = {
+        "headings": {},
+        "images": {"total": 0, "with_alt": 0, "without_alt": 0},
+        "links": {"internal": 0, "external": 0, "total": 0},
+        "text_content": "",
+        "services_hints": [],
+        "trust_signals": [],
+        "content_quality": {}
+    }
+
+    # Otsikot
+    for i in range(1, 7):
+        h_tags = soup.find_all(f'h{i}')
+        if h_tags:
+            content_analysis["headings"][f'h{i}'] = [tag.get_text(strip=True)[:100] for tag in h_tags[:5]]
+
+    # Kuvat
+    images = soup.find_all('img')
+    content_analysis["images"]["total"] = len(images)
+    content_analysis["images"]["with_alt"] = len([img for img in images if img.get('alt')])
+    content_analysis["images"]["without_alt"] = len(images) - content_analysis["images"]["with_alt"]
+
+    # Linkit
+    links = soup.find_all('a', href=True)
+    for link in links:
+        href = link['href']
+        if href.startswith('http://') or href.startswith('https://'):
+            if url in href:
+                content_analysis["links"]["internal"] += 1
+            else:
+                content_analysis["links"]["external"] += 1
+        elif not href.startswith('#') and not href.startswith('mailto:'):
+            content_analysis["links"]["internal"] += 1
+    content_analysis["links"]["total"] = len(links)
+
+    # Teksti
+    main_content = soup.find('main') or soup.find('article') or soup.find('div', class_=re.compile('content|main'))
+    if main_content:
+        text = main_content.get_text(separator=' ', strip=True)
+    else:
+        text = soup.get_text(separator=' ', strip=True)
+    text = re.sub(r'\s+', ' ', text)
+    content_analysis["text_content"] = text[:3000]
+
+    # Palvelu-/tuotevihjeet
+    service_keywords = [
+        'palvelu', 'tuote', 'ratkaisu', 'tarjoa', 'toiminta', 'asiantuntija',
+        'service', 'product', 'solution', 'offer', 'expert', 'consulting'
     ]
-    
-    summary_table = Table(summary_data)
-    summary_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3b82f6')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 12),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black)
-    ]))
-    
-    story.append(summary_table)
-    story.append(PageBreak())
-    
-    # Individual Site Analysis
-    for idx, analysis in enumerate(analyses, 1):
-        story.append(Paragraph(f"Site Analysis #{idx}", heading_style))
-        story.append(Paragraph(f"URL: {analysis.get('url', 'N/A')}", styles['Normal']))
-        story.append(Spacer(1, 0.1*inch))
-        
-        # Basic Info
-        head_signals = analysis.get('head_signals', {})
-        basic_data = [
-            ["Property", "Value"],
-            ["Title", head_signals.get('title', 'N/A')[:50]],
-            ["Description", head_signals.get('description', 'N/A')[:100]],
-            ["Language", head_signals.get('lang', 'N/A')],
-            ["Word Count", str(analysis.get('content', {}).get('word_count', 0))]
-        ]
-        
-        basic_table = Table(basic_data)
-        basic_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 10),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black)
-        ]))
-        
-        story.append(basic_table)
-        story.append(Spacer(1, 0.2*inch))
-        
-        # Technologies
-        tech = analysis.get('technologies', {}).get('technologies', [])
-        if tech:
-            story.append(Paragraph("Technologies Detected:", styles['Heading2']))
-            tech_text = ", ".join(tech)
-            story.append(Paragraph(tech_text, styles['Normal']))
-            story.append(Spacer(1, 0.1*inch))
-        
-        # AI Analysis if available
-        if 'ai_analysis' in analysis:
-            ai = analysis['ai_analysis']
-            
-            # Quality Score
-            quality = ai.get('content_quality', {})
-            if quality:
-                story.append(Paragraph(f"Quality Score: {quality.get('quality_score', 0)}% ({quality.get('grade', 'N/A')})", styles['Normal']))
-                story.append(Spacer(1, 0.1*inch))
-            
-            # Keywords
-            keywords = ai.get('keywords', [])
-            if keywords:
-                story.append(Paragraph("Top Keywords:", styles['Heading2']))
-                kw_text = ", ".join([kw['keyword'] for kw in keywords[:5]])
-                story.append(Paragraph(kw_text, styles['Normal']))
-                story.append(Spacer(1, 0.1*inch))
-        
-        if idx < len(analyses):
-            story.append(PageBreak())
-    
-    # Build PDF
-    doc.build(story)
-    buffer.seek(0)
-    return buffer
+    text_lower = text.lower()
+    for keyword in service_keywords:
+        if keyword in text_lower:
+            sentences = text.split('.')
+            for sentence in sentences:
+                if keyword in sentence.lower() and len(sentence) < 200:
+                    content_analysis["services_hints"].append(sentence.strip())
+                    if len(content_analysis["services_hints"]) >= 5:
+                        break
 
-# ================== API ENDPOINTS ================== #
+    # Luottamussignaalit
+    trust_patterns = [
+        (r'\d{4,}-\d{4,}', 'Y-tunnus'),
+        (r'(?:perustettu|founded|since) \d{4}', 'Perustamisvuosi'),
+        (r'ISO[ -]?\d{4,}', 'ISO-sertifikaatti'),
+        (r'palkinto|award|voittaja|winner', 'Palkinnot'),
+        (r'asiakasta|clients|customers', 'Asiakasreferenssit'),
+        (r'henkilö|työntekijä|employees|team', 'Tiimitieto'),
+        ('yhteystiedot', 'Yhteystiedot'),
+        ('testimo|referenssi|case', 'Asiakastarinat')
+    ]
+    for pattern, signal_type in trust_patterns:
+        if re.search(pattern, text_lower, re.IGNORECASE):
+            content_analysis["trust_signals"].append(signal_type)
+
+    # Laatu
+    content_analysis["content_quality"] = {
+        "text_length": len(text),
+        "unique_words": len(set(text.lower().split())),
+        "avg_sentence_length": len(text.split()) / max(len(text.split('.')), 1),
+        "has_contact_info": bool(re.search(r'@|puh|tel|phone', text_lower)),
+        "has_address": bool(re.search(r'\d{5}|finland|suomi|helsinki|tampere|turku|oulu', text_lower))
+    }
+    return content_analysis
+
+# ========== ENDPOINTS ==========
 
 @app.get("/")
-def root():
-    """Root endpoint with API information."""
+def home():
     return {
-        "name": "Brandista Competitive Intelligence API",
+        "api":"Brandista Competitive Intelligence API",
         "version": APP_VERSION,
-        "status": "operational",
-        "ai_features": "enabled",
-        "endpoints": {
-            "analyze": "/api/v1/analyze",
-            "ai_analyze": "/api/v2/ai-analyze",
-            "deep_analysis": "/api/v1/deep-analysis",
-            "batch_analyze": "/api/v1/batch-analyze-enhanced",
-            "compare": "/api/v1/compare-enhanced/{url1}/{url2}",
-            "generate_pdf": "/api/v1/generate-pdf"
-        }
+        "status":"ok",
+        "js_render_enabled": SMART_JS_RENDER
     }
 
 @app.get("/health")
 def health():
-    """Health check endpoint."""
+    def can_import(mod: str) -> bool:
+        try:
+            __import__(mod)
+            return True
+        except Exception:
+            return False
     return {
         "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
         "version": APP_VERSION,
-        "cache_size": len(cache),
-        "ai_enabled": bool(OPENAI_API_KEY)
+        "openai_configured": bool(openai_client),
+        "smart_js_render_flag": SMART_JS_RENDER,
+        "deps": {
+            "requests_html": can_import("requests_html"),
+            "lxml_html_clean": can_import("lxml_html_clean"),
+            "pyppeteer": can_import("pyppeteer"),
+        }
     }
 
-@app.post("/api/v1/analyze")
-async def analyze_endpoint(request: AnalyzeRequest):
-    """Enhanced analyze endpoint with AI capabilities."""
+@app.post("/api/v1/analyze", response_model=SmartAnalyzeResponse)
+async def analyze_competitor(request: AnalyzeRequest):
     try:
-        result = await analyze_competitor_enhanced(
-            url=request.url,
-            render_js=request.render_js,
-            use_ai=True  # Always use AI for v1 endpoint
-        )
-        
-        return JSONResponse(content=result)
-        
-    except Exception as e:
-        logger.error(f"Analysis error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        url = request.url if request.url.startswith("http") else f"https://{request.url}"
 
-@app.post("/api/v2/ai-analyze")
-async def ai_analyze_endpoint(request: AIAnalyzeRequest):
-    """Advanced AI analysis endpoint."""
-    try:
-        # Perform base analysis
-        analysis = await analyze_competitor_enhanced(
-            url=request.url,
-            render_js=request.render_js,
-            use_ai=request.use_ai
-        )
-        
-        # Add enhanced AI analysis
-        if request.use_ai:
-            analysis["enhanced_analysis"] = enhanced_ai_analysis(analysis, request.language)
-            
-            # Add SWOT if requested
-            if request.include_swot:
-                analysis["swot"] = generate_enhanced_swot(analysis)
-            
-            # Add recommendations if requested
-            if request.include_recommendations:
-                analysis["recommendations"] = generate_ai_recommendations(analysis, request.language)
-            
-            # Add confidence score
-            analysis["ai_confidence"] = calculate_ai_confidence(analysis)
-            
-            # Try to get OpenAI insights
-            if OPENAI_API_KEY:
-                openai_insights = await get_openai_strategic_insights(analysis, request.language)
-                if openai_insights.get("available"):
-                    analysis["strategic_insights"] = openai_insights["insights"]
-        
-        # Add visual summary
-        analysis["visual_summary"] = generate_visual_summary(analysis)
-        
-        return JSONResponse(content=analysis)
-        
-    except Exception as e:
-        logger.error(f"AI analysis error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        # Välimuistin voisi ottaa käyttöön halutessa:
+        # cached = get_cached_analysis(url)
+        # if cached:
+        #     return SmartAnalyzeResponse(**cached)
 
-@app.post("/api/v1/deep-analysis")
-async def deep_analysis_endpoint(request: DeepAnalysisRequest):
-    """Perform deep competitive analysis."""
-    try:
-        # Analyze main site
-        main_analysis = await analyze_competitor_enhanced(
-            url=request.url,
-            render_js=True,
-            use_ai=True
-        )
-        
-        # Analyze competitors
-        competitor_analyses = []
-        for comp_url in request.competitors[:5]:  # Limit to 5 competitors
-            try:
-                comp_analysis = await analyze_competitor_enhanced(
-                    url=comp_url,
-                    render_js=False,
-                    use_ai=True
-                )
-                competitor_analyses.append(comp_analysis)
-            except Exception as e:
-                logger.error(f"Error analyzing competitor {comp_url}: {e}")
-        
-        # Perform competitive positioning
-        ai_analyzer = EnhancedAIAnalyzer()
-        positioning = ai_analyzer.analyze_competitive_positioning(
-            main_analysis,
-            competitor_analyses
-        )
-        
-        # Generate comprehensive report
-        report = {
-            "target": {
-                "url": request.url,
-                "company": request.company_name,
-                "analysis": main_analysis
-            },
-            "competitors": competitor_analyses,
-            "positioning": positioning,
-            "swot": generate_enhanced_swot(main_analysis, competitor_analyses),
-            "recommendations": generate_ai_recommendations(main_analysis, request.language),
-            "batch_insights": generate_batch_recommendations(competitor_analyses),
-            "timestamp": datetime.now().isoformat()
+        # 1) Nopea haku
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            response = await client.get(url, headers={'User-Agent':'Mozilla/5.0 (compatible; BrandistaBot/1.0)'})
+            response.raise_for_status()
+            html_text = response.text
+
+        soup = BeautifulSoup(html_text, 'html.parser')
+        title_el = soup.find('title')
+        meta_desc_el = soup.find('meta', {'name':'description'})
+        h1_present = bool(soup.find('h1'))
+
+        # 2) Heuristiikka → kokeile JS-renderiä lazyna
+        if SMART_JS_RENDER and (not title_el or not meta_desc_el or not h1_present or soup.find('script', src=False)):
+            js_html = maybe_scrape_with_javascript(url)
+            if js_html:
+                soup = BeautifulSoup(js_html, 'html.parser')
+
+        title = (soup.find('title').text.strip() if soup.find('title') else "")
+        description = (soup.find('meta', {'name':'description'}) or {}).get('content','')
+        word_count = len(soup.get_text(" ", strip=True))
+
+        head_sig = extract_head_signals(soup)
+        tech_cro = detect_tech_and_cro(soup, str(soup))
+        sitemap_info = await collect_robots_and_sitemap(url)
+        content_data = analyze_content(soup, url)
+        scores = score_and_recommend(head_sig, tech_cro, word_count)
+
+        smart = {
+            "meta": {"title": title or "Ei otsikkoa", "description": description or "Ei kuvausta", "canonical": head_sig['canonical']},
+            "head_signals": head_sig,
+            "tech_cro": tech_cro,
+            "sitemap": sitemap_info,
+            "content_analysis": content_data,
+            "scores": scores["scores"],
+            "top_findings": scores["top_findings"],
+            "actions": scores["actions"],
+            "flags": {"js_render_enabled": SMART_JS_RENDER, "cached": False}
         }
-        
-        return JSONResponse(content=comparison)
-        
-    except Exception as e:
-        logger.error(f"Comparison error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/v1/generate-pdf")
-async def generate_pdf_endpoint(request: PDFRequest):
-    """Generate PDF report from multiple URLs."""
-    try:
-        analyses = []
-        
-        for url in request.urls[:10]:  # Limit to 10 URLs
-            try:
-                analysis = await analyze_competitor_enhanced(
-                    url=url,
-                    render_js=False,
-                    use_ai=True
-                )
-                analyses.append(analysis)
-            except Exception as e:
-                logger.error(f"Error analyzing {url} for PDF: {e}")
-        
-        if not analyses:
-            raise HTTPException(status_code=400, detail="No valid analyses to generate PDF")
-        
-        # Generate PDF
-        pdf_buffer = create_competitive_analysis_pdf(analyses, request.company_name)
-        
-        return StreamingResponse(
-            pdf_buffer,
-            media_type="application/pdf",
-            headers={
-                "Content-Disposition": f"attachment; filename=competitive_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-            }
+        result = SmartAnalyzeResponse(
+            success=True,
+            url=url,
+            title=title or "Ei otsikkoa",
+            description=description or "Ei kuvausta",
+            score=scores["scores"]["total"],
+            insights={"word_count": word_count},
+            smart=smart
         )
-        
-    except Exception as e:
-        logger.error(f"PDF generation error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
-# ================== MIDDLEWARE ================== #
+        # save_to_cache(url, result.dict())
+        return result
+
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=400, detail=f"Virhe sivun haussa: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Analyysi epäonnistui: {str(e)}")
+
+@app.post("/api/v1/ai-analyze")
+async def ai_analyze_compat(req: CompetitorAnalysisRequest):
+    """
+    Yhteensopivuus-endpoint vanhalle frontille:
+    - Ajaa /api/v1/analyze (älydata)
+    - (valinnainen) AI-rikastus OPENAI_API_KEY:llä
+    - Palauttaa legacy-muotoisen `ai_analysis`-lohkon + koko `smart` datan
+    """
+    try:
+        target_url = req.url or req.website
+        if not target_url:
+            raise HTTPException(status_code=400, detail="url or website required")
+
+        # 1) Aja uusi älyanalyysi
+        smart_resp = await analyze_competitor(AnalyzeRequest(url=target_url))
+        result = smart_resp.dict()
+
+        # 2) (Optional) AI-rikastus parannetuilla tiedoilla
+        ai_full: Dict[str, Any] = {}
+        ai_reco: List[Dict[str, Any]] = []
+
+        if openai_client and req.use_ai:
+            try:
+                content_info = result["smart"].get("content_analysis", {})
+                summary = {
+                    "url": result.get("url"),
+                    "scores": result["smart"]["scores"],
+                    "top_findings": result["smart"]["top_findings"],
+                    "actions": result["smart"]["actions"],
+                    "tech_cro": result["smart"]["tech_cro"],
+                    "head_signals": result["smart"]["head_signals"],
+                    "content_summary": {
+                        "headings": content_info.get("headings", {}),
+                        "images": content_info.get("images", {}),
+                        "links": content_info.get("links", {}),
+                        "services_hints": content_info.get("services_hints", []),
+                        "trust_signals": content_info.get("trust_signals", []),
+                        "content_quality": content_info.get("content_quality", {}),
+                        "text_preview": content_info.get("text_content", "")[:500]
+                    }
+                }
+
+                language = (req.language or 'fi').lower()
+                if language == 'en':
+                    prompt = f"""
+Analyze this competitor website and create a comprehensive JSON analysis.
+
+WEBSITE DATA:
+{json.dumps(summary, ensure_ascii=False, indent=2)}
+
+Create a JSON object with:
+1. "summary": 4-6 sentence description of the site, its condition and services/products found
+2. "strengths": list of 4-6 strengths based on data (e.g. good SEO, analytics, trust signals)
+3. "weaknesses": list of 4-6 weaknesses based on findings
+4. "opportunities": list of 4-5 opportunities to improve
+5. "threats": list of 2-3 potential threats or risks
+6. "recommendations": list of 6-8 actions, each object: title, description, priority, timeline
+7. "competitor_profile": assessment of competitor (target audience, strengths, market position)
+
+Use concrete observations from data. Respond ONLY in JSON format in ENGLISH.
+"""
+                    system_msg = "You are a digital marketing and competitor analysis expert. Analyze data carefully and provide concrete recommendations in ENGLISH."
+                else:
+                    prompt = f"""
+Analysoi tämä kilpailijasivusto ja tuota kattava JSON-analyysi.
+
+SIVUSTODATA:
+{json.dumps(summary, ensure_ascii=False, indent=2)}
+
+Luo JSON-objekti, jossa on:
+1. "yhteenveto": 4–6 lausetta sivuston tilasta ja palveluista/tuotteista
+2. "vahvuudet": 4–6 vahvuutta datan perusteella (esim. SEO, analytiikka, luottamussignaalit)
+3. "heikkoudet": 4–6 heikkoutta löydösten perusteella
+4. "mahdollisuudet": 4–5 mahdollisuutta parantaa
+5. "uhat": 2–3 uhkaa/riskitekijää
+6. "toimenpidesuositukset": 6–8 toimenpidettä, jokaisessa: otsikko, kuvaus, prioriteetti, aikataulu
+7. "kilpailijaprofiili": kuvaus kohderyhmästä, vahvuusalueista ja markkina-asemasta
+
+Perustele havaintosi datalla. Vastaa VAIN JSON-muodossa SUOMEKSI.
+"""
+                    system_msg = "Olet digitaalisen markkinoinnin ja kilpailija-analyysin asiantuntija. Anna konkreettiset suositukset suomeksi."
+
+                resp = await openai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": system_msg},
+                        {"role": "user", "content": prompt},
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0.6,
+                    max_tokens=1200,
+                )
+                parsed = json.loads(resp.choices[0].message.content or "{}")
+                ai_full = parsed if isinstance(parsed, dict) else {}
+                # Salli sekä suomi- että englanti-avainnimet
+                ai_reco = (
+                    ai_full.get("toimenpidesuositukset")
+                    or ai_full.get("recommendations")
+                    or []
+                )
+            except Exception as e:
+                print(f"AI enhancement failed: {str(e)}")
+                ai_full = {}
+                ai_reco = []
+
+        # 3) Palauta legacy-ystävällinen muoto + smart-dataset
+
+        # Nosta kilpailijaprofiilin vahvuusalueet/strengths yhdeksi listaksi
+        kilpailijaprofiili = ai_full.get("kilpailijaprofiili") or ai_full.get("competitor_profile") or {}
+        if isinstance(kilpailijaprofiili, dict):
+            erottautumiskeinot = kilpailijaprofiili.get("vahvuusalueet", kilpailijaprofiili.get("strengths", []))
+        else:
+            erottautumiskeinot = []
+
+        # KORJATTU quick_wins käsittely - tukee molemmat kielet
+        quick_wins_list = []
+        if ai_reco or result["smart"]["actions"]:
+            for a in (ai_reco or result["smart"]["actions"])[:3]:
+                if isinstance(a, dict):
+                    # Kokeile ensin otsikko, sitten title, sitten tyhjä
+                    win = a.get("otsikko", a.get("title", ""))
+                else:
+                    win = str(a)
+                if win:
+                    quick_wins_list.append(win)
+
+        return {
+            "success": True,
+            "company_name": req.company_name,
+            "analysis_date": datetime.now().isoformat(),
+            "basic_analysis": {
+                "company": req.company_name,
+                "website": req.website or req.url,
+                "industry": req.industry,
+                "strengths_count": len(req.strengths or []),
+                "weaknesses_count": len(req.weaknesses or []),
+                "has_market_position": bool(req.market_position),
+            },
+            "ai_analysis": {
+                "yhteenveto": ai_full.get(
+                    "yhteenveto",
+                    ai_full.get(
+                        "summary",
+                        f"Sivusto {req.company_name} sai {result['smart']['scores']['total']}/100 pistettä digitaalisessa analyysissä."
+                    )
+                ),
+                "vahvuudet": ai_full.get("vahvuudet", ai_full.get("strengths", [])),
+                "heikkoudet": ai_full.get("heikkoudet", ai_full.get("weaknesses", [])),
+                "mahdollisuudet": ai_full.get("mahdollisuudet", ai_full.get("opportunities", [])),
+                "uhat": ai_full.get("uhat", ai_full.get("threats", [])),
+                "toimenpidesuositukset": ai_reco or result["smart"]["actions"],
+                "digitaalinen_jalanjalki": {
+                    "arvio": result["smart"]["scores"]["total"] // 10,
+                    "sosiaalinen_media": result["smart"]["tech_cro"]["analytics_pixels"],
+                    "sisaltostrategia": "Aktiivinen" if len(result["smart"].get("content_analysis", {}).get("services_hints", [])) > 2 else "Kehitettävä"
+                },
+                "erottautumiskeinot": erottautumiskeinot,
+                "quick_wins": quick_wins_list  # Käytä korjattua listaa
+            },
+            "smart": result["smart"]
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI analyze failed: {str(e)}")
+
+@app.get("/api/v1/test-openai")
+async def test_openai():
+    """Test OpenAI API connection"""
+    if not openai_client:
+        return {
+            "status": "error",
+            "message": "OpenAI client not configured",
+            "api_key_set": bool(os.getenv("OPENAI_API_KEY")),
+            "client_exists": False
+        }
+
+    try:
+        response = await openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a test bot."},
+                {"role": "user", "content": "Reply with just 'OK' if you work."}
+            ],
+            max_tokens=10
+        )
+        return {
+            "status": "success",
+            "message": "OpenAI API works!",
+            "response": response.choices[0].message.content,
+            "model": "gpt-4o-mini"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"OpenAI API error: {str(e)}",
+            "error_type": type(e).__name__
+        }
+
+@app.post("/api/v1/batch-analyze")
+async def batch_analyze_competitors(urls: List[str]):
+    """
+    Analysoi useita kilpailijoita kerralla
+    """
+    results = []
+    for url in urls[:10]:  # Max 10 kerralla
+        try:
+            result = await analyze_competitor(AnalyzeRequest(url=url))
+            results.append(result.dict())
+        except Exception as e:
+            results.append({"success": False, "url": url, "error": str(e)})
+
+    successful = [r for r in results if r.get('success')]
+    avg_score = sum(r.get('score', 0) for r in successful) / len(successful) if successful else 0
+
+    return {
+        "success": True,
+        "analyzed_count": len(results),
+        "successful_count": len(successful),
+        "average_score": round(avg_score, 1),
+        "results": results,
+        "summary": {
+            "best_performer": max(successful, key=lambda x: x.get('score', 0)) if successful else None,
+            "common_weaknesses": _find_common_patterns([r['smart']['top_findings'] for r in successful if 'smart' in r]),
+            "tech_stack_distribution": _analyze_tech_distribution(successful)
+        }
+    }
+
+def _find_common_patterns(findings_lists):
+    """Tunnista yleisimmät löydökset"""
+    all_findings = []
+    for findings in findings_lists:
+        all_findings.extend(findings)
+
+    patterns = {}
+    keywords = ['canonical', 'CTA', 'analytiikka', 'sisältö', 'OG-meta']
+    for keyword in keywords:
+        count = sum(1 for f in all_findings if keyword.lower() in f.lower())
+        if count > 0:
+            patterns[keyword] = count
+    return patterns
+
+def _analyze_tech_distribution(results):
+    """Analysoi teknologiajakauma"""
+    tech_dist = {'cms': {}, 'frameworks': {}, 'analytics': {}}
+    for r in results:
+        if 'smart' in r and 'tech_cro' in r['smart']:
+            tech = r['smart']['tech_cro']
+            cms = tech.get('cms')
+            if cms:
+                tech_dist['cms'][cms] = tech_dist['cms'].get(cms, 0) + 1
+            fw = tech.get('framework')
+            if fw:
+                tech_dist['frameworks'][fw] = tech_dist['frameworks'].get(fw, 0) + 1
+            for pixel in tech.get('analytics_pixels', []):
+                tech_dist['analytics'][pixel] = tech_dist['analytics'].get(pixel, 0) + 1
+    return tech_dist
+
+@app.get("/api/v1/compare/{url1}/{url2}")
+async def compare_competitors(url1: str, url2: str):
+    """
+    Vertaa kahta kilpailijaa keskenään
+    """
+    try:
+        result1 = await analyze_competitor(AnalyzeRequest(url=url1))
+        result2 = await analyze_competitor(AnalyzeRequest(url=url2))
+        r1 = result1.dict()
+        r2 = result2.dict()
+
+        comparison = {
+            "competitor1": {"url": url1, "score": r1['score'], "title": r1['title']},
+            "competitor2": {"url": url2, "score": r2['score'], "title": r2['title']},
+            "winner": url1 if r1['score'] > r2['score'] else url2,
+            "score_difference": abs(r1['score'] - r2['score']),
+            "detailed_comparison": {
+                "seo": {"competitor1": r1['smart']['scores']['seo'], "competitor2": r2['smart']['scores']['seo'],
+                        "winner": 1 if r1['smart']['scores']['seo'] > r2['smart']['scores']['seo'] else 2},
+                "content": {"competitor1": r1['smart']['scores']['content'], "competitor2": r2['smart']['scores']['content'],
+                            "winner": 1 if r1['smart']['scores']['content'] > r2['smart']['scores']['content'] else 2},
+                "cro": {"competitor1": r1['smart']['scores']['cro'], "competitor2": r2['smart']['scores']['cro'],
+                        "winner": 1 if r1['smart']['scores']['cro'] > r2['smart']['scores']['cro'] else 2},
+                "tech": {"competitor1": r1['smart']['scores']['tech'], "competitor2": r2['smart']['scores']['tech'],
+                         "winner": 1 if r1['smart']['scores']['tech'] > r2['smart']['scores']['tech'] else 2}
+            },
+            "tech_comparison": {
+                "competitor1": {"cms": r1['smart']['tech_cro'].get('cms'),
+                                "framework": r1['smart']['tech_cro'].get('framework'),
+                                "analytics": r1['smart']['tech_cro'].get('analytics_pixels', [])},
+                "competitor2": {"cms": r2['smart']['tech_cro'].get('cms'),
+                                "framework": r2['smart']['tech_cro'].get('framework'),
+                                "analytics": r2['smart']['tech_cro'].get('analytics_pixels', [])}
+            },
+            "recommendations": {
+                "for_weaker": _generate_improvement_tips(
+                    r1 if r1['score'] < r2['score'] else r2,
+                    r2 if r1['score'] < r2['score'] else r1
+                )
+            }
+        }
+        return comparison
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Vertailu epäonnistui: {str(e)}")
+
+def _generate_improvement_tips(weaker, stronger):
+    """Generoi parannusehdotuksia heikommalle"""
+    tips = []
+    for category in ['seo', 'content', 'cro', 'tech']:
+        if weaker['smart']['scores'][category] < stronger['smart']['scores'][category]:
+            if category == 'seo':
+                tips.append(f"Paranna SEO:ta - kilpailijalla {stronger['smart']['scores'][category]} pistettä vs sinun {weaker['smart']['scores'][category]}")
+            elif category == 'content':
+                tips.append(f"Lisää sisältöä - kilpailijalla parempi sisältöpisteet")
+            elif category == 'cro':
+                tips.append(f"Paranna konversiota - lisää CTA-elementtejä")
+            elif category == 'tech':
+                tips.append(f"Päivitä analytiikka - kilpailijalla parempi seuranta")
+    if stronger['smart']['tech_cro'].get('analytics_pixels') and not weaker['smart']['tech_cro'].get('analytics_pixels'):
+        tips.append("Asenna analytiikkapikselit (GA4, Meta Pixel)")
+    return tips[:5]
+
+@app.get("/api/v1/docs")
+def api_documentation():
+    """
+    API-dokumentaatio
+    """
+    return {
+        "version": APP_VERSION,
+        "endpoints": {
+            "/api/v1/analyze": {"method": "POST", "description": "Analysoi yksittäinen kilpailijan sivusto", "body": {"url": "string"}, "response": "SmartAnalyzeResponse"},
+            "/api/v1/ai-analyze": {"method": "POST", "description": "Analysoi AI-rikastuksella (vaatii OPENAI_API_KEY)", "body": {"company_name": "string","url": "string","industry": "string (optional)","use_ai": "boolean (default: true)"}},
+            "/api/v1/batch-analyze": {"method": "POST", "description": "Analysoi max 10 URL:ia kerralla", "body": ["url1", "url2", "..."], "response": "Batch analysis with summary"},
+            "/api/v1/compare/{url1}/{url2}": {"method": "GET", "description": "Vertaa kahta kilpailijaa", "params": "url1 ja url2 pathissa", "response": "Comparison report"},
+            "/api/v1/generate-pdf": {"method": "POST", "description": "Luo PDF-raportti analyysista", "body": "analysis_data object", "response": "PDF file stream"},
+            "/api/v1/generate-pdf-base64": {"method": "POST", "description": "Luo PDF base64-muodossa", "body": "analysis_data + language", "response": {"pdf_base64": "string", "filename": "string"}},
+            "/api/v1/test-openai": {"method": "GET", "description": "Testaa OpenAI-yhteys", "response": "Connection status"},
+            "/health": {"method": "GET", "description": "Tarkista API:n tila", "response": "Health status"}
+        },
+        "features": {
+            "smart_analysis": "Automaattinen SEO, CRO ja teknologia-analyysi",
+            "ai_enrichment": "GPT-4 pohjainen SWOT ja suositukset",
+            "caching": "24h välimuisti analyyseille",
+            "js_rendering": "JavaScript-sivujen tuki (jos SMART_JS_RENDER=1)",
+            "pdf_generation": "Automaattinen PDF-raportointi",
+            "batch_processing": "Usean kilpailijan analyysi kerralla",
+            "comparison": "Kilpailijavertailu"
+        },
+        "environment_variables": {
+            "OPENAI_API_KEY": "OpenAI API avain (valinnainen)",
+            "SMART_JS_RENDER": "JavaScript rendering on/off (default: 1)"
+        },
+        "rate_limits": {
+            "analyze": "100 requests/hour per IP",
+            "batch": "10 requests/hour per IP",
+            "ai_analyze": "50 requests/hour per IP"
+        }
+    }
+
+# ---------- Rate limiting ----------
+request_counts: Dict[str, List[datetime]] = defaultdict(list)
+
+def check_rate_limit(ip: str, limit: int = 100) -> bool:
+    now = datetime.now()
+    hour_ago = now - timedelta(hours=1)
+    request_counts[ip] = [t for t in request_counts[ip] if t > hour_ago]
+    if len(request_counts[ip]) >= limit:
+        return False
+    request_counts[ip].append(now)
+    return True
 
 @app.middleware("http")
-async def rate_limit_middleware(request: Request, call_next):
-    """Rate limiting middleware."""
-    client_ip = request.client.host
-    
-    # Skip rate limiting for health checks
-    if request.url.path in ["/", "/health"]:
-        return await call_next(request)
-    
-    if not check_rate_limit(client_ip):
-        return JSONResponse(
-            status_code=429,
-            content={
-                "error": "Rate limit exceeded",
-                "message": f"Maximum {RATE_LIMIT_REQUESTS} requests per {RATE_LIMIT_WINDOW} seconds"
-            }
-        )
-    
-    response = await call_next(request)
-    return response
+async def rate_limit_middleware(request, call_next):
+    ip = request.headers.get("X-Forwarded-For", request.client.host) if request.client else "unknown"
+    if request.url.path.startswith("/api/v1/"):
+        limits = {
+            "/api/v1/batch-analyze": 10,
+            "/api/v1/ai-analyze": 50,
+            "/api/v1/analyze": 100
+        }
+        limit = next((v for k, v in limits.items() if request.url.path.startswith(k)), 100)
+        if not check_rate_limit(ip, limit):
+            return JSONResponse(status_code=429, content={"detail": f"Rate limit exceeded. Max {limit} requests/hour"})
+    return await call_next(request)
 
+# ---------- Global error handler ----------
 @app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    """Global exception handler."""
-    logger.error(f"Unhandled exception: {exc}", exc_info=True)
-    
+async def global_exception_handler(request, exc):
+    import traceback
+    error_id = hashlib.md5(f"{datetime.now()}{str(exc)}".encode()).hexdigest()[:8]
+    print(f"ERROR {error_id}: {traceback.format_exc()}")
     return JSONResponse(
         status_code=500,
         content={
-            "error": "Internal server error",
-            "message": str(exc),
-            "path": request.url.path,
-            "timestamp": datetime.now().isoformat()
+            "success": False,
+            "error": "Sisäinen virhe",
+            "error_id": error_id,
+            "message": "Jotain meni pieleen. Ota yhteyttä tukeen virhekoodilla."
         }
     )
 
-# ================== STARTUP & SHUTDOWN ================== #
-
-@app.on_event("startup")
-async def startup_event():
-    """Startup event handler."""
-    logger.info(f"Starting Brandista Competitive Intelligence API v{APP_VERSION}")
-    logger.info(f"AI features: {'Enabled' if OPENAI_API_KEY else 'Limited (no OpenAI key)'}")
-    logger.info(f"Smart JS rendering: {SMART_JS_RENDER}")
-    logger.info(f"Cache TTL: {CACHE_TTL} seconds")
-    logger.info(f"Rate limit: {RATE_LIMIT_REQUESTS} requests per {RATE_LIMIT_WINDOW} seconds")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Shutdown event handler."""
-    logger.info("Shutting down Brandista Competitive Intelligence API")
-    logger.info(f"Cache size at shutdown: {len(cache)} entries")
-
-# ================== UTILITY ENDPOINTS ================== #
-
-@app.get("/api/v1/cache-status")
-def cache_status():
-    """Get cache status information."""
-    return {
-        "cache_size": len(cache),
-        "max_cache_size": MAX_CACHE_SIZE,
-        "cache_ttl": CACHE_TTL,
-        "entries": list(cache.keys())[:10]  # Show first 10 keys
-    }
-
-@app.post("/api/v1/clear-cache")
-def clear_cache():
-    """Clear the cache."""
-    global cache
-    old_size = len(cache)
-    cache = {}
-    
-    return {
-        "message": "Cache cleared",
-        "entries_removed": old_size,
-        "timestamp": datetime.now().isoformat()
-    }
-
-@app.get("/api/v1/supported-features")
-def supported_features():
-    """Get list of supported features."""
-    return {
-        "core_features": [
-            "URL analysis",
-            "Technology detection",
-            "Social signals extraction",
-            "Content analysis",
-            "SEO analysis"
-        ],
-        "ai_features": [
-            "Sentiment analysis",
-            "Industry detection",
-            "Content quality scoring",
-            "Competitive positioning",
-            "Keyword extraction",
-            "SWOT analysis",
-            "Strategic recommendations"
-        ],
-        "advanced_features": [
-            "JavaScript rendering",
-            "Batch analysis",
-            "Comparative analysis",
-            "PDF report generation",
-            "OpenAI insights" if OPENAI_API_KEY else "OpenAI insights (disabled - no API key)"
-        ],
-        "languages_supported": ["en", "fi"],
-        "max_batch_size": 10,
-        "max_competitors": 5,
-        "cache_enabled": True,
-        "rate_limiting": {
-            "enabled": True,
-            "limit": RATE_LIMIT_REQUESTS,
-            "window": RATE_LIMIT_WINDOW
-        }
-    }
-
-@app.get("/api/v1/analyze-quick/{url:path}")
-async def quick_analyze(url: str):
-    """Quick analysis endpoint for simple GET requests."""
+# ========== PDF GENERATION (stream) ==========
+@app.post("/api/v1/generate-pdf")
+async def generate_pdf_report(analysis_data: Dict[str, Any]):
+    """
+    Generoi PDF-raportti AI-analyysista (stream)
+    """
     try:
-        # Basic analysis without JS rendering for speed
-        result = await analyze_competitor_enhanced(
-            url=url,
-            render_js=False,
-            use_ai=True
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(
+            buffer, pagesize=A4,
+            rightMargin=2*cm, leftMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm
         )
-        
-        # Return simplified result
-        return {
-            "url": url,
-            "title": result.get("head_signals", {}).get("title"),
-            "description": result.get("head_signals", {}).get("description"),
-            "quality_score": result.get("ai_analysis", {}).get("content_quality", {}).get("quality_score"),
-            "technologies": result.get("technologies", {}).get("technologies", []),
-            "word_count": result.get("content", {}).get("word_count"),
-            "timestamp": result.get("timestamp")
-        }
-        
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle('CustomTitle', parent=styles['Heading1'], fontSize=24,
+                                     textColor=colors.HexColor('#1a1a1a'), spaceAfter=30,
+                                     alignment=TA_CENTER, fontName='Helvetica-Bold')
+        heading_style = ParagraphStyle('CustomHeading', parent=styles['Heading2'], fontSize=16,
+                                       textColor=colors.HexColor('#2563eb'), spaceAfter=12,
+                                       spaceBefore=20, fontName='Helvetica-Bold')
+        subheading_style = ParagraphStyle('CustomSubHeading', parent=styles['Heading3'], fontSize=13,
+                                          textColor=colors.HexColor('#475569'), spaceAfter=8,
+                                          spaceBefore=12, fontName='Helvetica-Bold')
+        normal_style = ParagraphStyle('CustomNormal', parent=styles['Normal'], fontSize=11,
+                                      textColor=colors.HexColor('#334155'), alignment=TA_JUSTIFY, spaceAfter=8)
+
+        story = []
+        company_name = analysis_data.get('company_name', 'Kilpailija')
+        story.append(Paragraph(f"Kilpailija-analyysi: {company_name}", title_style))
+        story.append(HRFlowable(width="100%", thickness=2, color=colors.HexColor('#e2e8f0')))
+        story.append(Spacer(1, 20))
+
+        story.append(Paragraph("Perustiedot", heading_style))
+        basic_info = analysis_data.get('basic_analysis', {})
+        basic_data = [
+            ['Yritys:', company_name],
+            ['Verkkosivusto:', basic_info.get('website', 'Ei tiedossa')],
+            ['Toimiala:', basic_info.get('industry', 'Ei määritelty')],
+            ['Analyysipäivä:', analysis_data.get('analysis_date', datetime.now().strftime('%Y-%m-%d'))]
+        ]
+        basic_table = Table(basic_data, colWidths=[5*cm, 12*cm])
+        basic_table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 11),
+            ('TEXTCOLOR', (0, 0), (0, -1), colors.HexColor('#475569')),
+            ('TEXTCOLOR', (1, 0), (1, -1), colors.HexColor('#334155')),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ]))
+        story.append(basic_table)
+        story.append(Spacer(1, 20))
+
+        ai_analysis = analysis_data.get('ai_analysis', {})
+        if ai_analysis:
+            if ai_analysis.get('yhteenveto'):
+                story.append(Paragraph("Yhteenveto", heading_style))
+                story.append(Paragraph(ai_analysis['yhteenveto'], normal_style))
+                story.append(Spacer(1, 20))
+
+            story.append(Paragraph("SWOT-analyysi", heading_style))
+            if ai_analysis.get('vahvuudet'):
+                story.append(Paragraph("Vahvuudet", subheading_style))
+                for v in ai_analysis['vahvuudet']:
+                    story.append(Paragraph(f"• {v}", normal_style))
+                story.append(Spacer(1, 10))
+            if ai_analysis.get('heikkoudet'):
+                story.append(Paragraph("Heikkoudet", subheading_style))
+                for w in ai_analysis['heikkoudet']:
+                    story.append(Paragraph(f"• {w}", normal_style))
+                story.append(Spacer(1, 10))
+            if ai_analysis.get('mahdollisuudet'):
+                story.append(Paragraph("Mahdollisuudet", subheading_style))
+                for o in ai_analysis['mahdollisuudet']:
+                    story.append(Paragraph(f"• {o}", normal_style))
+                story.append(Spacer(1, 10))
+            if ai_analysis.get('uhat'):
+                story.append(Paragraph("Uhat", subheading_style))
+                for t in ai_analysis['uhat']:
+                    story.append(Paragraph(f"• {t}", normal_style))
+                story.append(Spacer(1, 20))
+
+            if ai_analysis.get('digitaalinen_jalanjalki'):
+                story.append(Paragraph("Digitaalinen jalanjälki", heading_style))
+                digi = ai_analysis['digitaalinen_jalanjalki']
+                if digi.get('arvio'):
+                    story.append(Paragraph(f"<b>Arvio:</b> {digi['arvio']}/10", normal_style))
+                if digi.get('sosiaalinen_media'):
+                    story.append(Paragraph("<b>Aktiiviset kanavat:</b>", normal_style))
+                    for ch in digi['sosiaalinen_media']:
+                        story.append(Paragraph(f"• {ch}", normal_style))
+                if digi.get('sisaltostrategia'):
+                    story.append(Paragraph(f"<b>Sisältöstrategia:</b> {digi['sisaltostrategia']}", normal_style))
+                story.append(Spacer(1, 20))
+
+            # Toimenpiteet
+            if ai_analysis.get('toimenpidesuositukset'):
+                story.append(PageBreak())
+                story.append(Paragraph("Toimenpidesuositukset", heading_style))
+                for idx, rec in enumerate(ai_analysis['toimenpidesuositukset'], 1):
+                    title = rec.get('otsikko', f'Toimenpide {idx}') if isinstance(rec, dict) else f'Toimenpide {idx}'
+                    story.append(Paragraph(f"{idx}. {title}", subheading_style))
+                    if isinstance(rec, dict):
+                        if rec.get('kuvaus'):
+                            story.append(Paragraph(rec['kuvaus'], normal_style))
+                        details = []
+                        if rec.get('prioriteetti'):
+                            p = rec['prioriteetti']
+                            color = '#dc2626' if p == 'korkea' else '#f59e0b' if p == 'keskitaso' else '#10b981'
+                            details.append(f"<font color='{color}'><b>Prioriteetti:</b> {p}</font>")
+                        if rec.get('aikataulu'):
+                            details.append(f"<b>Aikataulu:</b> {rec['aikataulu']}")
+                        if details:
+                            story.append(Paragraph(" | ".join(details), normal_style))
+                    story.append(Spacer(1, 15))
+
+            # Erottautumiskeinot (korjattu sisennys, ei 't' viittausta)
+            methods = ai_analysis.get('erottautumiskeinot', [])
+            if methods:
+                story.append(Paragraph("Erottautumiskeinot", heading_style))
+                if isinstance(methods, str):
+                    items = [m.strip() for m in methods.split(',')] if ',' in methods else [methods]
+                else:
+                    items = methods
+                for m in items:
+                    story.append(Paragraph(f"• {m}", normal_style))
+                story.append(Spacer(1, 20))
+
+            if ai_analysis.get('quick_wins'):
+                story.append(Paragraph("Nopeat voitot", heading_style))
+                for win in ai_analysis.get('quick_wins', []):
+                    story.append(Paragraph(f"✓ {win}", normal_style))
+
+        doc.build(story)
+        buffer.seek(0)
+        return StreamingResponse(
+            buffer,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=kilpailija_analyysi_{(company_name or 'raportti').replace(' ','_')}.pdf"}
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"PDF-generointi epäonnistui: {str(e)}")
 
-# ================== MAIN ENTRY POINT ================== #
-
-if __name__ == "__main__":
-    import uvicorn
-    
-    # Development server configuration
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info"
-    )
-        
-        return JSONResponse(content=report)
-        
-    except Exception as e:
-        logger.error(f"Deep analysis error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/v1/batch-analyze-enhanced")
-async def batch_analyze_enhanced_endpoint(request: BatchAnalyzeRequest):
-    """Analyze multiple URLs with AI enhancement."""
+# ========== PDF GENERATION (base64) ==========
+@app.post("/api/v1/generate-pdf-base64")
+async def generate_pdf_base64(analysis_data: Dict[str, Any]):
+    """
+    Generoi PDF-raportti base64-muodossa (fi/en).
+    """
     try:
-        analyses = []
-        
-        for url in request.urls[:10]:  # Limit to 10 URLs
-            try:
-                analysis = await analyze_competitor_enhanced(
-                    url=url,
-                    render_js=False,
-                    use_ai=request.use_ai
-                )
-                analyses.append(analysis)
-            except Exception as e:
-                logger.error(f"Error analyzing {url}: {e}")
-                analyses.append({
-                    "url": url,
-                    "error": str(e),
-                    "timestamp": datetime.now().isoformat()
-                })
-        
-        # Generate batch insights
-        batch_insights = generate_batch_recommendations(analyses)
-        
-        # Compare if requested
-        comparisons = {}
-        if request.include_comparisons and len(analyses) > 1:
-            ai_analyzer = EnhancedAIAnalyzer()
-            for i, analysis in enumerate(analyses):
-                if "error" not in analysis:
-                    other_analyses = [a for j, a in enumerate(analyses) if j != i and "error" not in a]
-                    comparisons[analysis["url"]] = ai_analyzer.analyze_competitive_positioning(
-                        analysis,
-                        other_analyses
-                    )
-        
-        result = {
-            "analyses": analyses,
-            "batch_insights": batch_insights,
-            "comparisons": comparisons,
-            "summary": {
-                "total_analyzed": len(analyses),
-                "successful": sum(1 for a in analyses if "error" not in a),
-                "failed": sum(1 for a in analyses if "error" in a),
-                "average_quality": sum(a.get("ai_analysis", {}).get("content_quality", {}).get("quality_score", 0) for a in analyses if "error" not in a) / max(1, sum(1 for a in analyses if "error" not in a))
-            },
-            "timestamp": datetime.now().isoformat()
+        language = analysis_data.get('language', 'fi')
+        translations = {
+            'fi': {'title':'Kilpailija-analyysi','basic_info':'Perustiedot','company':'Yritys','website':'Verkkosivusto','industry':'Toimiala','analysis_date':'Analyysipäivä','not_known':'Ei tiedossa','not_defined':'Ei määritelty','summary':'Yhteenveto','swot_analysis':'SWOT-analyysi','strengths':'Vahvuudet','weaknesses':'Heikkoudet','opportunities':'Mahdollisuudet','threats':'Uhat','digital_footprint':'Digitaalinen jalanjälki','score':'Arvio','active_channels':'Aktiiviset kanavat','content_strategy':'Sisältöstrategia','recommendations':'Toimenpidesuositukset','action':'Toimenpide','priority':'Prioriteetti','timeline':'Aikataulu','differentiation':'Erottautumiskeinot','quick_wins':'Nopeat voitot','high':'korkea','medium':'keskitaso','low':'matala'},
+            'en': {'title':'Competitor Analysis','basic_info':'Basic Information','company':'Company','website':'Website','industry':'Industry','analysis_date':'Analysis Date','not_known':'Not known','not_defined':'Not defined','summary':'Summary','swot_analysis':'SWOT Analysis','strengths':'Strengths','weaknesses':'Weaknesses','opportunities':'Opportunities','threats':'Threats','digital_footprint':'Digital Footprint','score':'Score','active_channels':'Active Channels','content_strategy':'Content Strategy','recommendations':'Recommendations','action':'Action','priority':'Priority','timeline':'Timeline','differentiation':'Differentiation','quick_wins':'Quick Wins','high':'high','medium':'medium','low':'low'}
         }
-        
-        return JSONResponse(content=result)
-        
-    except Exception as e:
-        logger.error(f"Batch analysis error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        t = translations.get(language, translations['fi'])
 
-@app.get("/api/v1/compare-enhanced/{url1}/{url2}")
-async def compare_enhanced_endpoint(url1: str, url2: str):
-    """Enhanced comparison between two URLs."""
-    try:
-        # Analyze both URLs
-        analysis1 = await analyze_competitor_enhanced(url1, use_ai=True)
-        analysis2 = await analyze_competitor_enhanced(url2, use_ai=True)
-        
-        # Perform comparison
-        ai_analyzer = EnhancedAIAnalyzer()
-        
-        comparison = {
-            "url1": {
-                "url": url1,
-                "analysis": analysis1,
-                "positioning": ai_analyzer.analyze_competitive_positioning(analysis1, [analysis2])
-            },
-            "url2": {
-                "url": url2,
-                "analysis": analysis2,
-                "positioning": ai_analyzer.analyze_competitive_positioning(analysis2, [analysis1])
-            },
-            "comparison_summary": {
-                "quality_difference": analysis1.get("ai_analysis", {}).get("content_quality", {}).get("quality_score", 0) - 
-                                    analysis2.get("ai_analysis", {}).get("content_quality", {}).get("quality_score", 0),
-                "tech_overlap": list(set(analysis1.get("technologies", {}).get("technologies", [])) & 
-                                   set(analysis2.get("technologies", {}).get("technologies", []))),
-                "unique_tech_url1": list(set(analysis1.get("technologies", {}).get("technologies", [])) - 
-                                       set(analysis2.get("technologies", {}).get("technologies", []))),
-                "unique_tech_url2": list(set(analysis2.get("technologies", {}).get("technologies", [])) - 
-                                       set(analysis1.get("technologies", {}).get("technologies", [])))
-            },
-            "winner": url1 if analysis1.get("ai_analysis", {}).get("content_quality", {}).get("quality_score", 0) > 
-                             analysis2.get("ai_analysis", {}).get("content_quality", {}).get("quality_score", 0) else url2,
-            "timestamp": datetime.now().isoformat()
-        }
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=2*cm, leftMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm)
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle('CustomTitle', parent=styles['Heading1'], fontSize=24, textColor=colors.HexColor('#1a1a1a'), spaceAfter=30, alignment=TA_CENTER, fontName='Helvetica-Bold')
+        heading_style = ParagraphStyle('CustomHeading', parent=styles['Heading2'], fontSize=16, textColor=colors.HexColor('#2563eb'), spaceAfter=12, spaceBefore=20, fontName='Helvetica-Bold')
+        subheading_style = ParagraphStyle('CustomSubHeading', parent=styles['Heading3'], fontSize=13, textColor=colors.HexColor('#475569'), spaceAfter=8, spaceBefore=12, fontName='Helvetica-Bold')
+        normal_style = ParagraphStyle('CustomNormal', parent=styles['Normal'], fontSize=11, textColor=colors.HexColor('#334155'), alignment=TA_JUSTIFY, spaceAfter=8)
+
+        story = []
+        company_name = analysis_data.get('company_name', 'Unknown')
+        story.append(Paragraph(f"{t['title']}: {company_name}", title_style))
+        story.append(HRFlowable(width="100%", thickness=2, color=colors.HexColor('#e2e8f0')))
+        story.append(Spacer(1, 20))
+
+        story.append(Paragraph(t['basic_info'], heading_style))
+        basic_info = analysis_data.get('basic_analysis', {})
+        basic_data = [
+            [f"{t['company']}:", company_name],
+            [f"{t['website']}:", analysis_data.get('url', basic_info.get('website', t['not_known']))],
+            [f"{t['industry']}:", basic_info.get('industry', t['not_defined'])],
+            [f"{t['analysis_date']}:", analysis_data.get('analysis_date', datetime.now().strftime('%Y-%m-%d'))]
+        ]
+        basic_table = Table(basic_data, colWidths=[5*cm, 12*cm])
+        basic_table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 11),
+            ('TEXTCOLOR', (0, 0), (0, -1), colors.HexColor('#475569')),
+            ('TEXTCOLOR', (1, 0), (1, -1), colors.HexColor('#334155')),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ]))
+        story.append(basic_table)
+        story.append(Spacer(1, 20))
+
+        ai_analysis = analysis_data.get('ai_analysis', {})
+        if ai_analysis:
+            if ai_analysis.get('yhteenveto') or ai_analysis.get('summary'):
+                story.append(Paragraph(t['summary'], heading_style))
+                story.append(Paragraph(ai_analysis.get('yhteenveto', ai_analysis.get('summary','')), normal_style))
+                story.append(Spacer(1, 20))
+
+            story.append(Paragraph(t['swot_analysis'], heading_style))
+            for key, label in [('vahvuudet', t['strengths']), ('heikkoudet', t['weaknesses']), ('mahdollisuudet', t['opportunities']), ('uhat', t['threats'])]:
+                items = ai_analysis.get(key, ai_analysis.get({'vahvuudet':'strengths','heikkoudet':'weaknesses','mahdollisuudet':'opportunities','uhat':'threats'}[key], []))
+                if items:
+                    story.append(Paragraph(label, subheading_style))
+                    for it in items:
+                        story.append(Paragraph(f"• {it}", normal_style))
+                    story.append(Spacer(1, 10))
+
+            digi = ai_analysis.get('digitaalinen_jalanjalki', ai_analysis.get('digital_footprint', {}))
+            if digi:
+                story.append(Paragraph(t['digital_footprint'], heading_style))
+                if digi.get('arvio') or digi.get('score'):
+                    score = digi.get('arvio', digi.get('score', 0))
+                    story.append(Paragraph(f"<b>{t['score']}:</b> {score}/10", normal_style))
+                if digi.get('sosiaalinen_media') or digi.get('social_media'):
+                    story.append(Paragraph(f"<b>{t['active_channels']}:</b>", normal_style))
+                    for ch in digi.get('sosiaalinen_media', digi.get('social_media', [])):
+                        story.append(Paragraph(f"• {ch}", normal_style))
+                if digi.get('sisaltostrategia') or digi.get('content_strategy'):
+                    story.append(Paragraph(f"<b>{t['content_strategy']}:</b> {digi.get('sisaltostrategia', digi.get('content_strategy',''))}", normal_style))
+                story.append(Spacer(1, 20))
+
+            recs = ai_analysis.get('toimenpidesuositukset', ai_analysis.get('recommendations', []))
+            if recs:
+                story.append(PageBreak())
+                story.append(Paragraph(t['recommendations'], heading_style))
+                for idx, rec in enumerate(recs, 1):
+                    if isinstance(rec, dict):
+                        title = rec.get('otsikko', rec.get('title', f"{t['action']} {idx}"))
+                        story.append(Paragraph(f"{idx}. {title}", subheading_style))
+                        if rec.get('kuvaus') or rec.get('description'):
+                            story.append(Paragraph(rec.get('kuvaus', rec.get('description','')), normal_style))
+                        details = []
+                        p = rec.get('prioriteetti', rec.get('priority'))
+                        if p:
+                            color = '#dc2626' if p in ['korkea','high'] else '#f59e0b' if p in ['keskitaso','medium'] else '#10b981'
+                            ptext = {'high':t['high'], 'medium':t['medium'], 'low':t['low']}.get(p, p)
+                            details.append(f"<font color='{color}'><b>{t['priority']}:</b> {ptext}</font>")
+                        tl = rec.get('aikataulu', rec.get('timeline'))
+                        if tl:
+                            details.append(f"<b>{t['timeline']}:</b> {tl}")
+                        if details:
+                            story.append(Paragraph(" | ".join(details), normal_style))
+                    else:
+                        story.append(Paragraph(f"{idx}. {rec}", normal_style))
+                    story.append(Spacer(1, 15))
+
+        methods = ai_analysis.get('erottautumiskeinot', ai_analysis.get('differentiation', []))
+        if methods:
+            story.append(Paragraph(t['differentiation'], heading_style))  # Korjattu sisennys
+            for m in (methods if isinstance(methods, list) else [methods]):
+                story.append(Paragraph(f"• {m}", normal_style))
+            story.append(Spacer(1, 20))
+
+        if ai_analysis.get('quick_wins'):  # Korjattu sisennys
+            story.append(Paragraph(t['quick_wins'], heading_style))
+            for win in ai_analysis.get('quick_wins', []):
+                story.append(Paragraph(f"✓ {win}", normal_style))
+
+        doc.build(story)
+        buffer.seek(0)
+        pdf_base64 = base64.b64encode(buffer.read()).decode('utf-8')
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        lang_suffix = 'en' if language == 'en' else 'fi'
+        safe_company_name = company_name.replace(' ', '_').replace('/', '_').replace('\\', '_')
+        filename = f"competitor_analysis_{safe_company_name}_{timestamp}_{lang_suffix}.pdf"
+        return {"success": True, "pdf_base64": pdf_base64, "filename": filename}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
