@@ -541,10 +541,24 @@ app.add_middleware(
 
 @app.post("/api/v1/analyze")
 async def analyze_website(req: AnalyzeRequest, background_tasks: BackgroundTasks):
-    """Analyze a single website"""
+    """Analyze a website or social media profile"""
+    
+    # Detect platform from URL if not specified
+    platform = req.platform
+    if not platform:
+        if "instagram.com" in req.url:
+            platform = "instagram"
+        elif "tiktok.com" in req.url:
+            platform = "tiktok"
+        elif "linkedin.com" in req.url:
+            platform = "linkedin"
+        elif "facebook.com" in req.url:
+            platform = "facebook"
+        else:
+            platform = "website"
     
     # Generate cache key
-    cache_key = hashlib.md5(f"{req.url}:{req.language}".encode()).hexdigest()
+    cache_key = hashlib.md5(f"{req.url}:{req.language}:{platform}".encode()).hexdigest()
     
     # Check cache
     cached = cache.get(cache_key)
@@ -553,35 +567,56 @@ async def analyze_website(req: AnalyzeRequest, background_tasks: BackgroundTasks
         return cached
         
     try:
-        # Fetch website
-        page_data = await engine.fetch_page(req.url)
-        
-        # Analyze content
-        analysis = engine.analyze_content(page_data["html"], req.url)
-        
-        # Calculate scores
-        scores = engine.calculate_scores(analysis)
-        
-        # Generate SWOT
-        swot = engine.generate_swot(analysis, scores)
-        
-        # Enhance with AI if enabled
-        if req.use_ai and openai_analyzer.client:
-            swot = await openai_analyzer.enhance_swot(analysis, swot, req.language)
+        # Route to appropriate analyzer
+        if platform in ["instagram", "tiktok"]:
+            # Social media analysis
+            if platform == "instagram":
+                social_data = await engine.social_analyzer.analyze_instagram(req.url)
+            else:
+                social_data = await engine.social_analyzer.analyze_tiktok(req.url)
             
-        # Generate recommendations
-        recommendations = engine.generate_recommendations(analysis, scores)
-        
-        # Prepare response
-        response = {
-            "success": True,
-            "url": req.url,
-            "analysis_date": datetime.now().isoformat(),
-            "scores": scores,
-            "analysis": analysis,
-            "swot": swot,
-            "recommendations": recommendations
-        }
+            # Generate social SWOT
+            swot = engine.social_analyzer.generate_social_swot(social_data)
+            
+            # Enhance with AI if available
+            if req.use_ai and openai_analyzer.client:
+                swot = await openai_analyzer.enhance_swot(social_data, swot, req.language)
+            
+            response = {
+                "success": True,
+                "url": req.url,
+                "platform": platform,
+                "analysis_date": datetime.now().isoformat(),
+                "scores": {
+                    "social_presence": 50,  # Default score
+                    "total": 50
+                },
+                "analysis": social_data,
+                "swot": swot,
+                "recommendations": social_data.get("recommendations", [])
+            }
+        else:
+            # Regular website analysis
+            page_data = await engine.fetch_page(req.url)
+            analysis = engine.analyze_content(page_data["html"], req.url)
+            scores = engine.calculate_scores(analysis)
+            swot = engine.generate_swot(analysis, scores)
+            
+            if req.use_ai and openai_analyzer.client:
+                swot = await openai_analyzer.enhance_swot(analysis, swot, req.language)
+                
+            recommendations = engine.generate_recommendations(analysis, scores)
+            
+            response = {
+                "success": True,
+                "url": req.url,
+                "platform": "website",
+                "analysis_date": datetime.now().isoformat(),
+                "scores": scores,
+                "analysis": analysis,
+                "swot": swot,
+                "recommendations": recommendations
+            }
         
         # Cache in background
         background_tasks.add_task(cache.set, cache_key, response)
