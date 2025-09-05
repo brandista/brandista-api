@@ -581,7 +581,7 @@ def generate_rule_based_insights(overall_score: int, basic_metrics: Dict[str, An
 def generate_finnish_insights(overall_score: int, basic_metrics: Dict[str, Any],
                             technical: TechnicalAudit, content: ContentAnalysis,
                             ux: UXAnalysis, social: SocialMediaAnalysis) -> Dict[str, Any]:
-    """Generate Finnish language insights"""
+    """Generate Finnish language insights with comprehensive summary"""
     
     vahvuudet = []
     heikkoudet = []
@@ -653,13 +653,56 @@ def generate_finnish_insights(overall_score: int, basic_metrics: Dict[str, Any],
     if social.social_score < 15:
         uhat.append("Kilpailijat voivat kaapata asiakkaita paremmalla sosiaalisen median läsnäololla")
     
-    # Generate summary
+    # COMPREHENSIVE SUMMARY GENERATION
+    summary_parts = []
+    
+    # Digital maturity assessment
     if overall_score >= 75:
-        summary = f"Yrityksen digitaalinen kypsyys on hyvällä tasolla ({overall_score}/100). Vahva perusta jatkeelle."
+        summary_parts.append(f"Yrityksen digitaalinen kypsyys on vahvalla tasolla ({overall_score}/100), mikä asettaa sen kilpailijoiden kärkijoukkoon.")
     elif overall_score >= 50:
-        summary = f"Yrityksen digitaalinen kypsyys on keskitasoa ({overall_score}/100). Potentiaalia parannuksiin."
+        summary_parts.append(f"Yrityksen digitaalinen kypsyys on keskitasoa ({overall_score}/100) ja tarjoaa hyvän pohjan jatkokehitykselle.")
     else:
-        summary = f"Yrityksen digitaalinen kypsyys on alle keskitason ({overall_score}/100). Tarvitsee kehitystä."
+        summary_parts.append(f"Yrityksen digitaalinen kypsyys ({overall_score}/100) jää alan keskiarvon alapuolelle ja kaipaa merkittävää parantamista.")
+    
+    # Technical analysis
+    if technical.has_ssl and technical.has_mobile_optimization:
+        summary_parts.append("Tekninen toteutus on modernilla tasolla HTTPS-suojauksella ja mobiilioptiminnilla.")
+    elif technical.has_ssl:
+        summary_parts.append("HTTPS-suojaus on kunnossa, mutta mobiilioptimointia tulisi parantaa.")
+    else:
+        summary_parts.append("Tekniset perusasiat kaipaavat huomiota, erityisesti turvallisuus ja mobiilioptiminti.")
+    
+    # Content assessment
+    if content.word_count > 1000:
+        summary_parts.append(f"Sivustolla on runsaasti sisältöä ({content.word_count} sanaa), mikä tukee hakukonesijoitusta ja asiantuntijuuden viestintää.")
+    elif content.word_count > 500:
+        summary_parts.append(f"Sisältömäärä ({content.word_count} sanaa) on kohtuullinen, mutta lisäsisällöstä olisi hyötyä.")
+    else:
+        summary_parts.append(f"Sisältömäärä ({content.word_count} sanaa) on vähäinen ja rajoittaa hakukonenäkyvyyttä merkittävästi.")
+    
+    # Social media presence
+    if social.social_score > 30:
+        summary_parts.append(f"Sosiaalisen median läsnäolo on aktiivista {len(social.platforms)} alustalla.")
+    elif social.social_score > 0:
+        summary_parts.append("Sosiaalisen median hyödyntäminen on alustavaa ja kaipaa tehostamista.")
+    else:
+        summary_parts.append("Sosiaalisen median potentiaali on täysin hyödyntämättä.")
+    
+    # UX evaluation
+    if ux.overall_ux_score > 60:
+        summary_parts.append("Käyttökokemus on kilpailukykyisellä tasolla.")
+    else:
+        summary_parts.append("Käyttökokemusta tulisi parantaa navigoinnin ja saavutettavuuden osalta.")
+    
+    # Strategic conclusion
+    if overall_score >= 75:
+        summary_parts.append("Yritys on vahvassa asemassa digitaalisen markkinoinnin saralla ja voi keskittyä innovatiivisiin ratkaisuihin.")
+    elif overall_score >= 50:
+        summary_parts.append("Kohdennettuja parannuksia tekemällä yritys voi nousta selvästi kilpailijoita edelle.")
+    else:
+        summary_parts.append("Systemaattinen digitaalisen läsnäolon kehittäminen on välttämätöntä kilpailukyvyn säilyttämiseksi.")
+    
+    comprehensive_summary = " ".join(summary_parts)
     
     # Quick wins
     if not basic_metrics.get('meta_description'):
@@ -669,8 +712,8 @@ def generate_finnish_insights(overall_score: int, basic_metrics: Dict[str, Any],
         quick_wins.append("Lisää H1-otsikot sivuille")
     
     return {
-        'summary': summary,
-        'strengths': vahvuudet[:4],  # Limit to 4 items
+        'summary': comprehensive_summary,
+        'strengths': vahvuudet[:4],
         'weaknesses': heikkoudet[:4],
         'opportunities': mahdollisuudet[:4], 
         'threats': uhat[:3],
@@ -679,7 +722,7 @@ def generate_finnish_insights(overall_score: int, basic_metrics: Dict[str, Any],
         'sentiment_score': 0.6 if overall_score > 50 else 0.4,
         
         # Finnish versions
-        'johtopäätökset': summary,
+        'johtopäätökset': comprehensive_summary,
         'vahvuudet': vahvuudet[:4],
         'heikkoudet': heikkoudet[:4],
         'mahdollisuudet': mahdollisuudet[:4],
@@ -688,11 +731,12 @@ def generate_finnish_insights(overall_score: int, basic_metrics: Dict[str, Any],
         'strategiset_suositukset': toimenpidesuositukset[:3],
         'quick_wins': quick_wins[:3]
     }
+    
 
 def generate_english_insights(overall_score: int, basic_metrics: Dict[str, Any],
                             technical: TechnicalAudit, content: ContentAnalysis,
                             ux: UXAnalysis, social: SocialMediaAnalysis) -> Dict[str, Any]:
-    """Generate English language insights"""
+    """Generate English language insights with comprehensive summary"""
     
     strengths = []
     weaknesses = []
@@ -714,6 +758,9 @@ def generate_english_insights(overall_score: int, basic_metrics: Dict[str, Any],
     if social.social_score > 30:
         strengths.append("Good social media presence across platforms")
     
+    if ux.overall_ux_score > 60:
+        strengths.append("User experience meets competitive standards")
+    
     # Analyze weaknesses and recommendations
     if not technical.has_analytics:
         weaknesses.append("Missing analytics tools - difficult to measure performance")
@@ -723,16 +770,104 @@ def generate_english_insights(overall_score: int, basic_metrics: Dict[str, Any],
         weaknesses.append("Limited content may hurt search engine optimization")
         recommendations.append("Create more quality content regularly")
     
-    # Generate summary
-    if overall_score >= 75:
-        summary = f"Digital maturity is at a good level ({overall_score}/100). Strong foundation for growth."
-    elif overall_score >= 50:
-        summary = f"Digital maturity is average ({overall_score}/100). Room for improvement."
+    if social.social_score < 20:
+        weaknesses.append("Weak social media presence")
+        opportunities.append("Enhance social media strategy and activity")
+    
+    if ux.accessibility_score < 40:
+        weaknesses.append("Accessibility issues may exclude users")
+        recommendations.append("Improve accessibility with alt texts and clearer navigation")
+    
+    # Opportunities based on score
+    if overall_score < 50:
+        opportunities.extend([
+            "Significant potential to improve digital presence",
+            "Competitive advantage achievable through quick improvements",
+            "SEO optimization can drive more traffic"
+        ])
+    elif overall_score < 75:
+        opportunities.extend([
+            "Strong foundation for enhanced digital marketing",
+            "Content marketing can boost thought leadership",
+            "Better social media utilization possible"
+        ])
     else:
-        summary = f"Digital maturity is below average ({overall_score}/100). Needs development."
+        opportunities.extend([
+            "Strong digital foundation - focus on innovation",
+            "Opportunity to lead industry in digital marketing",
+            "Data utilization for personalized customer experience"
+        ])
+    
+    # Threats
+    if not technical.has_ssl:
+        threats.append("Security gaps may affect trust and SEO ranking")
+    
+    if overall_score < 40:
+        threats.append("Risk of falling behind competitors in digital marketing")
+    
+    if social.social_score < 15:
+        threats.append("Competitors may capture customers with better social media presence")
+    
+    # COMPREHENSIVE SUMMARY GENERATION
+    summary_parts = []
+    
+    # Digital maturity assessment
+    if overall_score >= 75:
+        summary_parts.append(f"The company's digital maturity is at a strong level ({overall_score}/100), positioning it among industry leaders.")
+    elif overall_score >= 50:
+        summary_parts.append(f"The company's digital maturity is average ({overall_score}/100) but provides a solid foundation for growth.")
+    else:
+        summary_parts.append(f"The company's digital maturity ({overall_score}/100) falls below industry standards and requires significant improvement.")
+    
+    # Technical analysis
+    if technical.has_ssl and technical.has_mobile_optimization:
+        summary_parts.append("Technical implementation is modern with HTTPS security and mobile optimization in place.")
+    elif technical.has_ssl:
+        summary_parts.append("HTTPS security is properly implemented, but mobile optimization needs attention.")
+    else:
+        summary_parts.append("Technical fundamentals require attention, particularly security and mobile optimization.")
+    
+    # Content assessment
+    if content.word_count > 1000:
+        summary_parts.append(f"The website features substantial content ({content.word_count} words), supporting SEO and thought leadership positioning.")
+    elif content.word_count > 500:
+        summary_parts.append(f"Content volume ({content.word_count} words) is reasonable but could benefit from expansion.")
+    else:
+        summary_parts.append(f"Content volume ({content.word_count} words) is limited and significantly restricts search visibility.")
+    
+    # Social media presence
+    if social.social_score > 30:
+        summary_parts.append(f"Social media presence is active across {len(social.platforms)} platforms.")
+    elif social.social_score > 0:
+        summary_parts.append("Social media utilization is preliminary and needs enhancement.")
+    else:
+        summary_parts.append("Social media potential is completely untapped.")
+    
+    # UX evaluation
+    if ux.overall_ux_score > 60:
+        summary_parts.append("User experience is competitive.")
+    else:
+        summary_parts.append("User experience should be improved in navigation and accessibility.")
+    
+    # Strategic conclusion
+    if overall_score >= 75:
+        summary_parts.append("The company is well-positioned in digital marketing and can focus on innovative solutions.")
+    elif overall_score >= 50:
+        summary_parts.append("With targeted improvements, the company can clearly surpass competitors.")
+    else:
+        summary_parts.append("Systematic development of digital presence is essential for maintaining competitiveness.")
+    
+    comprehensive_summary = " ".join(summary_parts)
+    
+    # Quick wins
+    if not basic_metrics.get('meta_description'):
+        quick_wins.append("Add meta descriptions to pages")
+    
+    if basic_metrics.get('h1_count', 0) == 0:
+        quick_wins.append("Add H1 headings to pages")
     
     return {
-        'summary': summary,
+        'summary': comprehensive_summary,
         'strengths': strengths[:4],
         'weaknesses': weaknesses[:4], 
         'opportunities': opportunities[:4],
@@ -742,7 +877,7 @@ def generate_english_insights(overall_score: int, basic_metrics: Dict[str, Any],
         'sentiment_score': 0.6 if overall_score > 50 else 0.4,
         
         # Finnish versions for compatibility
-        'johtopäätökset': summary,
+        'johtopäätökset': comprehensive_summary,
         'vahvuudet': strengths[:4],
         'heikkoudet': weaknesses[:4],
         'mahdollisuudet': opportunities[:4],
