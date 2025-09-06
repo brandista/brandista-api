@@ -1506,7 +1506,7 @@ async def basic_analyze(request: CompetitorAnalysisRequest):
             "website": request.url,
             "industry": None,
             "digital_maturity_score": basic_metrics['digital_maturity_score'],
-            ""social_platforms": basic_metrics['social_platforms'],
+            "social_platforms": basic_metrics['social_platforms'],
            "analysis_date": datetime.now().isoformat(),
            "detailed_scores": basic_metrics.get('detailed_scores', {})  # Include for debugging
        }
