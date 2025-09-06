@@ -1507,18 +1507,18 @@ async def basic_analyze(request: CompetitorAnalysisRequest):
             "industry": None,
             "digital_maturity_score": basic_metrics['digital_maturity_score'],
             "social_platforms": basic_metrics['social_platforms'],
-           "analysis_date": datetime.now().isoformat(),
-           "detailed_scores": basic_metrics.get('detailed_scores', {})  # Include for debugging
-       }
-       
-       # Ensure integers
-       result = ensure_integer_scores(result)
-       
-       return result
-       
-   except Exception as e:
-       logger.error(f"Basic analysis error: {str(e)}")
-       raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+            "analysis_date": datetime.now().isoformat(),
+            "detailed_scores": basic_metrics.get('detailed_scores', {})
+        }
+        
+        # Ensure integers
+        result = ensure_integer_scores(result)
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Basic analysis error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
 @app.post("/api/v1/generate-pdf-base64")
 async def generate_pdf_report(request: PDFRequest):
