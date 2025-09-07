@@ -333,7 +333,7 @@ class CompetitorAnalysisRequest(BaseModel):
     language: str = Field(
         "fi", 
         description="Response language: fi (Finnish) or en (English)",
-        regex="^(fi|en)$"
+        pattern="^(fi|en)$"
     )
     include_ai: bool = Field(
         True, 
@@ -391,7 +391,7 @@ class ContentAnalysis(BaseModel):
     keyword_density: Dict[str, float] = {}
     content_freshness: str = Field(
         "unknown",
-        regex="^(very_fresh|fresh|moderate|dated|unknown)$"
+        pattern="^(very_fresh|fresh|moderate|dated|unknown)$"
     )
     has_blog: bool = False
     content_quality_score: int = Field(0, ge=0, le=100)
@@ -443,7 +443,7 @@ class AIInsight(BaseModel):
     confidence: float = Field(0.0, ge=0.0, le=1.0)
     priority: str = Field(
         "medium",
-        regex="^(critical|high|medium|low)$"
+        pattern="^(critical|high|medium|low)$"
     )
 
 
@@ -478,9 +478,9 @@ class SmartAction(BaseModel):
     """Individual smart action recommendation"""
     title: str
     description: str
-    priority: str = Field(..., regex="^(critical|high|medium|low)$")
-    effort: str = Field(..., regex="^(low|medium|high)$")
-    impact: str = Field(..., regex="^(low|medium|high|critical)$")
+    priority: str = Field(..., pattern="^(critical|high|medium|low)$")
+    effort: str = Field(..., pattern="^(low|medium|high)$")
+    impact: str = Field(..., pattern="^(low|medium|high|critical)$")
     estimated_score_increase: int = Field(0, ge=0, le=100)
     category: str = ""
     estimated_time: str = ""
@@ -559,7 +559,7 @@ class PDFRequest(BaseModel):
     ai_analysis: Dict[str, Any]
     detailed_analysis: Optional[Dict[str, Any]] = None
     timestamp: str
-    language: str = Field("fi", regex="^(fi|en)$")
+    language: str = Field("fi", pattern="^(fi|en)$")
     include_detailed: bool = True
     include_recommendations: bool = True
 
