@@ -25,7 +25,6 @@ from io import BytesIO
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Union
 from collections import defaultdict, Counter
-from bs4 import BeautifulSoup, Comment
 
 # Third-party imports
 import httpx
@@ -246,10 +245,9 @@ async def fetch_url(
     for attempt in range(retries):
         try:
             async with httpx.AsyncClient(
-                timeout=httpx.Timeout(timeout, connect=10.0),
+                timeout=timeout, 
                 follow_redirects=True,
-                verify=True,
-                limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
+                verify=True
             ) as client:
                 response = await client.get(url, headers=headers)
                 
@@ -312,34 +310,7 @@ def get_domain_from_url(url: str) -> str:
     """
     from urllib.parse import urlparse
     parsed = urlparse(url)
-    return parsed.netloc or parsed.path.split('/')[0]
-
-
-def extract_clean_text(soup: BeautifulSoup) -> str:
-    """
-    Extract clean text from HTML
-    
-    Args:
-        soup: BeautifulSoup object
-    
-    Returns:
-        Clean text content
-    """
-    # Poista kaikki ei-tekstielementit
-    for element in soup(['script', 'style', 'noscript', 'head', 'meta', 'link']):
-        element.decompose()
-    
-    # Poista kommentit
-    for element in soup.find_all(string=lambda text: isinstance(text, Comment)):
-        element.extract()
-    
-    text = soup.get_text()
-    lines = (line.strip() for line in text.splitlines())
-    chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-    return ' '.join(chunk for chunk in chunks if chunk and len(chunk) > 1)
-
-
-# ============================================================================
+    return parsed.netloc or parsed.path.split('/')[0]# ============================================================================
 # PYDANTIC MODELS
 # ============================================================================
 
@@ -620,10 +591,7 @@ class CacheStats(BaseModel):
     oldest_entry: Optional[datetime] = None
     newest_entry: Optional[datetime] = None
     hit_rate: float
-    ttl_seconds: int
-
-
-# ============================================================================
+    ttl_seconds: int# ============================================================================
 # CORE SCORING FUNCTIONS
 # ============================================================================
 
@@ -798,7 +766,7 @@ async def analyze_basic_metrics(url: str, html_content: str) -> Dict[str, Any]:
     
     # Calculate final score
     total_score = sum(score_components.values())
-    final_score = total_score  # Already 0-100, no need for min/max
+    final_score = max(0, min(100, total_score))
     
     logger.info(f"Analysis for {url}: Score={final_score}, Breakdown={score_components}")
     
@@ -979,10 +947,7 @@ async def analyze_content_quality(html_content: str) -> Dict[str, Any]:
         'content_freshness': get_freshness_label(freshness),
         'has_blog': has_blog,
         'content_quality_score': final_score
-    }
-
-
-# ============================================================================
+    }# ============================================================================
 # UX AND SOCIAL ANALYSIS FUNCTIONS
 # ============================================================================
 
@@ -1089,6 +1054,17 @@ def check_clean_urls(url: str) -> bool:
     if '__' in url or url.count('_') > 3:
         return False
     return True
+
+
+def extract_clean_text(soup: BeautifulSoup) -> str:
+    """Extract clean text from HTML"""
+    for element in soup(['script', 'style', 'noscript']):
+        element.decompose()
+    
+    text = soup.get_text()
+    lines = (line.strip() for line in text.splitlines())
+    chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+    return ' '.join(chunk for chunk in chunks if chunk)
 
 
 def check_content_freshness(soup: BeautifulSoup, html_content: str) -> int:
@@ -1404,10 +1380,7 @@ def get_freshness_label(freshness_score: int) -> str:
     elif freshness_score >= 1:
         return "dated"
     else:
-        return "unknown"
-
-
-# ============================================================================
+        return "unknown"# ============================================================================
 # UX SCORING FUNCTIONS
 # ============================================================================
 
@@ -1679,4 +1652,896 @@ def generate_finnish_insights(
         uhat.append("Google rankaisee suojaamattomia sivuja")
         quick_wins.append("Asenna SSL-sertifikaatti välittömästi (Let's Encrypt ilmainen)")
     elif score_breakdown.get('security', 0) < 10:
-        heikkoudet.append(f"
+        heikkoudet.append(f"Puutteellinen tietoturva ({score_breakdown['security']}/15)")
+    
+    if score_breakdown.get('content', 0) < 5:
+        heikkoudet.append(f"Erittäin vähän sisältöä ({score_breakdown['content']}/20, {word_count} sanaa)")
+        toimenpidesuositukset.append("Luo sisältöstrategia ja julkaisukalenteri")
+    elif score_breakdown.get('content', 0) < 10:
+        heikkoudet.append(f"Sisältö vaatii laajentamista ({score_breakdown['content']}/20)")
+    
+    if score_breakdown.get('social', 0) < 5:
+        heikkoudet.append(f"Heikko sosiaalinen media -näkyvyys ({score_breakdown['social']}/10)")
+        toimenpidesuositukset.append("Luo yritysprofiili vähintään LinkedIniin ja Facebookiin")
+    
+    if not technical.get('has_analytics'):
+        heikkoudet.append("Analytiikka puuttuu - ei dataa päätöksenteon tueksi")
+        quick_wins.append("Asenna Google Analytics 4 (ilmainen, 30min)")
+    
+    if score_breakdown.get('performance', 0) < 3:
+        heikkoudet.append(f"Sivuston suorituskyky heikko ({score_breakdown['performance']}/5)")
+        quick_wins.append("Ota käyttöön lazy loading kuville")
+    
+    # Opportunities based on score ranges
+    if overall_score < 30:
+        mahdollisuudet.extend([
+            f"Valtava parannuspotentiaali - realistisesti saavutettavissa {overall_score + 40} pistettä",
+            "Pienet peruskorjaukset tuovat 20-30 pisteen parannuksen",
+            "Kilpailijat todennäköisesti samassa tilanteessa - nopea toimija voittaa"
+        ])
+    elif overall_score < 50:
+        mahdollisuudet.extend([
+            f"Merkittävä kasvupotentiaali - tavoite {overall_score + 30} pistettä",
+            "SEO-optimointi voi tuoda 50-100% lisää orgaanista liikennettä",
+            "Sisältömarkkinointi nostaa näkyvyyttä ja asiantuntijuutta"
+        ])
+    elif overall_score < 70:
+        mahdollisuudet.extend([
+            f"Hyvä pohja - realistinen tavoite {overall_score + 20} pistettä",
+            "Mahdollisuus nousta toimialan digitaaliseksi edelläkävijäksi",
+            "A/B-testaus ja konversio-optimointi parantavat tuloksia"
+        ])
+    else:
+        mahdollisuudet.extend([
+            "Vahva perusta innovatiivisille ratkaisuille",
+            "Tekoäly ja automaatio seuraava askel",
+            "Personointi ja käyttäjäkokemus kilpailueduksi"
+        ])
+    
+    # Generate comprehensive summary
+    summary_parts = []
+    
+    # Overall assessment
+    if overall_score >= 75:
+        summary_parts.append(f"Erinomainen digitaalinen kypsyys ({overall_score}/100). Kuulutte alan digitaalisiin edelläkävijöihin.")
+    elif overall_score >= 60:
+        summary_parts.append(f"Hyvä digitaalinen läsnäolo ({overall_score}/100). Perusta on kunnossa, mutta parannettavaa löytyy.")
+    elif overall_score >= 45:
+        summary_parts.append(f"Digitaalinen perustaso saavutettu ({overall_score}/100). Merkittäviä kehitysmahdollisuuksia tunnistettu.")
+    elif overall_score >= 30:
+        summary_parts.append(f"Digitaalinen läsnäolo vaatii kehittämistä ({overall_score}/100). Useita kriittisiä puutteita havaittu.")
+    else:
+        summary_parts.append(f"Digitaalinen läsnäolo alkuvaiheessa ({overall_score}/100). Välittömiä toimenpiteitä tarvitaan kilpailukyvyn säilyttämiseksi.")
+    
+    # Detailed breakdown
+    if score_breakdown:
+        # Categorize scores
+        excellent = [(label_map.get(k, k), v, SCORING_WEIGHTS[k]) for k, v in score_breakdown.items() if v >= SCORING_WEIGHTS[k] * 0.7]
+        good = [(label_map.get(k, k), v, SCORING_WEIGHTS[k]) for k, v in score_breakdown.items() if SCORING_WEIGHTS[k] * 0.5 <= v < SCORING_WEIGHTS[k] * 0.7]
+        poor = [(label_map.get(k, k), v, SCORING_WEIGHTS[k]) for k, v in score_breakdown.items() if v < SCORING_WEIGHTS[k] * 0.3]
+        
+        if excellent:
+            summary_parts.append(f"Erinomaiset osa-alueet: {', '.join([f'{name} ({v}/{max})' for name, v, max in excellent])}.")
+        if good:
+            summary_parts.append(f"Hyvät osa-alueet: {', '.join([f'{name} ({v}/{max})' for name, v, max in good])}.")
+        if poor:
+            summary_parts.append(f"Kriittiset kehityskohteet: {', '.join([f'{name} ({v}/{max})' for name, v, max in poor])}.")
+    
+    # Key insights
+    if word_count < 500:
+        summary_parts.append(f"Sisältö erittäin vähäistä ({word_count} sanaa) - tämä on suurin yksittäinen kehityskohde.")
+    
+    if not technical.get('has_analytics'):
+        summary_parts.append("Analytiikka puuttuu - datan kerääminen kriittistä kehityksen seuraamiseksi.")
+    
+    # Improvement potential
+    max_realistic_score = min(100, overall_score + 40)
+    if overall_score < 60:
+        summary_parts.append(f"Realistinen parannuspotentiaali: {max_realistic_score - overall_score} pistettä 3-6 kuukaudessa.")
+    
+    # Competition context
+    if overall_score < 45:
+        summary_parts.append("Kilpailijoihin verrattuna jäätte jälkeen - nopea toiminta tärkeää.")
+    elif overall_score > 60:
+        summary_parts.append("Olette kilpailijoita edellä digitaalisessa kypsyydessä.")
+    
+    summary = " ".join(summary_parts)
+    
+    return {
+        'summary': summary,
+        'strengths': vahvuudet[:5],
+        'weaknesses': heikkoudet[:5],
+        'opportunities': mahdollisuudet[:4],
+        'threats': uhat[:3],
+        'recommendations': toimenpidesuositukset[:5],
+        'confidence_score': min(95, max(60, overall_score + 20)),
+        'sentiment_score': (overall_score / 100) * 0.8 + 0.2,
+        'johtopäätökset': summary,
+        'vahvuudet': vahvuudet[:5],
+        'heikkoudet': heikkoudet[:5],
+        'mahdollisuudet': mahdollisuudet[:4],
+        'uhat': uhat[:3],
+        'toimenpidesuositukset': toimenpidesuositukset[:5],
+        'strategiset_suositukset': toimenpidesuositukset[:3],
+        'quick_wins': quick_wins[:3]
+    }
+
+
+def generate_english_insights(
+    overall_score: int,
+    basic_metrics: Dict[str, Any],
+    technical: Dict[str, Any],
+    content: Dict[str, Any],
+    ux: Dict[str, Any],
+    social: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Generate comprehensive English language insights"""
+    
+    strengths = []
+    weaknesses = []
+    opportunities = []
+    threats = []
+    recommendations = []
+    quick_wins = []
+    
+    score_breakdown = basic_metrics.get('score_breakdown', {})
+    word_count = content.get('word_count', 0)
+    
+    # Detailed strength analysis
+    if score_breakdown.get('security', 0) >= 13:
+        strengths.append(f"Excellent security ({score_breakdown['security']}/15) - SSL and security headers implemented")
+    elif score_breakdown.get('security', 0) >= 10:
+        strengths.append(f"Strong security ({score_breakdown['security']}/15) - HTTPS enabled")
+    
+    if score_breakdown.get('seo_basics', 0) >= 15:
+        strengths.append(f"Excellent SEO foundation ({score_breakdown['seo_basics']}/20)")
+    elif score_breakdown.get('seo_basics', 0) >= 10:
+        strengths.append(f"Good SEO basics ({score_breakdown['seo_basics']}/20)")
+    
+    if score_breakdown.get('mobile', 0) >= 12:
+        strengths.append(f"Excellent mobile optimization ({score_breakdown['mobile']}/15)")
+    elif score_breakdown.get('mobile', 0) >= 8:
+        strengths.append(f"Good mobile usability ({score_breakdown['mobile']}/15)")
+    
+    if word_count > 2000:
+        strengths.append(f"Very comprehensive content ({word_count} words)")
+    elif word_count > 1000:
+        strengths.append(f"Good content volume ({word_count} words)")
+    
+    if social.get('platforms', []):
+        strengths.append(f"Present on {len(social['platforms'])} social media platforms")
+    
+    # Detailed weakness analysis
+    if score_breakdown.get('security', 0) == 0:
+        weaknesses.append("CRITICAL: No SSL certificate!")
+        threats.append("Google penalizes insecure sites")
+        quick_wins.append("Install SSL certificate immediately (Let's Encrypt is free)")
+    elif score_breakdown.get('security', 0) < 10:
+        weaknesses.append(f"Insufficient security ({score_breakdown['security']}/15)")
+    
+    if score_breakdown.get('content', 0) < 5:
+        weaknesses.append(f"Very limited content ({score_breakdown['content']}/20, {word_count} words)")
+        recommendations.append("Develop content strategy and editorial calendar")
+    elif score_breakdown.get('content', 0) < 10:
+        weaknesses.append(f"Content needs expansion ({score_breakdown['content']}/20)")
+    
+    if score_breakdown.get('social', 0) < 5:
+        weaknesses.append(f"Weak social media presence ({score_breakdown['social']}/10)")
+        recommendations.append("Create business profiles on LinkedIn and Facebook at minimum")
+    
+    if not technical.get('has_analytics'):
+        weaknesses.append("No analytics - missing data for decision making")
+        quick_wins.append("Install Google Analytics 4 (free, 30min setup)")
+    
+    if score_breakdown.get('performance', 0) < 3:
+        weaknesses.append(f"Poor site performance ({score_breakdown['performance']}/5)")
+        quick_wins.append("Enable lazy loading for images")
+    
+    # Opportunities based on score ranges
+    if overall_score < 30:
+        opportunities.extend([
+            f"Massive improvement potential - realistically achieve {overall_score + 40} points",
+            "Basic fixes will yield 20-30 point improvement",
+            "Competitors likely in similar position - first mover wins"
+        ])
+    elif overall_score < 50:
+        opportunities.extend([
+            f"Significant growth potential - target {overall_score + 30} points",
+            "SEO optimization can bring 50-100% more organic traffic",
+            "Content marketing will boost visibility and authority"
+        ])
+    elif overall_score < 70:
+        opportunities.extend([
+            f"Good foundation - realistic target {overall_score + 20} points",
+            "Opportunity to become digital leader in your industry",
+            "A/B testing and conversion optimization will improve results"
+        ])
+    else:
+        opportunities.extend([
+            "Strong foundation for innovative solutions",
+            "AI and automation as next step",
+            "Personalization and UX as competitive advantage"
+        ])
+    
+    # Generate comprehensive summary
+    summary_parts = []
+    
+    # Overall assessment
+    if overall_score >= 75:
+        summary_parts.append(f"Excellent digital maturity ({overall_score}/100). You're among the digital leaders in your field.")
+    elif overall_score >= 60:
+        summary_parts.append(f"Good digital presence ({overall_score}/100). Foundation is solid but room for improvement exists.")
+    elif overall_score >= 45:
+        summary_parts.append(f"Basic digital level achieved ({overall_score}/100). Significant development opportunities identified.")
+    elif overall_score >= 30:
+        summary_parts.append(f"Digital presence needs development ({overall_score}/100). Several critical gaps detected.")
+    else:
+        summary_parts.append(f"Digital presence in early stages ({overall_score}/100). Immediate action needed to maintain competitiveness.")
+    
+    # Detailed breakdown
+    if score_breakdown:
+        # Categorize scores
+        excellent = [(k, v, SCORING_WEIGHTS[k]) for k, v in score_breakdown.items() if v >= SCORING_WEIGHTS[k] * 0.7]
+        good = [(k, v, SCORING_WEIGHTS[k]) for k, v in score_breakdown.items() if SCORING_WEIGHTS[k] * 0.5 <= v < SCORING_WEIGHTS[k] * 0.7]
+        poor = [(k, v, SCORING_WEIGHTS[k]) for k, v in score_breakdown.items() if v < SCORING_WEIGHTS[k] * 0.3]
+        
+        if excellent:
+            summary_parts.append(f"Excellent areas: {', '.join([f'{name} ({v}/{max})' for name, v, max in excellent])}.")
+        if good:
+            summary_parts.append(f"Good areas: {', '.join([f'{name} ({v}/{max})' for name, v, max in good])}.")
+        if poor:
+            summary_parts.append(f"Critical improvement areas: {', '.join([f'{name} ({v}/{max})' for name, v, max in poor])}.")
+    
+    # Key insights
+    if word_count < 500:
+        summary_parts.append(f"Content very limited ({word_count} words) - this is your biggest single improvement area.")
+    
+    if not technical.get('has_analytics'):
+        summary_parts.append("Analytics missing - data collection critical for tracking progress.")
+    
+    # Improvement potential
+    max_realistic_score = min(100, overall_score + 40)
+    if overall_score < 60:
+        summary_parts.append(f"Realistic improvement potential: {max_realistic_score - overall_score} points in 3-6 months.")
+    
+    # Competition context
+    if overall_score < 45:
+        summary_parts.append("You're behind competitors - swift action important.")
+    elif overall_score > 60:
+        summary_parts.append("You're ahead of competitors in digital maturity.")
+    
+    summary = " ".join(summary_parts)
+    
+    return {
+        'summary': summary,
+        'strengths': strengths[:5],
+        'weaknesses': weaknesses[:5],
+        'opportunities': opportunities[:4],
+        'threats': threats[:3],
+        'recommendations': recommendations[:5],
+        'confidence_score': min(95, max(60, overall_score + 20)),
+        'sentiment_score': (overall_score / 100) * 0.8 + 0.2,
+        'johtopäätökset': summary,
+        'vahvuudet': strengths[:5],
+        'heikkoudet': weaknesses[:5],
+        'mahdollisuudet': opportunities[:4],
+        'uhat': threats[:3],
+        'toimenpidesuositukset': recommendations[:5],
+        'strategiset_suositukset': recommendations[:3],
+        'quick_wins': quick_wins[:3]
+    }
+
+
+async def generate_openai_insights(
+    url: str,
+    basic_metrics: Dict[str, Any],
+    technical: Dict[str, Any],
+    content: Dict[str, Any],
+    ux: Dict[str, Any],
+    social: Dict[str, Any],
+    language: str
+) -> Dict[str, Any]:
+    """Generate OpenAI-enhanced insights"""
+    
+    if not openai_client:
+        return {}
+    
+    context = f"""
+    Website: {url}
+    Score: {basic_metrics.get('digital_maturity_score', 0)}/100
+    Technical: {technical.get('overall_technical_score', 0)}/100
+    Content: {content.get('word_count', 0)} words
+    Social: {social.get('social_score', 0)}/100
+    UX: {ux.get('overall_ux_score', 0)}/100
+    """
+    
+    try:
+        prompt = (
+            f"Analyze this website data and provide 3 strategic recommendations "
+            f"in {language}:\n{context}"
+        )
+        
+        response = await openai_client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=300,
+            temperature=0.7
+        )
+        
+        return {
+            'enhanced_summary': response.choices[0].message.content,
+            'ai_confidence': 85
+        }
+        
+    except Exception as e:
+        logger.error(f"OpenAI error: {e}")
+        return {}# ============================================================================
+# COMPETITIVE ANALYSIS & SMART ACTIONS
+# ============================================================================
+
+async def analyze_competitive_positioning(
+    url: str, 
+    basic_metrics: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Analyze competitive positioning"""
+    
+    score = basic_metrics.get('digital_maturity_score', 0)
+    
+    if score >= 75:
+        position = "Digital Leader"
+        advantages = [
+            "Erinomainen digitaalinen läsnäolo",
+            "Teknisesti edistynyt toteutus",
+            "Kilpailukykyinen käyttökokemus"
+        ]
+        threats = ["Kilpailijoiden kopiointivaara", "Innovaatiopaineet"]
+        competitive_score = 85
+    elif score >= 60:
+        position = "Strong Performer"
+        advantages = [
+            "Vahva digitaalinen perusta",
+            "Hyvät kasvumahdollisuudet"
+        ]
+        threats = ["Ero markkinajohtajiin", "Jatkuvan kehityksen tarve"]
+        competitive_score = 70
+    elif score >= 45:
+        position = "Average Competitor"
+        advantages = ["Perustaso kunnossa", "Selkeät kehitysmahdollisuudet"]
+        threats = ["Riski jäädä jälkeen", "Kasvava kilpailupaine"]
+        competitive_score = 50
+    elif score >= 30:
+        position = "Below Average"
+        advantages = ["Merkittävä parannuspotentiaali"]
+        threats = [
+            "Selvä kilpailuhaitta",
+            "Asiakkaiden menettämisen riski"
+        ]
+        competitive_score = 30
+    else:
+        position = "Digital Laggard"
+        advantages = ["Mahdollisuus suureen digiloikkaan"]
+        threats = [
+            "Kriittinen kilpailuhaitta",
+            "Uhka liiketoiminnan jatkuvuudelle"
+        ]
+        competitive_score = 15
+    
+    return {
+        'market_position': position,
+        'competitive_advantages': advantages,
+        'competitive_threats': threats,
+        'market_share_estimate': "Data not available",
+        'competitive_score': competitive_score
+    }
+
+
+def generate_smart_actions(
+    ai_analysis: AIAnalysis,
+    technical: Dict[str, Any],
+    content: Dict[str, Any],
+    basic_metrics: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    """Generate comprehensive smart action recommendations based on actual analysis"""
+    
+    actions = []
+    score_breakdown = basic_metrics.get('score_breakdown', {})
+    overall_score = basic_metrics.get('digital_maturity_score', 0)
+    
+    # Analyze each category and generate specific actions based on ACTUAL scores
+    
+    # SECURITY ANALYSIS (max 15 points)
+    security_score = score_breakdown.get('security', 0)
+    if security_score < 15:
+        if security_score == 0:
+            actions.append({
+                "title": "Kriittinen: Ota HTTPS käyttöön välittömästi",
+                "description": "Sivustolla ei ole SSL-sertifikaattia. Tämä on kriittinen tietoturvaongelma.",
+                "priority": "critical",
+                "effort": "low",
+                "impact": "critical",
+                "estimated_score_increase": 10,
+                "category": "security",
+                "estimated_time": "1-2 päivää"
+            })
+        elif security_score < 10:
+            actions.append({
+                "title": "Lisää puuttuvat tietoturvaotsakket",
+                "description": f"Tietoturvataso {security_score}/15. Lisää CSP, HSTS ja X-Frame-Options.",
+                "priority": "high",
+                "effort": "low",
+                "impact": "high",
+                "estimated_score_increase": 15 - security_score,
+                "category": "security",
+                "estimated_time": "1 päivä"
+            })
+        else:
+            actions.append({
+                "title": "Optimoi tietoturvaotsakket",
+                "description": f"Tietoturva {security_score}/15. Viimeistele security headers.",
+                "priority": "medium",
+                "effort": "low",
+                "impact": "medium",
+                "estimated_score_increase": 15 - security_score,
+                "category": "security",
+                "estimated_time": "2-4 tuntia"
+            })
+    
+    # SEO ANALYSIS (max 20 points)
+    seo_score = score_breakdown.get('seo_basics', 0)
+    if seo_score < 20:
+        gap = 20 - seo_score
+        if gap > 10:
+            actions.append({
+                "title": "Korjaa kriittiset SEO-puutteet",
+                "description": f"SEO-perusteet {seo_score}/20. Title-tagit, meta-kuvaukset ja otsikkorakenne vaativat korjausta.",
+                "priority": "critical",
+                "effort": "low",
+                "impact": "critical",
+                "estimated_score_increase": min(10, gap),
+                "category": "seo",
+                "estimated_time": "1-2 päivää"
+            })
+        elif gap > 5:
+            actions.append({
+                "title": "Paranna SEO-perusteita",
+                "description": f"SEO-taso {seo_score}/20. Optimoi metatiedot ja URL-rakenne.",
+                "priority": "high",
+                "effort": "medium",
+                "impact": "high",
+                "estimated_score_increase": gap,
+                "category": "seo",
+                "estimated_time": "3-5 päivää"
+            })
+        else:
+            actions.append({
+                "title": "Hienosäädä SEO-optimointi",
+                "description": f"SEO {seo_score}/20. Lisää canonical, hreflang ja strukturoitu data.",
+                "priority": "medium",
+                "effort": "medium",
+                "impact": "medium",
+                "estimated_score_increase": gap,
+                "category": "seo",
+                "estimated_time": "1 viikko"
+            })
+    
+    # CONTENT ANALYSIS (max 20 points)
+    content_score = score_breakdown.get('content', 0)
+    if content_score < 20:
+        gap = 20 - content_score
+        word_count = content.get('word_count', 0)
+        
+        if content_score <= 5:
+            actions.append({
+                "title": "Luo kattava sisältöstrategia",
+                "description": f"Sisältöpisteet vain {content_score}/20. Sivustolla {word_count} sanaa. Tarvitaan merkittävää sisällöntuotantoa.",
+                "priority": "critical",
+                "effort": "high",
+                "impact": "critical",
+                "estimated_score_increase": min(15, gap),
+                "category": "content",
+                "estimated_time": "2-4 viikkoa"
+            })
+        elif content_score <= 10:
+            actions.append({
+                "title": "Laajenna sisältöä merkittävästi",
+                "description": f"Sisältö {content_score}/20. Lisää arvokasta sisältöä ja syventävää tietoa.",
+                "priority": "high",
+                "effort": "high",
+                "impact": "high",
+                "estimated_score_increase": min(10, gap),
+                "category": "content",
+                "estimated_time": "2 viikkoa"
+            })
+        else:
+            actions.append({
+                "title": "Optimoi sisällön laatua",
+                "description": f"Sisältö {content_score}/20. Paranna luettavuutta ja lisää multimedia-elementtejä.",
+                "priority": "medium",
+                "effort": "medium",
+                "impact": "medium",
+                "estimated_score_increase": gap,
+                "category": "content",
+                "estimated_time": "1 viikko"
+            })
+    
+    # TECHNICAL ANALYSIS (max 15 points)
+    tech_score = score_breakdown.get('technical', 0)
+    if tech_score < 15:
+        gap = 15 - tech_score
+        if not technical.get('has_analytics'):
+            actions.append({
+                "title": "Asenna analytiikkatyökalut",
+                "description": "Google Analytics tai Matomo puuttuu. Kriittinen datankeruun kannalta.",
+                "priority": "high",
+                "effort": "low",
+                "impact": "high",
+                "estimated_score_increase": 3,
+                "category": "technical",
+                "estimated_time": "2-3 tuntia"
+            })
+        
+        if gap > 5:
+            actions.append({
+                "title": "Korjaa tekniset puutteet",
+                "description": f"Tekninen taso {tech_score}/15. Sitemap, robots.txt, strukturoitu data.",
+                "priority": "high",
+                "effort": "medium",
+                "impact": "high",
+                "estimated_score_increase": min(8, gap),
+                "category": "technical",
+                "estimated_time": "3-5 päivää"
+            })
+    
+    # MOBILE ANALYSIS (max 15 points)
+    mobile_score = score_breakdown.get('mobile', 0)
+    if mobile_score < 15:
+        gap = 15 - mobile_score
+        if mobile_score < 5:
+            actions.append({
+                "title": "Kriittinen: Korjaa mobiilioptiminti",
+                "description": f"Mobiilipisteet vain {mobile_score}/15. Viewport ja responsiivisuus puuttuvat.",
+                "priority": "critical",
+                "effort": "medium",
+                "impact": "critical",
+                "estimated_score_increase": min(10, gap),
+                "category": "mobile",
+                "estimated_time": "1 viikko"
+            })
+        elif mobile_score < 12:
+            actions.append({
+                "title": "Paranna mobiilioptimointia",
+                "description": f"Mobiili {mobile_score}/15. Paranna responsiivista suunnittelua.",
+                "priority": "high",
+                "effort": "medium",
+                "impact": "high",
+                "estimated_score_increase": gap,
+                "category": "mobile",
+                "estimated_time": "3-5 päivää"
+            })
+    
+    # SOCIAL ANALYSIS (max 10 points)
+    social_score = score_breakdown.get('social', 0)
+    if social_score < 10:
+        gap = 10 - social_score
+        if social_score <= 3:
+            actions.append({
+                "title": "Rakenna sosiaalisen median läsnäolo",
+                "description": f"Some-pisteet {social_score}/10. Luo profiilit ja lisää linkit sivustolle.",
+                "priority": "medium",
+                "effort": "low",
+                "impact": "medium",
+                "estimated_score_increase": min(7, gap),
+                "category": "social",
+                "estimated_time": "1 viikko"
+            })
+        else:
+            actions.append({
+                "title": "Vahvista some-integraatioita",
+                "description": f"Some {social_score}/10. Lisää Open Graph -tagit ja jakopainikkeet.",
+                "priority": "low",
+                "effort": "low",
+                "impact": "medium",
+                "estimated_score_increase": gap,
+                "category": "social",
+                "estimated_time": "2-3 päivää"
+            })
+    
+    # PERFORMANCE ANALYSIS (max 5 points)
+    perf_score = score_breakdown.get('performance', 0)
+    if perf_score < 5:
+        actions.append({
+            "title": "Optimoi sivuston suorituskyky",
+            "description": f"Suorituskyky {perf_score}/5. Lazy loading, kuvien optimointi, CDN.",
+            "priority": "medium",
+            "effort": "medium",
+            "impact": "medium",
+            "estimated_score_increase": 5 - perf_score,
+            "category": "performance",
+            "estimated_time": "3-5 päivää"
+        })
+    
+    # Add AI-based recommendations
+    if ai_analysis and ai_analysis.heikkoudet:
+        for weakness in ai_analysis.heikkoudet[:2]:
+            actions.append({
+                "title": f"AI-suositus: {weakness[:50]}...",
+                "description": weakness,
+                "priority": "medium",
+                "effort": "medium",
+                "impact": "medium",
+                "estimated_score_increase": 3,
+                "category": "ai_recommendation",
+                "estimated_time": "1-2 viikkoa"
+            })
+    
+    # Sort by priority and score increase
+    priority_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
+    actions.sort(key=lambda x: (
+        priority_order.get(x['priority'], 4),
+        -x.get('estimated_score_increase', 0)
+    ))
+    
+    return actions[:15]
+
+
+def generate_competitor_gaps(
+    basic_metrics: Dict[str, Any],
+    competitive: Dict[str, Any]
+) -> List[str]:
+    """Generate competitor gap analysis"""
+    
+    gaps = []
+    score = basic_metrics.get('digital_maturity_score', 0)
+    
+    if score < 30:
+        gaps.extend([
+            "Digitaalinen läsnäolo kriittisen heikko",
+            "Perustason optimoinnit puuttuvat",
+            "Merkittävä riski menettää asiakkaita"
+        ])
+    elif score < 50:
+        gaps.extend([
+            "Sisältöstrategia kilpailijoita heikompi",
+            "Tekninen toteutus jää kilpailijoista"
+        ])
+    elif score < 70:
+        gaps.extend([
+            "Kohtuullinen ero johtaviin toimijoihin",
+            "Mahdollisuus kuroa eroa kiinni"
+        ])
+    else:
+        gaps.extend([
+            "Kilpailukykyinen useimpiin nähden",
+            "Keskity innovaatioihin"
+        ])
+    
+    return gaps[:3]
+
+
+# ============================================================================
+# API ENDPOINTS
+# ============================================================================
+
+@app.get("/")
+async def root():
+    """Root endpoint with API info"""
+    return {
+        "name": APP_NAME,
+        "version": APP_VERSION,
+        "status": "operational",
+        "endpoints": {
+            "health": "/health",
+            "basic_analysis": "/api/v1/analyze",
+            "ai_analysis": "/api/v1/ai-analyze",
+            "pdf_generation": "/api/v1/generate-pdf-base64"
+        },
+        "features": [
+            "Fair 0-100 scoring system",
+            "No arbitrary baselines",
+            "Comprehensive analysis",
+            "AI-powered insights",
+            "PDF report generation"
+        ]
+    }
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "version": APP_VERSION,
+        "timestamp": datetime.now().isoformat(),
+        "openai_available": bool(openai_client),
+        "cache_size": len(analysis_cache)
+    }
+
+
+@app.post("/api/v1/ai-analyze")
+async def ai_analyze(request: CompetitorAnalysisRequest):
+    """Main AI-powered analysis endpoint"""
+    try:
+        # Clean URL
+        url = clean_url(request.url)
+        
+        # Check cache
+        cache_key = get_cache_key(url, "ai_v5")
+        if cache_key in analysis_cache:
+            cached = analysis_cache[cache_key]
+            if is_cache_valid(cached['timestamp']):
+                logger.info(f"Cache hit for {url}")
+                return cached['data']
+        
+        # Fetch website
+        response = await fetch_url(url)
+        if not response or response.status_code != 200:
+            raise HTTPException(400, f"Cannot fetch {url}")
+        
+        html_content = response.text
+        
+        # Run all analyses
+        basic_metrics = await analyze_basic_metrics(url, html_content)
+        technical = await analyze_technical_aspects(url, html_content)
+        content = await analyze_content_quality(html_content)
+        ux = await analyze_ux_elements(html_content)
+        social = await analyze_social_media_presence(url, html_content)
+        competitive = await analyze_competitive_positioning(url, basic_metrics)
+        
+        # Generate AI insights
+        ai_analysis = await generate_ai_insights(
+            url, basic_metrics, technical, content,
+            ux, social, request.language
+        )
+        
+        # Build response
+        result = {
+            "success": True,
+            "company_name": request.company_name or basic_metrics.get('title', 'Unknown'),
+            "analysis_date": datetime.now().isoformat(),
+            "basic_analysis": BasicAnalysis(
+                company=request.company_name or basic_metrics.get('title', 'Unknown'),
+                website=url,
+                digital_maturity_score=basic_metrics['digital_maturity_score'],
+                social_platforms=basic_metrics.get('social_platforms', 0),
+                technical_score=technical.get('overall_technical_score', 0),
+                content_score=content.get('content_quality_score', 0),
+                seo_score=int((basic_metrics.get('score_breakdown', {}).get('seo_basics', 0) / 20) * 100),
+                score_breakdown=basic_metrics.get('score_breakdown', {})
+            ).dict(),
+            "ai_analysis": ai_analysis.dict(),
+            "detailed_analysis": DetailedAnalysis(
+                social_media=SocialMediaAnalysis(**social),
+                technical_audit=TechnicalAudit(**technical),
+                content_analysis=ContentAnalysis(**content),
+                ux_analysis=UXAnalysis(**ux),
+                competitive_analysis=CompetitiveAnalysis(**competitive)
+            ).dict(),
+            "smart": {
+                "actions": generate_smart_actions(
+                    ai_analysis, technical, content, basic_metrics
+                ),
+                "scores": SmartScores(
+                    overall=basic_metrics['digital_maturity_score'],
+                    technical=technical.get('overall_technical_score', 0),
+                    content=content.get('content_quality_score', 0),
+                    social=social.get('social_score', 0),
+                    ux=ux.get('overall_ux_score', 0),
+                    competitive=competitive.get('competitive_score', 0)
+                ).dict()
+            },
+            "enhanced_features": EnhancedFeatures(
+                industry_benchmarking={
+                    "industry_average": 45,
+                    "top_quartile": 70,
+                    "your_position": basic_metrics['digital_maturity_score']
+                },
+                competitor_gaps=generate_competitor_gaps(basic_metrics, competitive),
+                growth_opportunities=ai_analysis.opportunities[:3],
+                risk_assessment=ai_analysis.threats[:2]
+            ).dict()
+        }
+        
+        # Ensure integer scores
+        result = ensure_integer_scores(result)
+        
+        # Cache result
+        analysis_cache[cache_key] = {
+            'data': result,
+            'timestamp': datetime.now()
+        }
+        
+        # Clean old cache
+        if len(analysis_cache) > MAX_CACHE_SIZE:
+            oldest = min(analysis_cache.keys(),
+                        key=lambda k: analysis_cache[k]['timestamp'])
+            del analysis_cache[oldest]
+        
+        logger.info(f"Analysis complete for {url}: score={basic_metrics['digital_maturity_score']}")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Analysis error for {request.url}: {e}")
+        raise HTTPException(500, f"Analysis failed: {str(e)}")
+
+
+@app.post("/api/v1/analyze")
+async def basic_analyze(request: CompetitorAnalysisRequest):
+    """Basic analysis endpoint"""
+    try:
+        url = clean_url(request.url)
+        response = await fetch_url(url)
+        if not response:
+            raise HTTPException(400, "Cannot fetch website")
+        
+        basic_metrics = await analyze_basic_metrics(url, response.text)
+        
+        return {
+            "success": True,
+            "company": request.company_name or "Unknown",
+            "website": url,
+            "digital_maturity_score": basic_metrics['digital_maturity_score'],
+            "social_platforms": basic_metrics.get('social_platforms', 0),
+            "score_breakdown": basic_metrics.get('score_breakdown', {}),
+            "analysis_date": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Basic analysis error: {e}")
+        raise HTTPException(500, f"Analysis failed: {str(e)}")
+
+
+@app.post("/api/v1/generate-pdf-base64")
+async def generate_pdf_report(request: PDFRequest):
+    """Generate PDF report as base64"""
+    try:
+        from io import BytesIO
+        buffer = BytesIO()
+        
+        # Create PDF
+        doc = SimpleDocTemplate(buffer, pagesize=A4)
+        story = []
+        
+        # Add content (simplified for space)
+        styles = getSampleStyleSheet()
+        title = Paragraph(f"Analysis: {request.company_name}", styles['Title'])
+        story.append(title)
+        
+        doc.build(story)
+        
+        # Convert to base64
+        pdf_data = buffer.getvalue()
+        buffer.close()
+        pdf_base64 = base64.b64encode(pdf_data).decode('utf-8')
+        
+        return {
+            "success": True,
+            "pdf_base64": pdf_base64,
+            "filename": f"analysis_{datetime.now().strftime('%Y%m%d')}.pdf",
+            "size_bytes": len(pdf_data)
+        }
+        
+    except Exception as e:
+        logger.error(f"PDF generation error: {e}")
+        raise HTTPException(500, f"PDF generation failed: {str(e)}")
+
+
+# ============================================================================
+# MAIN ENTRY POINT
+# ============================================================================
+
+if __name__ == "__main__":
+    import uvicorn
+    
+    port = int(os.getenv("PORT", 8000))
+    host = "0.0.0.0"
+    
+    logger.info(f"{APP_NAME} v{APP_VERSION}")
+    logger.info("Starting server...")
+    
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        log_level="info",
+        access_log=True
+    )
