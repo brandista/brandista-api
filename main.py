@@ -115,10 +115,14 @@ app.add_middleware(
 # ============================================================================
 
 openai_client = None
+
+# Preferred OpenAI model (can be overridden with env var OPENAI_MODEL)
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
 if OPENAI_AVAILABLE and os.getenv("OPENAI_API_KEY"):
     try:
         openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        logger.info("OpenAI client initialized")
+        logger.info(f"OpenAI client initialized (model={OPENAI_MODEL})")
     except Exception as e:
         logger.warning(f"OpenAI init failed: {e}")
         openai_client = None
@@ -1187,19 +1191,34 @@ async def generate_ai_insights(
             UX: {ux.get('overall_ux_score', 0)}/100
             """
             prompt = (
-                "Given the following website audit context, provide 3 concise, high-impact, "
-                "actionable recommendations (each 1 sentence, imperative voice):\n"
+                "Given the following website audit context, provide exactly 5 concise, high-impact, "
+                "actionable recommendations. Each recommendation must be ONE sentence, imperative voice, "
+                "and cover different areas (technical, content, SEO, UX, social/conversion). "
+                "Return them as a plain list, one per line, prefixed with a hyphen, with no intro/outro text:\n"
                 f"{ctx}"
             )
+
             resp = await openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model=OPENAI_MODEL,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=300,
-                temperature=0.7
+                max_tokens=500,
+                temperature=0.6
             )
-            enhanced = resp.choices[0].message.content.strip()
-            if enhanced:
-                insights['recommendations'] = (insights.get('recommendations') or [])[:2] + [enhanced]
+
+            raw = resp.choices[0].message.content.strip()
+
+            # Parse into clean 5-item list
+            lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+            cleaned = []
+            for ln in lines:
+                ln = re.sub(r'^\s*[-•\d]+\s*[.)-]?\s*', '', ln).strip()
+                if len(ln.split()) >= 4:
+                    cleaned.append(ln)
+            recs = cleaned[:5]
+
+            if recs:
+                base = (insights.get('recommendations') or [])[:2]
+                insights['recommendations'] = base + recs
         except Exception as e:
             logger.warning(f"OpenAI enhancement failed: {e}")
 
