@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Brandista Competitive Intelligence API
-Version: 5.2.0 - English-only, No PDF
+Version: 5.2.1 - English-only, No PDF
 Author: Brandista Team
 Date: 2025
 Description: Advanced website analysis with fair 0–100 scoring system (English-first)
@@ -13,6 +13,14 @@ Description: Advanced website analysis with fair 0–100 scoring system (English
 # ============================================================================
 
 # Standard library imports
+# Browser automation (optional - for JS-heavy sites)
+try:
+    from playwright.async_api import async_playwright
+    PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    PLAYWRIGHT_AVAILABLE = False
+    print("Warning: Playwright not available. Some JS-heavy sites may fail.")
+
 import os
 import re
 import hashlib
@@ -21,7 +29,7 @@ import asyncio
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 from urllib.parse import urlparse
-
+import random 
 # Third-party imports
 import httpx
 from bs4 import BeautifulSoup
@@ -156,8 +164,141 @@ def get_cache_key(url: str, analysis_type: str = "basic") -> str:
 def is_cache_valid(ts: datetime) -> bool:
     return (datetime.now() - ts).total_seconds() < CACHE_TTL
 
+def get_domain_from_url(url: str) -> str:
+    parsed = urlparse(url)
+    return parsed.netloc or parsed.path.split('/')[0]
 
+def clean_url(url: str) -> str:
+    url = url.strip()
+    if not url.startswith(("http://", "https://")):
+        url = f"https://{url}"
+    return url.rstrip('/')
+
+async def fetch_url_with_browser(url: str, timeout: int = 30) -> Optional[str]:
+    """Fetch URL with browser rendering for JavaScript-heavy sites"""
+    if not PLAYWRIGHT_AVAILABLE:
+        return await fetch_url_basic(url, timeout)
+    
+    try:
+        async with async_playwright() as p:
+            # Käynnistä Chromium headless-tilassa
+            browser = await p.chromium.launch(
+                headless=True,
+                args=['--no-sandbox', '--disable-dev-shm-usage']
+            )
+            
+            # Luo uusi sivu
+            page = await browser.new_page()
+            
+            # Aseta realistiset headers
+            await page.set_extra_http_headers({
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'fi,en-US;q=0.7,en;q=0.3',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Referer': 'https://www.google.com/',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+            })
+            
+            # Mene sivulle ja odota että sisältö latautuu
+            await page.goto(url, wait_until='networkidle', timeout=timeout * 1000)
+            
+            # Odota hetki että JavaScript suorittaa loppuun
+            await page.wait_for_timeout(2000)
+            
+            # Hae sivun sisältö
+            content = await page.content()
+            
+            await browser.close()
+            return content
+            
+    except Exception as e:
+        logger.warning(f"Browser fetch failed for {url}: {e}")
+        # Fallback perus HTTP-hakuun
+        return await fetch_url_basic(url, timeout)
+
+async def fetch_url_basic(url: str, timeout: int = REQUEST_TIMEOUT, retries: int = MAX_RETRIES) -> Optional[str]:
+    """Basic HTTP fetch without JavaScript rendering"""
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'fi,en-US;q=0.7,en;q=0.3',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Referer': 'https://www.google.com/',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+    }
+    
+    for attempt in range(retries):
+        try:
+            # Lisää random delay bot-suojauksen kiertämiseen
+            if attempt > 0:
+                await asyncio.sleep(random.uniform(1, 3))
+                
+            async with httpx.AsyncClient(
+                timeout=timeout, 
+                follow_redirects=True, 
+                verify=True,
+                limits=httpx.Limits(max_connections=10)
+            ) as client:
+                resp = await client.get(url, headers=headers)
+                
+                if resp.status_code == 200:
+                    return resp.text
+                elif resp.status_code == 404:
+                    logger.warning(f"404 Not Found: {url}")
+                    return None
+                elif resp.status_code in [403, 429]:
+                    logger.warning(f"Blocked ({resp.status_code}): {url}")
+                    if attempt < retries - 1:
+                        await asyncio.sleep(5 * (attempt + 1))  # Longer delay for blocks
+                        continue
+                elif attempt == retries - 1:
+                    logger.warning(f"Failed to fetch {url}: Status {resp.status_code}")
+                    return None
+                    
+        except httpx.TimeoutException:
+            logger.warning(f"Timeout fetching {url} (attempt {attempt+1})")
+        except httpx.RequestError as e:
+            logger.error(f"Request error for {url}: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error for {url}: {e}")
+            
+        if attempt < retries - 1:
+            await asyncio.sleep(2 ** attempt)  # Exponential backoff
+            
+    return None
+
+# Päivitä fetch_url funktio käyttämään uutta logiikkaa (korvaa vanha):
 async def fetch_url(url: str, timeout: int = REQUEST_TIMEOUT, retries: int = MAX_RETRIES) -> Optional[httpx.Response]:
+    """Smart fetch with browser fallback for JavaScript sites"""
+    
+    # Tunnista sivustot jotka tarvitsevat browserin
+    js_heavy_domains = [
+        'bmw.fi', 'bmw.com', 'mercedes-benz.fi', 'audi.fi', 
+        'tesla.com', 'volvo.fi', 'volkswagen.fi'
+    ]
+    
+    domain = get_domain_from_url(url).lower()
+    needs_browser = any(d in domain for d in js_heavy_domains)
+    
+    if needs_browser:
+        logger.info(f"Using browser rendering for {domain}")
+        html_content = await fetch_url_with_browser(url, timeout)
+        if html_content:
+            # Luo mock response
+            class MockResponse:
+                def __init__(self, text, status_code=200):
+                    self.text = text
+                    self.status_code = status_code
+            return MockResponse(html_content)
+    
+    # Käytä perus HTTP-hakua
+    return await fetch_url_basic_response(url, timeout, retries)
+
+async def fetch_url_basic_response(url: str, timeout: int, retries: int) -> Optional[httpx.Response]:
+    """Basic HTTP fetch returning response object"""
     headers = {'User-Agent': USER_AGENT}
     for attempt in range(retries):
         try:
@@ -171,27 +312,14 @@ async def fetch_url(url: str, timeout: int = REQUEST_TIMEOUT, retries: int = MAX
                 elif attempt == retries - 1:
                     logger.warning(f"Failed to fetch {url}: Status {resp.status_code}")
                     return resp
-        except httpx.TimeoutException:
-            logger.warning(f"Timeout fetching {url} (attempt {attempt+1})")
-        except httpx.RequestError as e:
-            logger.error(f"Request error for {url}: {e}")
         except Exception as e:
-            logger.error(f"Unexpected error for {url}: {e}")
+            logger.error(f"Error fetching {url}: {e}")
         if attempt < retries - 1:
             await asyncio.sleep(1 * (attempt + 1))
     return None
 
-
-def clean_url(url: str) -> str:
-    url = url.strip()
-    if not url.startswith(("http://", "https://")):
-        url = f"https://{url}"
-    return url.rstrip('/')
-
-
-def get_domain_from_url(url: str) -> str:
-    p = urlparse(url)
-    return p.netloc or p.path.split('/')[0]
+# Lisää random import alkuun jos puuttuu:
+import random
 
 # ============================================================================
 # MODELS
