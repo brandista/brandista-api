@@ -24,3 +24,4 @@ spacy
 textstat
 openai
 sqlalchemy
+playwright==1.40.0
