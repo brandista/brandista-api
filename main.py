@@ -120,15 +120,19 @@ app = FastAPI(
 FRONTENDS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-    "https://www.brandista.eu"
+    "https://brandista.eu"
     # "https://your-frontend.tld",
 ]
 
 # Poista muut mahdolliset CORSMiddleware-lisäykset koodista (vain tämä yksi!)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],            # EI '*'
-    allow_credentials=False,             # pakollinen evästeille
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://brandista.eu",
+    ],
+    allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type", "Accept", "Authorization"],
     expose_headers=["*"],
@@ -1915,52 +1919,265 @@ def generate_smart_actions(ai: AIAnalysis, technical: Dict[str, Any], content: D
     actions.sort(key=lambda x: (priority_order.get(x['priority'], 4), -x.get('estimated_score_increase', 0)))
     return actions[:15]
 
+def round_pct(x: int) -> int:
+    return max(0, min(100, int(x)))
+
+def _find_meta_theme_color(soup: BeautifulSoup) -> Optional[str]:
+    # <meta name="theme-color" content="#0f172a">
+    tag = soup.find("meta", attrs={"name": "theme-color"})
+    if tag and tag.get("content"):
+        return tag["content"].strip()
+    return None
+
+def _find_css_root_colors(html: str) -> List[str]:
+    # etsi :root { --primary: #... } -tyylisiä
+    colors = []
+    root_blocks = re.findall(r":root\s*{([^}]+)}", html, flags=re.I|re.S)
+    for block in root_blocks:
+        for varname in ("--primary", "--brand", "--accent", "--color-primary"):
+            m = re.search(rf"{varname}\s*:\s*(#[0-9a-fA-F]{{6}}|#[0-9a-fA-F]{{3}})", block)
+            if m:
+                colors.append(m.group(1))
+    # fallback: etsi suoraan #hex-koodeja
+    if not colors:
+        colors = re.findall(r"#(?:[0-9a-fA-F]{3}){1,2}\b", html)
+    return colors[:4]
+
+def _find_font_family(soup: BeautifulSoup, html: str) -> Optional[str]:
+    # Google Fonts -link
+    gf = soup.find("link", href=re.compile(r"fonts\.googleapis\.com|fonts\.gstatic\.com", re.I))
+    if gf:
+        # Yritä arvata perhe nimestä (esim. family=Inter:...)
+        m = re.search(r"family=([^:&]+)", gf.get("href",""))
+        if m:
+            family = m.group(1).replace("+"," ")
+            return family
+    # CSS: body { font-family: ... }
+    m = re.search(r"body\s*{[^}]*font-family\s*:\s*([^;}{]+)", html, flags=re.I|re.S)
+    if m:
+        return m.group(1).strip().strip('"\'')
+    return None
+
+def detect_brand_theme(html: str, soup: BeautifulSoup) -> Dict[str, Any]:
+    primary = _find_meta_theme_color(soup)
+    palette = _find_css_root_colors(html)
+    if not primary and palette:
+        primary = palette[0]
+    font = _find_font_family(soup, html)
+
+    # helppo kontrastiväri nappeihin/tekstiin
+    def _contrast(c: str) -> str:
+        try:
+            c = c.lstrip("#")
+            if len(c) == 3:
+                c = "".join(ch*2 for ch in c)
+            r, g, b = int(c[0:2],16), int(c[2:4],16), int(c[4:6],16)
+            luminance = (0.299*r + 0.587*g + 0.114*b)
+            return "#0B1220" if luminance > 186 else "#FFFFFF"
+        except Exception:
+            return "#FFFFFF"
+
+    primary_txt = _contrast(primary) if primary else "#FFFFFF"
+
+    return {
+        "primary": primary or "#0F172A",       # fallback slate-900
+        "primaryText": primary_txt,
+        "accent": palette[1] if len(palette) > 1 else None,
+        "muted": "#94A3B8",                    # tailwind slate-400
+        "surface": "#FFFFFF",
+        "elevation": "shadow-md rounded-2xl",
+        "radius": "1rem",
+        "fontFamily": font or "Inter, ui-sans-serif, system-ui",
+        # UI vihjeet frontille:
+        "layout": {"container": "max-w-6xl mx-auto px-4 md:px-6 lg:px-8", "gap": "gap-6"},
+        "components": {
+            "card": {"base": "p-5 md:p-6 bg-white/90 backdrop-blur " 
+                              "border border-slate-200/60 rounded-2xl shadow-sm"},
+            "kpi":  {"pill": "px-3 py-1.5 text-sm rounded-full border"},
+            "title": {"h1": "text-2xl md:text-3xl font-semibold tracking-tight"},
+        }
+    }
+
+def build_screen_report(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Muodostaa frontille helpon view-modelin ilman PDF:ää."""
+    b = raw["basic_analysis"]
+    det = raw["detailed_analysis"]
+    enh = raw.get("enhanced_features", {})
+
+    # Yläheader
+    header = {
+        "title": b.get("company") or raw.get("company_name") or "Website report",
+        "subtitle": b.get("website", ""),
+        "kpis": [
+            {"label": "Overall", "value": round_pct(b.get("digital_maturity_score", 0))},
+            {"label": "Technical", "value": round_pct(b.get("technical_score", 0))},
+            {"label": "Content", "value": round_pct(b.get("content_score", 0))},
+            {"label": "SEO", "value": round_pct(b.get("seo_score", 0))},
+            {"label": "UX", "value": round_pct(det["ux_analysis"].get("overall_ux_score", 0))},
+            {"label": "Social", "value": round_pct(det["social_media"].get("social_score", 0))},
+        ]
+    }
+
+    # Kortit (nopea lukupinta)
+    cards = [
+        {
+            "title": "Summary",
+            "type": "text",
+            "body": raw["ai_analysis"].get("summary", ""),
+            "badges": [
+                {"text": f"Percentile {raw['smart']['scores'].get('percentile', 0)}"},
+                {"text": enh.get("estimated_traffic_rank", {}).get("value", "")},
+            ]
+        },
+        {
+            "title": "Strengths",
+            "type": "bullets",
+            "items": raw["ai_analysis"].get("strengths", []),
+        },
+        {
+            "title": "Weaknesses",
+            "type": "bullets",
+            "items": raw["ai_analysis"].get("weaknesses", []),
+            "variant": "warning"
+        },
+        {
+            "title": "Top Actions (next)",
+            "type": "actions",
+            "items": [
+                {
+                    "title": a["title"],
+                    "subtitle": a["description"],
+                    "meta": f"{a['priority'].upper()} • impact {a['impact']} • ~{a['estimated_time']}",
+                } for a in (raw["smart"].get("actions") or [])[:5]
+            ]
+        },
+    ]
+
+    # Taulukot / listat
+    tables = [
+        {
+            "title": "Score breakdown",
+            "type": "keyvalue",
+            "items": [
+                {"key": "Security", "value": b["score_breakdown"]["security"]},
+                {"key": "SEO basics", "value": b["score_breakdown"]["seo_basics"]},
+                {"key": "Content", "value": b["score_breakdown"]["content"]},
+                {"key": "Technical", "value": b["score_breakdown"]["technical"]},
+                {"key": "Mobile", "value": b["score_breakdown"]["mobile"]},
+                {"key": "Social", "value": b["score_breakdown"]["social"]},
+                {"key": "Performance", "value": b["score_breakdown"]["performance"]},
+            ]
+        },
+        {
+            "title": "Technology stack (detected)",
+            "type": "chips",
+            "items": (enh.get("technology_stack", {}).get("detected") or [])[:20]
+        },
+        {
+            "title": "Core Web Vitals (est.)",
+            "type": "keyvalue",
+            "items": [
+                {"key": "LCP", "value": enh.get("core_web_vitals_assessment", {}).get("lcp", {}).get("value", "–")},
+                {"key": "FID", "value": enh.get("core_web_vitals_assessment", {}).get("fid", {}).get("value", "–")},
+                {"key": "CLS", "value": enh.get("core_web_vitals_assessment", {}).get("cls", {}).get("value", "–")},
+                {"key": "Status", "value": enh.get("core_web_vitals_assessment", {}).get("overall_status", "–")},
+            ]
+        },
+    ]
+
+    # Yksinkertainen “chart” data frontille (frontend piirtää)
+    charts = [
+        {
+            "title": "Category scores",
+            "type": "bar",
+            "series": [
+                {"name": "Security", "value": b["score_breakdown"]["security"], "max": 15},
+                {"name": "SEO", "value": b["score_breakdown"]["seo_basics"], "max": 20},
+                {"name": "Content", "value": b["score_breakdown"]["content"], "max": 20},
+                {"name": "Technical", "value": b["score_breakdown"]["technical"], "max": 15},
+                {"name": "Mobile", "value": b["score_breakdown"]["mobile"], "max": 15},
+                {"name": "Social", "value": b["score_breakdown"]["social"], "max": 10},
+                {"name": "Perf", "value": b["score_breakdown"]["performance"], "max": 5},
+            ]
+        }
+    ]
+
+    # Seuraavat stepit (CTA-tyyppiset)
+    next_steps = [
+        {"text": r["insight"] if isinstance(r, dict) and "insight" in r else r}
+        for r in (raw["ai_analysis"].get("recommendations") or [])
+    ][:5]
+
+    return {
+        "header": header,
+        "sections": [
+            {"kind": "cards", "items": cards},
+            {"kind": "tables", "items": tables},
+            {"kind": "charts", "items": charts},
+            {"kind": "next_steps", "items": next_steps},
+        ],
+        "meta": {
+            "generated_at": raw.get("analysis_date"),
+            "version": raw.get("metadata", {}).get("version"),
+        }
+    }
+
 
 # ============================================================================
 # AUTH ROUTES (define once)
 # ============================================================================
-try:
-    auth_router  # type: ignore
-except NameError:
-    from fastapi import APIRouter
-    auth_router = APIRouter(prefix="/auth", tags=["auth"])
+# --- korvaa koko myöhäisempi AUTH ROUTES -blokki tällä ---
+from fastapi import APIRouter
+auth_router = APIRouter(prefix="/auth", tags=["auth"])
 
-    @auth_router.post("/login")
-    def login(payload: Dict[str, Any], response: Response):
-        """
-        Body: { "password": "<ADMIN_PW>" }  -> admin
-              { }                           -> peruskäyttäjä (ilman salasanaa)
-        """
-        pw = (payload or {}).get("password", "")
-        if pw:
-            if pw != ADMIN_PW:
-                raise HTTPException(401, "Invalid credentials")
-            token = _new_session("admin")
-            _set_session_cookie(response, token)
-            return {"ok": True, "role": "admin"}
-        token = _new_session("user")
-        _set_session_cookie(response, token)
-        return {"ok": True, "role": "user"}
+SECRET = os.getenv("API_SECRET", "change-this-in-prod")
 
-    @auth_router.post("/logout")
-    def logout(response: Response, request: Request):
-        tok = request.cookies.get(SESSION_COOKIE)
-        if tok:
-            sessions.pop(tok, None)
-        _delete_session_cookie(response)
-        return {"ok": True}
+import base64, hmac, time, secrets
 
-    @auth_router.get("/me")
-    def me(sess: Dict[str, Any] = Depends(current_session)):
-        u = users.get(sess["user_id"], {"premium": False, "role": "user"})
-        return {"user_id": sess["user_id"], "role": u["role"], "premium": u.get("premium", False)}
+def make_token(user_id: str, role: str, ttl=60*60*8) -> str:
+    exp = int(time.time()) + ttl
+    payload = f"{user_id}|{role}|{exp}"
+    sig = hmac.new(SECRET.encode(), payload.encode(), digestmod="sha256").hexdigest()
+    raw = f"{payload}|{sig}".encode()
+    return base64.urlsafe_b64encode(raw).decode()
 
-# Varmista, että reititin on liitetty (ei kaksoisliitä)
-for r in getattr(app, 'routes', []):
-    if getattr(r, 'path', '') == '/auth/login':
-        break
-else:
-    app.include_router(auth_router)
+def parse_token(token: str) -> Optional[Dict[str,Any]]:
+    try:
+        raw = base64.urlsafe_b64decode(token.encode()).decode()
+        user_id, role, exp, sig = raw.split("|")
+        payload = f"{user_id}|{role}|{exp}"
+        ok = hmac.compare_digest(sig, hmac.new(SECRET.encode(), payload.encode(), "sha256").hexdigest())
+        if not ok or int(exp) < time.time():
+            return None
+        return {"user_id": user_id, "role": role}
+    except Exception:
+        return None
+
+@auth_router.post("/login")
+def login(payload: Dict[str, Any]):
+    pw = (payload or {}).get("password", "")
+    if pw:
+        if pw != os.getenv("ADMIN_PW", "kaikka123"):
+            raise HTTPException(401, "Invalid credentials")
+        user_id = "admin-" + secrets.token_hex(6)
+        token = make_token(user_id, "admin")
+        return {"ok": True, "role": "admin", "access_token": token, "token_type": "bearer"}
+    user_id = "user-" + secrets.token_hex(6)
+    token = make_token(user_id, "user")
+    return {"ok": True, "role": "user", "access_token": token, "token_type": "bearer"}
+
+@auth_router.get("/me")
+def me(request: Request):
+    auth = request.headers.get("Authorization","")
+    if not auth.lower().startswith("bearer "):
+        raise HTTPException(401, "Missing bearer token")
+    tok = auth.split(" ",1)[1].strip()
+    payload = parse_token(tok)
+    if not payload:
+        raise HTTPException(401, "Invalid/expired token")
+    return {"user_id": payload["user_id"], "role": payload["role"], "premium": payload["role"]=="admin"}
+
+app.include_router(auth_router)
 
 
 # ============================================================================
