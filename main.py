@@ -114,21 +114,25 @@ app = FastAPI(
 )
 
 # NOTE: tighten in production (set CORS_ALLOW_ORIGINS env to your frontend origin)
-# --- CORS ---
+# --- CORS: salli vain omat frontit, koska käytät credentials: 'include' ---
+from fastapi.middleware.cors import CORSMiddleware
+
 FRONTENDS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-    # lisää prod-frontti kun valmis:
+    # lisää tuotantourli kun on valmis:
     # "https://your-frontend.tld",
 ]
 
+# Poista muut mahdolliset add_middleware(CORSMiddleware, ...) esiintymät ennen tätä!
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=FRONTENDS,
-    allow_credentials=True,
+    allow_origins=FRONTENDS,                   # EI '*'
+    allow_credentials=True,                    # pakollinen evästeille
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type", "Accept", "Authorization"],
-    expose_headers=["*"],
+    # älä lisää kommenttia samalle riville kuin sulku :)
 )
 )# ============================================================================
 # GLOBALS
@@ -153,14 +157,14 @@ users: Dict[str, Dict[str, Any]] = {}  # user_id -> {premium: bool, role: 'user'
 
 def _set_session_cookie(resp: Response, token: str):
     resp.set_cookie(
-    key=SESSION_COOKIE,
-    value=token,
-    httponly=True,
-    secure=True,       # railway on https → true
-    samesite="none",   # cross-site → none
-    max_age=SESSION_TTL_SECONDS,
-    path="/",
-)
+        key=SESSION_COOKIE,
+        value=token,
+        httponly=True,
+        secure=True,         # Railway on HTTPS -> pakko True kun SameSite=None
+        samesite="none",     # cross-site evästeet vaatii tämän
+        max_age=SESSION_TTL_SECONDS,
+        path="/",
+    )
 
 
 def _delete_session_cookie(resp: Response):
