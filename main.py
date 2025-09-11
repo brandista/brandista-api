@@ -104,37 +104,36 @@ logger.info(f"Starting {APP_NAME} v{APP_VERSION}")
 # ============================================================================
 # FASTAPI
 # ============================================================================
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(
     title=APP_NAME,
     version=APP_VERSION,
     description=APP_DESCRIPTION,
     docs_url="/docs",
     redoc_url="/redoc",
-    openapi_url="/openapi.json"
+    openapi_url="/openapi.json",
 )
 
-# NOTE: tighten in production (set CORS_ALLOW_ORIGINS env to your frontend origin)
 # --- CORS: salli vain omat frontit, koska käytät credentials: 'include' ---
-from fastapi.middleware.cors import CORSMiddleware
-
 FRONTENDS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-    # lisää tuotantourli kun on valmis:
+    "https://www.brandista.eu"
     # "https://your-frontend.tld",
 ]
 
-# Poista muut mahdolliset add_middleware(CORSMiddleware, ...) esiintymät ennen tätä!
-
+# Poista muut mahdolliset CORSMiddleware-lisäykset koodista (vain tämä yksi!)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=FRONTENDS,                   # EI '*'
-    allow_credentials=True,                    # pakollinen evästeille
+    allow_origins=FRONTENDS,            # EI '*'
+    allow_credentials=True,             # pakollinen evästeille
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type", "Accept", "Authorization"],
-    # älä lisää kommenttia samalle riville kuin sulku :)
+    expose_headers=["*"],
 )
-)# ============================================================================
+# ============================================================================
 # GLOBALS
 # ============================================================================
 openai_client = None
@@ -1981,7 +1980,27 @@ async def health_check():
         "openai_available": bool(openai_client),
         "cache_size": len(analysis_cache)
     }
+def estimate_traffic_rank(url: str, basic: Dict[str, Any]) -> str:
+    """
+    Hyvin karkea arvio liikennepotentiaalista digitaalisen pisteen ja perusmittarien pohjalta.
+    Palauttaa luokittelun merkkijonona (esim. 'Top 35% (est.)').
+    """
+    overall = int(basic.get("digital_maturity_score", 0))
+    bd = basic.get("score_breakdown", {}) or {}
+    seo_pts = int(bd.get("seo_basics", 0))            # /20
+    content_pts = int(bd.get("content", 0))           # /20
 
+    score = overall + (seo_pts * 2) + (content_pts * 2)  # painota SEO+content hiukan
+
+    if score >= 120:
+        return "Top 20% (est.)"
+    if score >= 100:
+        return "Top 35% (est.)"
+    if score >= 80:
+        return "Middle 50% (est.)"
+    if score >= 60:
+        return "Bottom 35% (est.)"
+    return "Bottom 20% (est.)"
 
 @app.post("/api/v1/ai-analyze")
 async def ai_analyze(request: CompetitorAnalysisRequest):
