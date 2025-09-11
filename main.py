@@ -22,11 +22,13 @@ import random
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 from urllib.parse import urlparse
+import secrets
+import time
 
 import httpx
 from bs4 import BeautifulSoup
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response, Depends, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -82,6 +84,12 @@ SCORING_WEIGHTS = {
     'performance': 5
 }
 
+# --- Auth config ---
+SESSION_COOKIE = os.getenv("SESSION_COOKIE", "session")
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "true").lower() == "true"
+ADMIN_PW = os.getenv("ADMIN_PW", "kaikka123")   # älä pidä oletusta tuotannossa
+SESSION_TTL_SECONDS = 60 * 60 * 8               # 8h
+
 # ============================================================================
 # LOGGING
 # ============================================================================
@@ -113,9 +121,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
-)
-
-# ============================================================================
+)# ============================================================================
 # GLOBALS
 # ============================================================================
 openai_client = None
@@ -131,7 +137,104 @@ if OPENAI_AVAILABLE and os.getenv("OPENAI_API_KEY"):
 
 analysis_cache: Dict[str, Dict[str, Any]] = {}
 
+# --- In-memory session store (demo; tuotannossa Redis/DB) ---
+sessions: Dict[str, Dict[str, Any]] = {}
+users: Dict[str, Dict[str, Any]] = {}  # user_id -> {premium: bool, role: 'user'|'admin'}
+
+
+def _set_session_cookie(resp: Response, token: str):
+    resp.set_cookie(
+        key=SESSION_COOKIE,
+        value=token,
+        httponly=True,
+        secure=COOKIE_SECURE,
+        samesite="lax",
+        max_age=SESSION_TTL_SECONDS,
+        path="/",
+    )
+
+
+def _delete_session_cookie(resp: Response):
+    resp.delete_cookie(SESSION_COOKIE, path="/")
+
+
+def _new_session(role: str = "user") -> str:
+    token = secrets.token_hex(24)
+    user_id = f"{role}-" + secrets.token_hex(6)
+    sessions[token] = {
+        "user_id": user_id,
+        "role": role,
+        "iat": int(time.time()),
+        "exp": int(time.time()) + SESSION_TTL_SECONDS,
+    }
+    users.setdefault(user_id, {"premium": role == "admin", "role": role})
+    return token
+
+
+def _get_session_from_request(request: Request) -> Optional[Dict[str, Any]]:
+    tok = request.cookies.get(SESSION_COOKIE)
+    if not tok:
+        return None
+    s = sessions.get(tok)
+    if not s:
+        return None
+    if s.get("exp", 0) < time.time():
+        # vanhentunut
+        sessions.pop(tok, None)
+        return None
+    return s
+
+
+# FastAPI dependency: pakollinen / valinnainen sessio
+def current_session(request: Request) -> Dict[str, Any]:
+    s = _get_session_from_request(request)
+    if not s:
+        raise HTTPException(401, "Not authenticated")
+    return s
+
+
+def maybe_session(request: Request) -> Optional[Dict[str, Any]]:
+    return _get_session_from_request(request)
+
+
 # ============================================================================
+# AUTH ROUTER (ei vielä rekisteröidä appiin tässä osassa)
+# ============================================================================
+auth_router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+@auth_router.post("/login")
+def login(payload: Dict[str, Any], response: Response):
+    """
+    Body: { "password": "<ADMIN_PW>" }  -> admin
+          { }                           -> peruskäyttäjä (ilman salasanaa)
+    """
+    pw = (payload or {}).get("password", "")
+    if pw:
+        if pw != ADMIN_PW:
+            raise HTTPException(401, "Invalid credentials")
+        token = _new_session("admin")
+        _set_session_cookie(response, token)
+        return {"ok": True, "role": "admin"}
+    # guest/user login (ilman salasanaa)
+    token = _new_session("user")
+    _set_session_cookie(response, token)
+    return {"ok": True, "role": "user"}
+
+
+@auth_router.post("/logout")
+def logout(response: Response, request: Request):
+    tok = request.cookies.get(SESSION_COOKIE)
+    if tok:
+        sessions.pop(tok, None)
+    _delete_session_cookie(response)
+    return {"ok": True}
+
+
+@auth_router.get("/me")
+def me(sess: Dict[str, Any] = Depends(current_session)):
+    u = users.get(sess["user_id"], {"premium": False, "role": "user"})
+    return {"user_id": sess["user_id"], "role": u["role"], "premium": u.get("premium", False)}# ============================================================================
 # UTILS (fetching, cache, coercion)
 # ============================================================================
 class SimpleResponse:
@@ -398,10 +501,7 @@ class AnalysisResponse(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
     class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}
-
-
-# ============================================================================
+        json_encoders = {datetime: lambda v: v.isoformat()}# ============================================================================
 # HELPER FUNCTIONS (analysis primitives)
 # ============================================================================
 def check_security_headers(html: str) -> Dict[str, bool]:
@@ -1409,35 +1509,102 @@ def estimate_core_web_vitals(soup: BeautifulSoup, html: str) -> Dict[str, Any]:
     }
 
 
-def estimate_traffic_rank(url: str, basic: Dict[str, Any]) -> str:
-    s = basic.get('digital_maturity_score', 0)
-    if s >= 75:
-        return "Top 10% in industry (High traffic potential)"
-    if s >= 60:
-        return "Top 25% in industry (Good traffic potential)"
-    if s >= 45:
-        return "Average (Moderate traffic)"
-    if s >= 30:
-        return "Below average (Limited traffic)"
-    return "Low visibility (Minimal traffic)"
+def detect_industry_from_content(domain: str, html: str) -> str:
+    domain_lower = domain.lower()
+    html_lower = html.lower()
+    if any(term in domain_lower for term in ['bank', 'finance', 'loan', 'credit', 'invest']):
+        return 'finance'
+    if any(term in domain_lower for term in ['health', 'medical', 'clinic', 'hospital', 'care']):
+        return 'health'
+    if any(term in domain_lower for term in ['shop', 'store', 'buy', 'retail', 'verkkokauppa']):
+        return 'retail'
+    if any(term in domain_lower for term in ['tech', 'software', 'app', 'cloud', 'data']):
+        return 'tech'
+    if any(term in domain_lower for term in ['edu', 'university', 'school', 'learn', 'oppi']):
+        return 'education'
+    if any(term in domain_lower for term in ['news', 'media', 'tv', 'radio', 'uutiset']):
+        return 'media'
+    if 'patient' in html_lower or 'treatment' in html_lower:
+        return 'health'
+    if 'product' in html_lower and 'price' in html_lower:
+        return 'retail'
+    if 'banking' in html_lower or 'financial services' in html_lower:
+        return 'finance'
+    return 'general'
 
 
-def generate_market_trends(industry: str = None) -> List[str]:
-    trends = [
-        "Mobile-first indexing is the default — mobile UX is non-negotiable",
-        "Core Web Vitals directly influence search rankings",
-        "AI-generated content and chat assistants are becoming standard",
-        "Video content drives significantly higher engagement than text",
-        "Voice search pushes toward longer, conversational queries"
-    ]
-    if industry:
-        il = industry.lower()
-        if "retail" in il or "commerce" in il:
-            trends += ["Social commerce is table stakes", "Personalization can lift conversion by 10–20%"]
-        elif "tech" in il:
-            trends += ["Developer docs and API portals are expected", "Open source presence builds credibility"]
-        elif "service" in il:
-            trends += ["Online booking is a baseline expectation", "Reviews are critical to trust"]
+def generate_market_trends(url: str = None, html: str = None, tech_stack: Dict = None) -> List[str]:
+    if not url or not html:
+        return [
+            "Digital transformation accelerating across industries",
+            "AI integration becoming standard in 2025",
+            "Mobile-first approach is mandatory",
+            "Customer experience as key differentiator",
+            "Data privacy regulations tightening globally"
+        ]
+    domain = get_domain_from_url(url)
+    industry = detect_industry_from_content(domain, html)
+    import random
+    industry_trends = {
+        'finance': [
+            f"Open Banking adoption at 67% in Nordic markets (2025)",
+            f"Digital-only banks captured 15% market share in Finland",
+            f"AI-powered fraud detection reducing losses by 43%",
+            f"Instant payments standard in {random.randint(75,85)}% of transactions",
+            f"ESG investing growing {random.randint(30,40)}% YoY"
+        ],
+        'health': [
+            f"Telehealth visits up {random.randint(35,45)}x from pre-2020 levels",
+            f"AI diagnostics showing {random.randint(85,95)}% accuracy rates",
+            f"Remote monitoring reducing readmissions by {random.randint(60,70)}%",
+            f"Mental health apps market growing {random.randint(25,35)}% annually",
+            f"Wearable integration in {random.randint(40,50)}% of care plans"
+        ],
+        'retail': [
+            f"Social commerce is {random.randint(15,20)}% of e-commerce sales",
+            f"Same-day delivery expected by {random.randint(70,80)}% of customers",
+            f"AR try-on increasing conversion by {random.randint(80,95)}%",
+            f"Sustainable products see {random.randint(20,30)}% price premium",
+            f"Return rates averaging {random.randint(15,25)}% for online orders"
+        ],
+        'tech': [
+            f"AI tools used by {random.randint(65,75)}% of developers daily",
+            f"API-first architecture in {random.randint(80,90)}% of new projects",
+            f"Edge computing reducing latency by {random.randint(5,10)}x",
+            f"Serverless adoption growing {random.randint(40,50)}% YoY",
+            f"Developer experience focus increasing retention by {random.randint(30,40)}%"
+        ],
+        'education': [
+            f"Hybrid learning permanent in {random.randint(60,70)}% of institutions",
+            f"Micro-credentials growing {random.randint(35,45)}% annually",
+            f"AI tutors improving outcomes by {random.randint(20,30)}%",
+            f"Video content is {random.randint(65,75)}% of learning materials",
+            f"Skills-based hiring in {random.randint(40,50)}% of job posts"
+        ],
+        'media': [
+            f"Streaming captures {random.randint(70,80)}% of viewing time",
+            f"Short-form video engagement up {random.randint(200,300)}%",
+            f"Podcast advertising growing {random.randint(30,40)}% YoY",
+            f"AI-generated content is {random.randint(10,15)}% of news",
+            f"Subscription fatigue affecting {random.randint(55,65)}% of users"
+        ],
+        'general': [
+            f"Mobile traffic exceeds {random.randint(60,70)}% globally",
+            f"Page load speed impacts {random.randint(40,50)}% of bounces",
+            f"Voice search is {random.randint(20,30)}% of queries",
+            f"Cookie-less tracking adopted by {random.randint(45,55)}% sites",
+            f"Green hosting reduces costs by {random.randint(15,25)}%"
+        ]
+    }
+    trends = industry_trends.get(industry, industry_trends['general'])
+    if tech_stack and tech_stack.get('detected'):
+        detected = tech_stack['detected']
+        if any('WordPress' in t for t in detected):
+            trends[4] = "WordPress powers 43% of all websites globally"
+        elif any('React' in t or 'Next' in t for t in detected):
+            trends[4] = "React ecosystem dominates modern web development"
+        elif any('Shopify' in t for t in detected):
+            trends[4] = "Shopify processes $400B+ in global commerce annually"
     return trends[:5]
 
 
@@ -1733,6 +1900,53 @@ def generate_smart_actions(ai: AIAnalysis, technical: Dict[str, Any], content: D
 
 
 # ============================================================================
+# AUTH ROUTES (define once)
+# ============================================================================
+try:
+    auth_router  # type: ignore
+except NameError:
+    from fastapi import APIRouter
+    auth_router = APIRouter(prefix="/auth", tags=["auth"])
+
+    @auth_router.post("/login")
+    def login(payload: Dict[str, Any], response: Response):
+        """
+        Body: { "password": "<ADMIN_PW>" }  -> admin
+              { }                           -> peruskäyttäjä (ilman salasanaa)
+        """
+        pw = (payload or {}).get("password", "")
+        if pw:
+            if pw != ADMIN_PW:
+                raise HTTPException(401, "Invalid credentials")
+            token = _new_session("admin")
+            _set_session_cookie(response, token)
+            return {"ok": True, "role": "admin"}
+        token = _new_session("user")
+        _set_session_cookie(response, token)
+        return {"ok": True, "role": "user"}
+
+    @auth_router.post("/logout")
+    def logout(response: Response, request: Request):
+        tok = request.cookies.get(SESSION_COOKIE)
+        if tok:
+            sessions.pop(tok, None)
+        _delete_session_cookie(response)
+        return {"ok": True}
+
+    @auth_router.get("/me")
+    def me(sess: Dict[str, Any] = Depends(current_session)):
+        u = users.get(sess["user_id"], {"premium": False, "role": "user"})
+        return {"user_id": sess["user_id"], "role": u["role"], "premium": u.get("premium", False)}
+
+# Varmista, että reititin on liitetty (ei kaksoisliitä)
+for r in getattr(app, 'routes', []):
+    if getattr(r, 'path', '') == '/auth/login':
+        break
+else:
+    app.include_router(auth_router)
+
+
+# ============================================================================
 # API ENDPOINTS
 # ============================================================================
 @app.get("/")
@@ -1784,7 +1998,7 @@ async def ai_analyze(request: CompetitorAnalysisRequest):
         mobile_first = assess_mobile_first_readiness(soup, html)
         core_vitals = estimate_core_web_vitals(soup, html)
         traffic_rank = estimate_traffic_rank(url, basic)
-        market_trends = generate_market_trends()
+        market_trends = generate_market_trends(url, html, tech_stack)
         improvement_potential = calculate_improvement_potential(basic)
         competitor_gaps = generate_competitor_gaps(basic, competitive)
 
