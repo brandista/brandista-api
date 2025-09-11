@@ -3,3 +3,4 @@ OPENAI_API_KEY=your-api-key
 HUGGINGFACE_TOKEN=your-token
 PORT=8000
 ENV=production
+CORS_ALLOW_ORIGINS=http://localhost:5173
