@@ -127,8 +127,8 @@ FRONTENDS = [
 # Poista muut mahdolliset CORSMiddleware-lisäykset koodista (vain tämä yksi!)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=FRONTENDS,            # EI '*'
-    allow_credentials=True,             # pakollinen evästeille
+    allow_origins=["*"],            # EI '*'
+    allow_credentials=False,             # pakollinen evästeille
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type", "Accept", "Authorization"],
     expose_headers=["*"],
@@ -215,38 +215,43 @@ def maybe_session(request: Request) -> Optional[Dict[str, Any]]:
 auth_router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+import base64, hmac
+
+SECRET = os.getenv("API_SECRET", "change-this-in-prod")
+
+def make_token(user_id: str, role: str, ttl=60*60*8) -> str:
+    exp = int(time.time()) + ttl
+    payload = f"{user_id}|{role}|{exp}"
+    sig = hmac.new(SECRET.encode(), payload.encode(), digestmod="sha256").hexdigest()
+    raw = f"{payload}|{sig}".encode()
+    return base64.urlsafe_b64encode(raw).decode()
+
+def parse_token(token: str) -> Optional[Dict[str,Any]]:
+    try:
+        raw = base64.urlsafe_b64decode(token.encode()).decode()
+        user_id, role, exp, sig = raw.split("|")
+        payload = f"{user_id}|{role}|{exp}"
+        ok = hmac.compare_digest(sig, hmac.new(SECRET.encode(), payload.encode(), "sha256").hexdigest())
+        if not ok or int(exp) < time.time():
+            return None
+        return {"user_id": user_id, "role": role}
+    except Exception:
+        return None
+
 @auth_router.post("/login")
-def login(payload: Dict[str, Any], response: Response):
-    """
-    Body: { "password": "<ADMIN_PW>" }  -> admin
-          { }                           -> peruskäyttäjä (ilman salasanaa)
-    """
+def login(payload: Dict[str, Any]):
     pw = (payload or {}).get("password", "")
     if pw:
         if pw != ADMIN_PW:
             raise HTTPException(401, "Invalid credentials")
-        token = _new_session("admin")
-        _set_session_cookie(response, token)
-        return {"ok": True, "role": "admin"}
-    # guest/user login (ilman salasanaa)
-    token = _new_session("user")
-    _set_session_cookie(response, token)
-    return {"ok": True, "role": "user"}
-
-
-@auth_router.post("/logout")
-def logout(response: Response, request: Request):
-    tok = request.cookies.get(SESSION_COOKIE)
-    if tok:
-        sessions.pop(tok, None)
-    _delete_session_cookie(response)
-    return {"ok": True}
-
-
-@auth_router.get("/me")
-def me(sess: Dict[str, Any] = Depends(current_session)):
-    u = users.get(sess["user_id"], {"premium": False, "role": "user"})
-    return {"user_id": sess["user_id"], "role": u["role"], "premium": u.get("premium", False)}# ============================================================================
+        user_id = "admin-" + secrets.token_hex(6)
+        token = make_token(user_id, "admin")
+        return {"ok": True, "role": "admin", "access_token": token, "token_type": "bearer"}
+    # guest
+    user_id = "user-" + secrets.token_hex(6)
+    token = make_token(user_id, "user")
+    return {"ok": True, "role": "user", "access_token": token, "token_type": "bearer"}
+#============================================================================
 # UTILS (fetching, cache, coercion)
 # ============================================================================
 class SimpleResponse:
