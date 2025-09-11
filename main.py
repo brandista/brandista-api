@@ -114,13 +114,22 @@ app = FastAPI(
 )
 
 # NOTE: tighten in production (set CORS_ALLOW_ORIGINS env to your frontend origin)
+# --- CORS ---
+FRONTENDS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    # lisää prod-frontti kun valmis:
+    # "https://your-frontend.tld",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("CORS_ALLOW_ORIGINS", "*").split(","),
+    allow_origins=FRONTENDS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Accept", "Authorization"],
     expose_headers=["*"],
+)
 )# ============================================================================
 # GLOBALS
 # ============================================================================
@@ -144,14 +153,14 @@ users: Dict[str, Dict[str, Any]] = {}  # user_id -> {premium: bool, role: 'user'
 
 def _set_session_cookie(resp: Response, token: str):
     resp.set_cookie(
-        key=SESSION_COOKIE,
-        value=token,
-        httponly=True,
-        secure=COOKIE_SECURE,
-        samesite="lax",
-        max_age=SESSION_TTL_SECONDS,
-        path="/",
-    )
+    key=SESSION_COOKIE,
+    value=token,
+    httponly=True,
+    secure=True,       # railway on https → true
+    samesite="none",   # cross-site → none
+    max_age=SESSION_TTL_SECONDS,
+    path="/",
+)
 
 
 def _delete_session_cookie(resp: Response):
