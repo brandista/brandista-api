@@ -70,8 +70,8 @@ SCORING_WEIGHTS = {
 }
 
 # Auth config with fallbacks for your .env
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD") or os.getenv("ADMIN_PW", "admin123")
-SECRET_KEY     = os.getenv("SECRET_KEY")     or os.getenv("API_SECRET", "your-secret-key-change-this-in-production")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD") or os.getenv("ADMIN_PW", "kaikka123")
+SECRET_KEY     = os.getenv("SECRET_KEY")     or os.getenv("API_SECRET", "aklsjdfölaksjfdklj")
 TOKEN_EXPIRE_HOURS = 24
 
 # ============================================================================
