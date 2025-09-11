@@ -1,3 +1,4 @@
+# app.py — Part 1/6
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -127,7 +128,7 @@ if OPENAI_AVAILABLE and os.getenv("OPENAI_API_KEY"):
         logger.warning(f"OpenAI init failed: {e}")
         openai_client = None
 
-analysis_cache: Dict[str, Dict[str, Any]] = {}
+analysis_cache: Dict[str, Dict[str, Any]] = {}# app.py — Part 2/6
 
 # ============================================================================
 # UTILS
@@ -370,7 +371,7 @@ class AnalysisResponse(BaseModel):
     metadata: Dict[str, Any] = {}
 
     class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}
+        json_encoders = {datetime: lambda v: v.isoformat()}# app.py — Part 3/6
 
 # ============================================================================
 # HELPERS (analysis)
@@ -535,7 +536,7 @@ def get_freshness_label(score: int) -> str:
     if score >= 3: return "fresh"
     if score >= 2: return "moderate"
     if score >= 1: return "dated"
-    return "unknown"
+    return "unknown"# app.py — Part 4/6
 
 # ============================================================================
 # CORE ANALYSIS
@@ -617,7 +618,6 @@ async def analyze_basic_metrics(url: str, html: str) -> Dict[str, Any]:
     resp = check_responsive_design(html); score_components['mobile'] += resp['score']; details['responsive_design'] = resp
 
     # SOCIAL (10)
-    # lightweight presence
     social_presence = {
         'platforms': [p for p in ['facebook', 'instagram', 'linkedin', 'youtube', 'twitter', 'x.com', 'tiktok', 'pinterest']
                       if re.search(p, html, re.I)]
@@ -879,7 +879,7 @@ async def analyze_ux_elements(html: str) -> Dict[str, Any]:
         'accessibility_issues': issues,
         'navigation_elements': nav_elements,
         'design_frameworks': frameworks
-    }
+    }# app.py — Part 5/6
 
 async def analyze_social_media_presence(url: str, html: str) -> Dict[str, Any]:
     soup = BeautifulSoup(html, 'html.parser')
@@ -1434,7 +1434,7 @@ def generate_smart_actions(ai: AIAnalysis, technical: Dict[str, Any], content: D
 
     priority_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
     actions.sort(key=lambda x: (priority_order.get(x['priority'], 4), -x.get('estimated_score_increase', 0)))
-    return actions[:15]
+    return actions[:15]# app.py — Part 6/6
 
 # ============================================================================
 # API ENDPOINTS
