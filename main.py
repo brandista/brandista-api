@@ -891,18 +891,14 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     host = os.getenv("HOST", "0.0.0.0")
     
-    # Test that password hashing works
+    # Initialize users database on startup
     try:
-        test_hash = pwd_context.hash("test")
-        print("✅ Password hashing works")
+        users_db = get_users_db()
+        print("✅ Users database initialized")
+        print(f"   Available users: {', '.join(users_db.keys())}")
     except Exception as e:
-        print(f"❌ Password hashing error: {e}")
-        print("Installing bcrypt: pip install bcrypt passlib[bcrypt]")
-    
-    # Show users
-    print("\n📋 Available users:")
-    for username, user_data in users_db.items():
-        print(f"  - {username}: role={user_data['role']}, password={'(empty)' if username == 'guest' else 'set'}")
+        print(f"⚠️ Warning: Could not initialize users with bcrypt: {e}")
+        print("   Using fallback authentication")
     
     print(f"""
     ╔══════════════════════════════════════════════════════╗
@@ -914,7 +910,7 @@ if __name__ == "__main__":
     ║  Auth:   JWT Bearer Token                           ║
     ║  Login:  POST /auth/login                           ║
     ║                                                      ║
-    ║  Users:                                              ║
+    ║  Test Users:                                         ║
     ║  - guest: (no password) - 3 analyses                ║
     ║  - user:  user123 - 10 analyses                     ║
     ║  - admin: {os.getenv('ADMIN_PASSWORD', 'kaikka123')} - unlimited
