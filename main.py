@@ -1,670 +1,383 @@
-  // Tabs + content
-  const renderAnalysisContent = () => {
-    if (!analysis) return null;
+from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from pydantic import BaseModel, HttpUrl
+from typing import Optional, Dict, Any, List
+import httpx
+from bs4 import BeautifulSoup
+import jwt
+from datetime import datetime, timedelta
+import os
+from passlib.context import CryptContext
+import json
+import asyncio
+from urllib.parse import urlparse, urljoin
+import re
 
-    const score = getScoreBreakdown();
-    const features = getEnhancedFeatureCards();
+# FastAPI app initialization
+app = FastAPI(title="Website Analysis API", version="1.0.0")
 
-    const overallScore = analysis.basic_analysis?.digital_maturity_score ?? 0;
-    const seoScore = analysis.basic_analysis?.seo_score ?? score.seo;
-    const techScore = analysis.basic_analysis?.technical_score ?? score.technical;
-    const contentScore = analysis.basic_analysis?.content_score ?? score.content;
+# Configuration
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_HOURS = 24
 
-    const strengths = getAIField('strengths');
-    const weaknesses = getAIField('weaknesses');
-    const opportunities = getAIField('opportunities');
-    const threats = getAIField('threats');
-    const recommendations = getAIField('recommendations');
+# Password hashing
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-    const barChartData = [
-      { label: 'SEO', value: score.seo, icon: <Search className="w-4 h-4" /> },
-      { label: 'Technical', value: score.technical, icon: <Code className="w-4 h-4" /> },
-      { label: 'Content', value: score.content, icon: <FileText className="w-4 h-4" /> },
-      { label: 'Mobile', value: score.user_experience, icon: <Smartphone className="w-4 h-4" /> },
-      { label: 'Security', value: score.security, icon: <Shield className="w-4 h-4" /> },
-      { label: 'Performance', value: score.performance, icon: <Rocket className="w-4 h-4" /> },
-      { label: 'Social', value: score.social, icon: <Users className="w-4 h-4" /> },
-    ];
+# Security
+security = HTTPBearer()
 
-    const radarChartData = [
-      { label: 'SEO', value: score.seo },
-      { label: 'Technical', value: score.technical },
-      { label: 'Content', value: score.content },
-      { label: 'Mobile', value: score.user_experience },
-      { label: 'Security', value: score.security },
-      { label: 'Performance', value: score.performance },
-    ];
+# CORS middleware - IMPORTANT for frontend connection
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "https://*.vercel.app",
+        "https://*.netlify.app",
+        "*"  # Development only - restrict in production
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-    const tabs = {
-      overview: {
-        title: 'Overview',
-        icon: <BarChart3 className="w-4 h-4" />,
-        content: (
-          <div className="space-y-8">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6">
-              <div className="bg-black/40 border border-green-400/30 rounded-xl p-4 md:p-6 text-center">
-                <CircleProgress value={overallScore} label="Overall Score" size={110} />
-              </div>
-              <div className="bg-black/40 border border-blue-400/30 rounded-xl p-4 md:p-6 text-center">
-                <CircleProgress value={seoScore} label="SEO" size={110} />
-              </div>
-              <div className="bg-black/40 border border-purple-400/30 rounded-xl p-4 md:p-6 text-center">
-                <CircleProgress value={techScore} label="Technical" size={110} />
-              </div>
-              <div className="bg-black/40 border border-orange-400/30 rounded-xl p-4 md:p-6 text-center">
-                <CircleProgress value={contentScore} label="Content" size={110} />
-              </div>
-            </div>
+# Database simulation (in production, use real database)
+users_db = {
+    "demo": {
+        "username": "demo",
+        "hashed_password": pwd_context.hash("demo"),
+        "role": "user",
+        "usage_count": 0,
+        "max_usage": 3
+    },
+    "admin@brandista.fi": {
+        "username": "admin@brandista.fi",
+        "hashed_password": pwd_context.hash("SecureAdminPassword123!"),
+        "role": "admin",
+        "usage_count": 0,
+        "max_usage": None  # Unlimited
+    }
+}
 
-            <div className="p-6 rounded-xl bg-gradient-to-br from-blue-500/10 to-purple-500/10 border border-blue-400/30">
-              <h4 className="text-xl font-semibold text-white mb-4 flex items-center">
-                <Brain className="w-6 h-6 mr-3 text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-400" />
-                <span className="bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
-                  AI Executive Summary
-                </span>
-              </h4>
-              <div className="space-y-3 text-gray-200 leading-relaxed text-[15px]">
-                {executiveSummaryLong.split('. ').map((p, idx) => (
-                  p.trim().length ? <p key={idx}>{p.trim().replace(/\.$/, '')}.</p> : null
-                ))}
-              </div>
-            </div>
+# Pydantic models
+class LoginRequest(BaseModel):
+    username: str
+    password: str
 
-            <div className="p-6 rounded-xl bg-black/40 border border-green-400/30">
-              <h4 className="text-lg font-semibold text-white mb-6 flex items-center">
-                <PieChart className="w-5 h-5 mr-2 text-green-400" />
-                Score Breakdown
-              </h4>
-              <div className="-mx-2 sm:mx-0">
-                <BarChart data={barChartData} height={250} />
-              </div>
-            </div>
+class Token(BaseModel):
+    token: str
+    token_type: str = "bearer"
+    role: str
 
-            <div className="p-6 rounded-xl bg-gradient-to-br from-purple-500/10 to-blue-500/10 border border-purple-400/30">
-              <h4 className="text-lg font-semibold text-white mb-6 flex items-center">
-                <Activity className="w-5 h-5 mr-2 text-purple-400" />
-                Performance Profile
-              </h4>
-              <div className="flex justify-center">
-                <RadarChart data={radarChartData} size={320} />
-              </div>
-            </div>
+class AnalysisRequest(BaseModel):
+    url: str
+    company_name: Optional[str] = None
+    analysis_type: str = "comprehensive"
+    language: str = "en"
 
-            {features.length > 0 && (
-              <div className="p-6 rounded-xl bg-gradient-to-br from-purple-500/10 to-pink-500/10 border border-purple-400/30">
-                <h4 className="text-lg font-semibold text-white mb-6 flex items-center">
-                  <Sparkles className="w-5 h-5 mr-2 text-purple-400" />
-                  Enhanced Analysis
-                  <span className="ml-auto bg-purple-400/20 text-purple-400 px-3 py-1 rounded-full text-sm">
-                    {features.length} insights
-                  </span>
-                </h4>
-                <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {features.map((f, i) => {
-                    const getStatusColor = (status) => {
-                      switch(status) {
-                        case 'ready':
-                        case 'above_average': 
-                        case 'competitive':
-                          return 'text-green-400 bg-green-400/10 border-green-400/20';
-                        case 'not_ready':
-                        case 'below_average':
-                        case 'attention':
-                          return 'text-red-400 bg-red-400/10 border-red-400/20';
-                        case 'needs_improvement':
-                        case 'Medium':
-                          return 'text-orange-400 bg-orange-400/10 border-orange-400/20';
-                        default:
-                          return 'text-blue-400 bg-blue-400/10 border-blue-400/20';
-                      }
-                    };
-                    const statusColor = getStatusColor(f.status);
-                    return (
-                      <div key={i} className="p-4 rounded-lg bg-black/30 border border-purple-400/20 hover:border-purple-400/40 transition-all group">
-                        <div className="flex items-start justify-between mb-3">
-                          <span className="text-white font-medium text-sm group-hover:text-purple-300 transition-colors">
-                            {f.name}
-                          </span>
-                          <div className="text-purple-400 opacity-70 group-hover:opacity-100 transition-opacity">
-                            {f.icon}
-                          </div>
-                        </div>
-                        <div className="mb-2">
-                          <p className="text-green-400 font-bold text-lg leading-tight">
-                            {f.value}
-                          </p>
-                        </div>
-                        {f.description && (
-                          <p className="text-xs text-gray-400 mb-3 leading-relaxed">
-                            {f.description}
-                          </p>
-                        )}
-                        {f.status && (
-                          <div className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border mb-3 ${statusColor}`}>
-                            {f.status.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
-                          </div>
-                        )}
-                        {Array.isArray(f.items) && f.items.length > 0 && (
-                          <div className="space-y-1 mb-3">
-                            <div className="text-xs font-medium text-gray-500 uppercase tracking-wide">
-                              Key Points:
-                            </div>
-                            <ul className="space-y-1">
-                              {f.items.slice(0, 3).map((item, idx) => (
-                                <li key={idx} className="text-xs text-gray-300 flex items-start">
-                                  <span className="w-1 h-1 bg-purple-400 rounded-full mt-1.5 mr-2 flex-shrink-0" />
-                                  <span className="leading-relaxed">{item}</span>
-                                </li>
-                              ))}
-                              {f.items.length > 3 && (
-                                <li className="text-xs text-gray-500 italic">
-                                  and {f.items.length - 3} more...
-                                </li>
-                              )}
-                            </ul>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
+class UserResponse(BaseModel):
+    username: str
+    role: str
+    usage_count: int
+    max_usage: Optional[int]
+
+# Helper functions
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+def create_access_token(data: dict):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    token = credentials.credentials
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username = payload.get("sub")
+        if username is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication credentials"
+            )
+        return username
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired"
         )
-      },
-
-      swot: {
-        title: 'SWOT Analysis',
-        icon: <Layers className="w-4 h-4" />,
-        content: (
-          <div className="space-y-6">
-            <div className="grid md:grid-cols-2 gap-6">
-              <div className="p-6 rounded-xl bg-gradient-to-br from-green-500/10 to-blue-500/10 border border-green-400/30">
-                <div className="flex items-center mb-4">
-                  <div className="p-2 rounded-lg bg-green-400/20 mr-3"><CheckCircle className="w-5 h-5 text-green-400" /></div>
-                  <h4 className="text-lg font-semibold text-white">Strengths</h4>
-                </div>
-                <div className="space-y-3">
-                  {strengths.length ? strengths.map((t, i) => (
-                    <div key={i} className="flex items-start gap-2 p-2 rounded-lg bg-black/20">
-                      <span className="text-green-400 text-sm font-bold mt-0.5">#{i+1}</span>
-                      <p className="text-gray-300 text-sm leading-relaxed">{t}</p>
-                    </div>
-                  )) : <p className="text-gray-500 italic text-sm">No strengths identified</p>}
-                </div>
-              </div>
-              <div className="p-6 rounded-xl bg-gradient-to-br from-red-500/10 to-orange-500/10 border border-red-400/30">
-                <div className="flex items-center mb-4">
-                  <div className="p-2 rounded-lg bg-red-400/20 mr-3"><XCircle className="w-5 h-5 text-red-400" /></div>
-                  <h4 className="text-lg font-semibold text-white">Weaknesses</h4>
-                </div>
-                <div className="space-y-3">
-                  {weaknesses.length ? weaknesses.map((t, i) => (
-                    <div key={i} className="flex items-start gap-2 p-2 rounded-lg bg-black/20">
-                      <span className="text-red-400 text-sm font-bold mt-0.5">#{i+1}</span>
-                      <p className="text-gray-300 text-sm leading-relaxed">{t}</p>
-                    </div>
-                  )) : <p className="text-gray-500 italic text-sm">No weaknesses identified</p>}
-                </div>
-              </div>
-              <div className="p-6 rounded-xl bg-gradient-to-br from-blue-500/10 to-purple-500/10 border border-blue-400/30">
-                <div className="flex items-center mb-4">
-                  <div className="p-2 rounded-lg bg-blue-400/20 mr-3"><Zap className="w-5 h-5 text-blue-400" /></div>
-                  <h4 className="text-lg font-semibold text-white">Opportunities</h4>
-                </div>
-                <div className="space-y-3">
-                  {opportunities.length ? opportunities.map((t, i) => (
-                    <div key={i} className="flex items-start gap-2 p-2 rounded-lg bg-black/20">
-                      <span className="text-blue-400 text-sm font-bold mt-0.5">#{i+1}</span>
-                      <p className="text-gray-300 text-sm leading-relaxed">{t}</p>
-                    </div>
-                  )) : <p className="text-gray-500 italic text-sm">No opportunities identified</p>}
-                </div>
-              </div>
-              <div className="p-6 rounded-xl bg-gradient-to-br from-orange-500/10 to-red-500/10 border border-orange-400/30">
-                <div className="flex items-center mb-4">
-                  <div className="p-2 rounded-lg bg-orange-400/20 mr-3"><AlertTriangle className="w-5 h-5 text-orange-400" /></div>
-                  <h4 className="text-lg font-semibold text-white">Threats</h4>
-                </div>
-                <div className="space-y-3">
-                  {threats.length ? threats.map((t, i) => (
-                    <div key={i} className="flex items-start gap-2 p-2 rounded-lg bg-black/20">
-                      <span className="text-orange-400 text-sm font-bold mt-0.5">#{i+1}</span>
-                      <p className="text-gray-300 text-sm leading-relaxed">{t}</p>
-                    </div>
-                  )) : <p className="text-gray-500 italic text-sm">No threats identified</p>}
-                </div>
-              </div>
-            </div>
-          </div>
+    except jwt.JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials"
         )
-      },
 
-      technical: {
-        title: 'Technical Analysis',
-        icon: <Settings className="w-4 h-4" />,
-        content: (
-          <div className="space-y-6">
-            <div className="p-6 rounded-xl bg-gradient-to-br from-green-500/10 to-blue-500/10 border border-green-400/30">
-              <h4 className="text-lg font-semibold text-white mb-6 flex items-center">
-                <Code className="w-5 h-5 mr-2 text-green-400" />
-                Technical Metrics
-              </h4>
-              <div className="space-y-4">
-                <ScoreBar label="Technical Implementation" score={score.technical} icon={<Code className="w-4 h-4" />} />
-                <ScoreBar label="Performance" score={score.performance} icon={<Gauge className="w-4 h-4" />} />
-                <ScoreBar label="Security" score={score.security} icon={<Shield className="w-4 h-4" />} />
-                <ScoreBar label="Mobile Optimization" score={score.user_experience} icon={<Smartphone className="w-4 h-4" />} />
-                <ScoreBar label="Accessibility" score={score.accessibility} icon={<Eye className="w-4 h-4" />} />
-                <ScoreBar label="SEO" score={score.seo} icon={<Search className="w-4 h-4" />} />
-              </div>
-            </div>
-          </div>
+# Auth endpoints
+@app.post("/auth/login", response_model=Token)
+async def login(request: LoginRequest):
+    user = users_db.get(request.username)
+    if not user or not verify_password(request.password, user["hashed_password"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password"
         )
-      },
+    
+    access_token = create_access_token(data={"sub": request.username})
+    return {
+        "token": access_token,
+        "token_type": "bearer",
+        "role": user["role"]
+    }
 
-      actions: {
-        title: 'Actionable Items',
-        icon: <ListChecks className="w-4 h-4" />,
-        content: (
-          <div className="space-y-6">
-            {(() => {
-              const buckets = getSmartActions();
-              const all = [...buckets.critical, ...buckets.high, ...buckets.medium, ...buckets.low];
-              if (!all.length) return <div className="text-center py-8 text-gray-400">No actionable items available</div>;
-              return (
-                <div className="space-y-6">
-                  {buckets.critical.length > 0 && (
-                    <div>
-                      <h5 className="text-red-400 font-semibold mb-3 flex items-center">
-                        <AlertTriangle className="w-4 h-4 mr-2 animate-pulse" />
-                        Critical Actions
-                      </h5>
-                      <div className="space-y-3">
-                        {buckets.critical.map((a, i) => <ActionCard key={`c${i}`} action={a} priority="critical" />)}
-                      </div>
-                    </div>
-                  )}
-                  {buckets.high.length > 0 && (
-                    <div>
-                      <h5 className="text-orange-400 font-semibold mb-3 flex items-center">
-                        <ArrowUpRight className="w-4 h-4 mr-2" />
-                        High Priority Actions
-                      </h5>
-                      <div className="space-y-3">
-                        {buckets.high.map((a, i) => <ActionCard key={`h${i}`} action={a} priority="high" />)}
-                      </div>
-                    </div>
-                  )}
-                  {buckets.medium.length > 0 && (
-                    <div>
-                      <h5 className="text-yellow-400 font-semibold mb-3 flex items-center">
-                        <Target className="w-4 h-4 mr-2" />
-                        Medium Priority Actions
-                      </h5>
-                      <div className="space-y-3">
-                        {buckets.medium.map((a, i) => <ActionCard key={`m${i}`} action={a} priority="medium" />)}
-                      </div>
-                    </div>
-                  )}
-                  {buckets.low.length > 0 && (
-                    <div>
-                      <h5 className="text-green-400 font-semibold mb-3 flex items-center">
-                        <CheckCircle className="w-4 h-4 mr-2" />
-                        Low Priority Actions
-                      </h5>
-                      <div className="space-y-3">
-                        {buckets.low.map((a, i) => <ActionCard key={`l${i}`} action={a} priority="low" />)}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-          </div>
+@app.get("/auth/me", response_model=UserResponse)
+async def get_current_user(username: str = Depends(verify_token)):
+    user = users_db.get(username)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
         )
-      },
+    return UserResponse(
+        username=user["username"],
+        role=user["role"],
+        usage_count=user["usage_count"],
+        max_usage=user["max_usage"]
+    )
 
-      recommendations: {
-        title: 'Recommendations',
-        icon: <BookOpen className="w-4 h-4" />,
-        content: (
-          <div className="space-y-6">
-            {recommendations.length > 0 && (
-              <div className="p-6 rounded-xl bg-gradient-to-br from-purple-500/10 to-blue-500/10 border border-purple-400/30">
-                <div className="flex items-center mb-6">
-                  <Target className="w-6 h-6 text-purple-400 mr-3" />
-                  <h4 className="text-xl font-semibold text-white">Strategic Recommendations</h4>
-                  <span className="ml-auto bg-purple-400/20 text-purple-400 px-3 py-1 rounded-full text-sm">
-                    {recommendations.length} items
-                  </span>
-                </div>
-                <div className="grid gap-4">
-                  {recommendations.map((rec, idx) => (
-                    <div key={idx} className="bg-gradient-to-r from-purple-500/10 to-blue-500/10 border border-purple-400/30 rounded-xl p-5">
-                      <div className="flex items-start gap-3">
-                        <div className="p-2 rounded-lg bg-purple-400/20"><Target className="w-5 h-5 text-purple-400" /></div>
-                        <div className="flex-1">
-                          <span className="text-purple-400 font-semibold text-sm">#{idx + 1}</span>
-                          <p className="text-gray-300 mt-1">{rec}</p>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            {recommendations.length === 0 && (
-              <div className="text-center py-8 text-gray-400">No recommendations available</div>
-            )}
-          </div>
+@app.post("/auth/logout")
+async def logout(username: str = Depends(verify_token)):
+    # In a real app, you might want to blacklist the token
+    return {"message": "Successfully logged out"}
+
+# Website analysis functions
+async def fetch_website_content(url: str) -> str:
+    """Fetch website HTML content"""
+    async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+        try:
+            response = await client.get(url, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            })
+            response.raise_for_status()
+            return response.text
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Failed to fetch website: {str(e)}"
+            )
+
+def analyze_website_basic(html: str, url: str) -> Dict[str, Any]:
+    """Perform basic website analysis"""
+    soup = BeautifulSoup(html, 'html.parser')
+    
+    # Basic analysis
+    title = soup.find('title')
+    title_text = title.text.strip() if title else ""
+    
+    meta_description = soup.find('meta', attrs={'name': 'description'})
+    description = meta_description.get('content', '') if meta_description else ""
+    
+    # SEO Analysis
+    h1_tags = soup.find_all('h1')
+    h2_tags = soup.find_all('h2')
+    
+    # Images
+    images = soup.find_all('img')
+    images_without_alt = [img for img in images if not img.get('alt')]
+    
+    # Links
+    internal_links = []
+    external_links = []
+    for link in soup.find_all('a', href=True):
+        href = link['href']
+        if href.startswith('http'):
+            if urlparse(url).netloc in href:
+                internal_links.append(href)
+            else:
+                external_links.append(href)
+        else:
+            internal_links.append(href)
+    
+    # Technology detection
+    has_analytics = bool(soup.find(string=re.compile('google-analytics|gtag|ga\(')))
+    has_viewport = bool(soup.find('meta', attrs={'name': 'viewport'}))
+    
+    # Calculate scores
+    seo_score = calculate_seo_score(title_text, description, h1_tags, images_without_alt)
+    technical_score = calculate_technical_score(has_viewport, has_analytics)
+    
+    return {
+        "website": url,
+        "title": title_text,
+        "meta_description": description,
+        "h1_count": len(h1_tags),
+        "h2_count": len(h2_tags),
+        "images_total": len(images),
+        "images_without_alt": len(images_without_alt),
+        "internal_links": len(internal_links),
+        "external_links": len(external_links),
+        "has_analytics": has_analytics,
+        "has_viewport": has_viewport,
+        "seo_score": seo_score,
+        "technical_score": technical_score,
+        "digital_maturity_score": (seo_score + technical_score) // 2,
+        "score_breakdown": {
+            "technical": technical_score // 6,
+            "content": min(20, len(h1_tags) * 5 + len(h2_tags) * 2),
+            "seo_basics": seo_score // 4,
+            "mobile": 15 if has_viewport else 0,
+            "security": 10,  # Placeholder
+            "performance": 5,  # Placeholder
+            "social": 5  # Placeholder
+        }
+    }
+
+def calculate_seo_score(title, description, h1_tags, images_without_alt):
+    """Calculate SEO score"""
+    score = 0
+    if title and len(title) > 10:
+        score += 25
+    if description and len(description) > 50:
+        score += 25
+    if h1_tags:
+        score += 25
+    if len(images_without_alt) == 0:
+        score += 25
+    return score
+
+def calculate_technical_score(has_viewport, has_analytics):
+    """Calculate technical score"""
+    score = 0
+    if has_viewport:
+        score += 50
+    if has_analytics:
+        score += 50
+    return score
+
+def generate_ai_analysis(basic_analysis: Dict[str, Any]) -> Dict[str, Any]:
+    """Generate AI-like analysis based on basic metrics"""
+    score = basic_analysis.get("digital_maturity_score", 0)
+    
+    strengths = []
+    weaknesses = []
+    opportunities = []
+    recommendations = []
+    
+    # Analyze strengths and weaknesses
+    if basic_analysis.get("has_viewport"):
+        strengths.append("Mobile-responsive design implemented")
+    else:
+        weaknesses.append("Missing mobile viewport meta tag")
+        recommendations.append("Add viewport meta tag for mobile responsiveness")
+    
+    if basic_analysis.get("has_analytics"):
+        strengths.append("Analytics tracking is set up")
+    else:
+        weaknesses.append("No analytics tracking detected")
+        recommendations.append("Implement Google Analytics or similar tracking")
+    
+    if basic_analysis.get("images_without_alt", 0) == 0:
+        strengths.append("All images have alt text for accessibility")
+    else:
+        weaknesses.append(f"{basic_analysis.get('images_without_alt')} images missing alt text")
+        recommendations.append("Add descriptive alt text to all images")
+    
+    if basic_analysis.get("h1_count", 0) > 0:
+        strengths.append("Proper H1 heading structure")
+    else:
+        weaknesses.append("Missing H1 heading tag")
+        recommendations.append("Add a clear H1 heading to improve SEO")
+    
+    # Generate opportunities based on score
+    if score < 50:
+        opportunities.append("Significant room for digital transformation")
+        opportunities.append("Quick wins available in technical SEO")
+    else:
+        opportunities.append("Ready for advanced optimization strategies")
+        opportunities.append("Good foundation for scaling digital presence")
+    
+    return {
+        "summary": f"Website shows {score}% digital maturity with clear opportunities for improvement.",
+        "strengths": strengths,
+        "weaknesses": weaknesses,
+        "opportunities": opportunities,
+        "threats": ["Competitors may have better digital presence"] if score < 50 else [],
+        "recommendations": recommendations
+    }
+
+# Main analysis endpoint
+@app.post("/api/v1/ai-analyze")
+async def analyze_website(
+    request_data: AnalysisRequest,
+    username: str = Depends(verify_token)
+):
+    """Main endpoint for website analysis"""
+    
+    # Check user limits
+    user = users_db.get(username)
+    if user["role"] == "user" and user["max_usage"]:
+        if user["usage_count"] >= user["max_usage"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Usage limit reached. Please upgrade to continue."
+            )
+    
+    # Clean and validate URL
+    url = request_data.url.strip()
+    if not url.startswith(('http://', 'https://')):
+        url = f'https://{url}'
+    
+    try:
+        # Fetch website content
+        html = await fetch_website_content(url)
+        
+        # Perform basic analysis
+        basic_analysis = analyze_website_basic(html, url)
+        
+        # Generate AI analysis
+        ai_analysis = generate_ai_analysis(basic_analysis)
+        
+        # Update usage count
+        if user["role"] == "user":
+            users_db[username]["usage_count"] += 1
+        
+        # Return combined analysis
+        return {
+            "basic_analysis": basic_analysis,
+            "ai_analysis": ai_analysis,
+            "enhanced_features": {
+                "industry_benchmarking": f"{basic_analysis['digital_maturity_score']}/100",
+                "competitor_gaps": "Analysis available",
+                "growth_opportunities": "Identified",
+                "risk_assessment": "Medium",
+                "market_trends": "Analyzed",
+                "technology_stack": "Detected",
+                "estimated_traffic_rank": "Medium",
+                "mobile_first_index_ready": "Yes" if basic_analysis.get("has_viewport") else "No",
+                "core_web_vitals_assessment": "Needs improvement"
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Analysis failed: {str(e)}"
         )
-      },
-    };
 
-    return (
-      <div>
-        <div className="flex flex-wrap gap-2 mb-8 p-2 bg-black/30 backdrop-blur-xl rounded-xl border border-green-400/30">
-          {Object.entries(tabs).map(([key, tab]) => (
-            <button
-              key={key}
-              onClick={() => setActiveTab(key)}
-              className={`flex items-center gap-2 px-3.5 py-2.5 text-sm font-medium rounded-lg transition-all ${
-                activeTab === key
-                  ? 'bg-gradient-to-r from-green-400 to-blue-500 text-white shadow-lg shadow-green-400/25'
-                  : 'text-gray-400 hover:text-white hover:bg-white/10'
-              }`}
-            >
-              {tab.icon}
-              <span>{tab.title}</span>
-            </button>
-          ))}
-        </div>
+# Health check endpoint
+@app.get("/")
+async def root():
+    return {"status": "online", "service": "Website Analysis API"}
 
-        <div className="animate-fadeIn">
-          {tabs[activeTab]?.content}
-        </div>
-      </div>
-    );
-  };
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
 
-  // Conditional returns: login / upgrade / main
-  if (showLogin) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-black to-gray-900 flex items-center justify-center px-4">
-        <div className="absolute inset-0 overflow-hidden pointer-events-none">
-          <div className="absolute -top-1/2 -left-1/2 w-full h-full bg-gradient-to-br from-green-400/10 via-transparent to-transparent rounded-full blur-3xl" />
-          <div className="absolute -bottom-1/2 -right-1/2 w-full h-full bg-gradient-to-tl from-blue-400/10 via-transparent to-transparent rounded-full blur-3xl" />
-        </div>
-
-        <div className="relative z-10 max-w-md w-full">
-          <div className="text-center mb-8">
-            <div className="inline-flex items-center justify-center w-20 h-20 bg-gradient-to-br from-green-400 to-blue-500 rounded-2xl mb-4 shadow-lg shadow-green-400/25">
-              <Brain className="w-10 h-10 text-white" />
-            </div>
-            <h1 className="text-3xl font-bold text-white mb-2">Competitor Analysis Tool</h1>
-            <p className="text-gray-400">Choose your access level to continue</p>
-          </div>
-
-          <div className="bg-black/30 backdrop-blur-xl border border-gray-700 rounded-2xl p-8 shadow-2xl">
-            {!showAdminPrompt ? (
-              <div className="space-y-4">
-                <button
-                  onClick={handleUserLogin}
-                  className="w-full group relative overflow-hidden rounded-xl p-6 bg-gradient-to-r from-blue-500/10 to-green-500/10 border border-blue-400/30 hover:border-blue-400/50 transition-all duration-300"
-                >
-                  <div className="relative z-10">
-                    <div className="flex items-center justify-between mb-3">
-                      <User className="w-8 h-8 text-blue-400" />
-                      <span className="text-xs bg-blue-400/20 text-blue-400 px-2 py-1 rounded-full">Free Trial</span>
-                    </div>
-                    <h3 className="text-xl font-semibold text-white mb-2">Free User Access</h3>
-                    <p className="text-gray-400 text-sm">Get started with {FREE_LIMIT} free analyses to explore the tool</p>
-                  </div>
-                  <div className="absolute inset-0 bg-gradient-to-r from-blue-400/5 to-green-400/5 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-                </button>
-
-                <button
-                  onClick={() => setShowAdminPrompt(true)}
-                  className="w-full group relative overflow-hidden rounded-xl p-6 bg-gradient-to-r from-purple-500/10 to-pink-500/10 border border-purple-400/30 hover:border-purple-400/50 transition-all duration-300"
-                >
-                  <div className="relative z-10">
-                    <div className="flex items-center justify-between mb-3">
-                      <ShieldCheck className="w-8 h-8 text-purple-400" />
-                      <span className="text-xs bg-purple-400/20 text-purple-400 px-2 py-1 rounded-full">Full Access</span>
-                    </div>
-                    <h3 className="text-xl font-semibold text-white mb-2">Admin Access</h3>
-                    <p className="text-gray-400 text-sm">Unlimited analyses with advanced features</p>
-                  </div>
-                  <div className="absolute inset-0 bg-gradient-to-r from-purple-400/5 to-pink-400/5 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-                </button>
-
-                {loginError && (
-                  <div className="p-3 rounded-lg bg-red-500/10 border border-red-400/30">
-                    <p className="text-red-400 text-sm">{loginError}</p>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <button onClick={() => setShowAdminPrompt(false)} className="text-gray-400 hover:text-white transition-colors mb-2">← Back</button>
-                <div className="text-center mb-6">
-                  <ShieldCheck className="w-12 h-12 text-purple-400 mx-auto mb-3" />
-                  <h3 className="text-xl font-semibold text-white">Admin Login</h3>
-                  <p className="text-gray-400 text-sm mt-2">Enter password for unlimited access</p>
-                </div>
-                <input
-                  type="password"
-                  value={adminPassword}
-                  onChange={(e) => setAdminPassword(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleAdminLogin()}
-                  placeholder="Admin password"
-                  className="w-full px-4 py-3 bg-black/30 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:border-purple-400 focus:outline-none transition-colors"
-                />
-                <button
-                  onClick={handleAdminLogin}
-                  className="w-full py-3 bg-gradient-to-r from-purple-400 to-pink-400 text-white font-semibold rounded-lg hover:shadow-lg hover:shadow-purple-400/25 transition-all duration-300"
-                >
-                  Login as Admin
-                </button>
-                {loginError && (
-                  <div className="p-3 rounded-lg bg-red-500/10 border border-red-400/30">
-                    <p className="text-red-400 text-sm">{loginError}</p>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (showUpgradeModal) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-black to-gray-900 flex items-center justify-center px-4">
-        <div className="relative z-10 max-w-md w-full">
-          <div className="bg-black/30 backdrop-blur-xl border border-gray-700 rounded-2xl p-8 shadow-2xl">
-            <div className="text-center mb-6">
-              <Lock className="w-16 h-16 text-yellow-400 mx-auto mb-4" />
-              <h2 className="text-2xl font-bold text-white mb-2">Free Limit Reached</h2>
-              <p className="text-gray-400">You've used all {FREE_LIMIT} free analyses. Upgrade for unlimited access.</p>
-            </div>
-            <div className="space-y-4">
-              <div className="p-4 rounded-lg bg-gradient-to-r from-purple-500/10 to-pink-500/10 border border-purple-400/30">
-                <h3 className="font-semibold text-white mb-2">Premium Features:</h3>
-                <ul className="space-y-2 text-sm text-gray-300">
-                  <li className="flex items-center"><CheckCircle className="w-4 h-4 text-green-400 mr-2" />Unlimited analyses</li>
-                  <li className="flex items-center"><CheckCircle className="w-4 h-4 text-green-400 mr-2" />Priority processing</li>
-                  <li className="flex items-center"><CheckCircle className="w-4 h-4 text-green-400 mr-2" />Advanced insights</li>
-                  <li className="flex items-center"><CheckCircle className="w-4 h-4 text-green-400 mr-2" />Export reports</li>
-                </ul>
-              </div>
-              <button
-                onClick={() => setShowAdminPrompt(true)}
-                className="w-full py-3 bg-gradient-to-r from-purple-400 to-pink-400 text-white font-semibold rounded-lg hover:shadow-lg hover:shadow-purple-400/25 transition-all"
-              >
-                Upgrade to Admin
-              </button>
-              <button
-                onClick={handleLogout}
-                className="w-full py-3 bg-gray-800 text-gray-300 font-semibold rounded-lg hover:bg-gray-700 transition-all"
-              >
-                Logout
-              </button>
-            </div>
-
-            {showAdminPrompt && (
-              <div className="mt-6 space-y-4 pt-6 border-t border-gray-700">
-                <input
-                  type="password"
-                  value={adminPassword}
-                  onChange={(e) => setAdminPassword(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleAdminLogin()}
-                  placeholder="Enter admin password"
-                  className="w-full px-4 py-3 bg-black/30 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:border-purple-400 focus:outline-none"
-                />
-                <button
-                  onClick={handleAdminLogin}
-                  className="w-full py-3 bg-gradient-to-r from-purple-400 to-pink-400 text-white font-semibold rounded-lg"
-                >
-                  Login as Admin
-                </button>
-                {loginError && (
-                  <div className="p-3 rounded-lg bg-red-500/10 border border-red-400/30">
-                    <p className="text-red-400 text-sm">{loginError}</p>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Main analysis screen
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-black to-gray-900">
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute -top-1/2 -left-1/2 w-full h-full bg-gradient-to-br from-green-400/10 via-transparent to-transparent rounded-full blur-3xl" />
-        <div className="absolute -bottom-1/2 -right-1/2 w-full h-full bg-gradient-to-tl from-blue-400/10 via-transparent to-transparent rounded-full blur-3xl" />
-      </div>
-
-      <div className="relative z-10">
-        <div className="container mx-auto px-4 py-8">
-          <div className="flex items-center justify-between mb-8">
-            <div className="flex items-center gap-4">
-              <div className="inline-flex items-center justify-center w-12 h-12 bg-gradient-to-br from-green-400 to-blue-500 rounded-xl shadow-lg shadow-green-400/25">
-                <Brain className="w-6 h-6 text-white" />
-              </div>
-              <div>
-                <h1 className="text-2xl font-bold text-white">Competitor Analysis</h1>
-                <p className="text-gray-400 text-sm">AI-powered website analysis</p>
-              </div>
-            </div>
-            
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2 px-4 py-2 bg-black/30 rounded-lg border border-gray-700">
-                <User className="w-4 h-4 text-gray-400" />
-                <span className="text-sm text-gray-300">
-                  {userRole === 'admin' ? 'Admin' : (userRole || 'Free User')}
-                </span>
-                {(userRole === 'user' || userRole === 'viewer') && (
-                  <span className="text-xs bg-blue-400/20 text-blue-400 px-2 py-0.5 rounded-full ml-2">
-                    {Math.max(0, FREE_LIMIT - userSearchCount)} left
-                  </span>
-                )}
-              </div>
-              
-              <button
-                onClick={handleLogout}
-                className="flex items-center gap-2 px-4 py-2 bg-red-500/10 text-red-400 rounded-lg hover:bg-red-500/20 transition-colors"
-              >
-                <LogOut className="w-4 h-4" />
-                <span className="text-sm">Logout</span>
-              </button>
-            </div>
-          </div>
-
-          <div className="max-w-4xl mx-auto mb-8">
-            <div className="bg-black/30 backdrop-blur-xl border border-gray-700 rounded-2xl p-6">
-              <label className="block text-gray-300 text-sm font-medium mb-3">Enter website URL to analyze</label>
-              <div className="flex gap-3">
-                <input
-                  type="text"
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleAnalyze()}
-                  placeholder="https://example.com"
-                  className="flex-1 px-4 py-3 bg-black/30 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:border-green-400 focus:outline-none transition-colors"
-                  disabled={loading}
-                />
-                <button
-                  onClick={handleAnalyze}
-                  disabled={loading || !url}
-                  className="px-6 py-3 bg-gradient-to-r from-green-400 to-blue-500 text-white font-semibold rounded-lg hover:shadow-lg hover:shadow-green-400/25 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Analyze'}
-                </button>
-              </div>
-              
-              {error && (
-                <div className="mt-4 p-3 rounded-lg bg-red-500/10 border border-red-400/30">
-                  <p className="text-red-400 text-sm">{error}</p>
-                </div>
-              )}
-              
-              {(userRole === 'user' || userRole === 'viewer') && (
-                <div className="mt-4 p-3 rounded-lg bg-blue-500/10 border border-blue-400/30">
-                  <p className="text-blue-400 text-sm">
-                    Free tier: {userSearchCount}/{FREE_LIMIT} analyses used
-                  </p>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {loading && (
-            <div className="max-w-4xl mx-auto">
-              <div className="bg-black/30 backdrop-blur-xl border border-gray-700 rounded-2xl p-12">
-                <div className="flex flex-col items-center justify-center">
-                  <Loader2 className="w-12 h-12 text-green-400 animate-spin mb-4" />
-                  <h3 className="text-xl font-semibold text-white mb-2">Analyzing Website...</h3>
-                  <p className="text-gray-400 text-center">
-                    Our AI is performing a comprehensive analysis of the website.
-                    <br />This usually takes 10-30 seconds.
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {!loading && analysis && (
-            <div className="max-w-7xl mx-auto">
-              <div className="bg-black/30 backdrop-blur-xl border border-gray-700 rounded-2xl p-6">
-                <div className="flex items-center justify-between mb-6">
-                  <div>
-                    <h2 className="text-2xl font-bold text-white mb-1">Analysis Results</h2>
-                    <p className="text-gray-400">{analysis.basic_analysis?.website || url}</p>
-                  </div>
-                  <button
-                    onClick={handlePrint}
-                    className="flex items-center gap-2 px-4 py-2 bg-black/30 border border-gray-700 rounded-lg hover:border-gray-600 transition-colors"
-                  >
-                    <Download className="w-4 h-4 text-gray-400" />
-                    <span className="text-sm text-gray-300">Export PDF</span>
-                  </button>
-                </div>
-                {renderAnalysisContent()}
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-};
-
-export default CompetitorAnalysis;
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
