@@ -1,12 +1,11 @@
-# app.py — Part 1/6
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Brandista Competitive Intelligence API
-Version: 5.2.0 - English-only, No PDF
+Brandista Competitive Intelligence API - Complete Version
+Version: 5.3.0 - With Authentication
 Author: Brandista Team
 Date: 2025
-Description: Advanced website analysis with fair 0–100 scoring system (English-first)
+Description: Advanced website analysis with authentication and fair 0–100 scoring system
 """
 
 # ============================================================================
@@ -19,17 +18,20 @@ import re
 import hashlib
 import logging
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 from urllib.parse import urlparse
 
 # Third-party imports
 import httpx
 from bs4 import BeautifulSoup
+import jwt
+from passlib.context import CryptContext
 
 # FastAPI imports
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 
 # OpenAI (optional)
@@ -44,12 +46,22 @@ except Exception:
 # CONFIGURATION AND CONSTANTS
 # ============================================================================
 
-APP_VERSION = "5.2.0"
+APP_VERSION = "5.3.0"
 APP_NAME = "Brandista Competitive Intelligence API"
 APP_DESCRIPTION = """
-Complete scoring system with enhanced features — fair and accurate website analysis
-with 0–100 scoring across all metrics. No arbitrary baselines. English-only output.
+Complete scoring system with authentication and enhanced features — fair and accurate 
+website analysis with 0–100 scoring across all metrics. English-only output.
 """
+
+# Load environment variables
+from dotenv import load_dotenv
+load_dotenv()
+
+# Auth configuration
+SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-please-change-in-production-" + os.urandom(16).hex())
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 1440  # 24 hours
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 
 # Cache settings
 CACHE_TTL = 3600  # 1 hour
@@ -102,14 +114,156 @@ app = FastAPI(
     openapi_url="/openapi.json"
 )
 
+# CORS Configuration - Important for frontend communication
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten in production
+    allow_origins=["*"],  # In production, specify exact origins
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"]
 )
+
+# ============================================================================
+# AUTHENTICATION
+# ============================================================================
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+security = HTTPBearer()
+
+# Simple user database (in production, use real database)
+USERS_DB = {
+    "user": {
+        "username": "user",
+        "hashed_password": pwd_context.hash("user123"),
+        "role": "user",
+        "search_limit": 3
+    },
+    "admin": {
+        "username": "admin",
+        "hashed_password": pwd_context.hash(ADMIN_PASSWORD),
+        "role": "admin",
+        "search_limit": -1  # Unlimited
+    }
+}
+
+# ============================================================================
+# AUTH MODELS
+# ============================================================================
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    role: str
+
+class UserInfo(BaseModel):
+    username: str
+    role: str
+
+# ============================================================================
+# AUTH FUNCTIONS
+# ============================================================================
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify a plain password against a hashed password."""
+    return pwd_context.verify(plain_password, hashed_password)
+
+def create_access_token(data: dict) -> str:
+    """Create a new JWT access token."""
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+def verify_token(token: str) -> Optional[dict]:
+    """Verify and decode a JWT token."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload
+    except jwt.ExpiredSignatureError:
+        logger.warning("Token expired")
+        return None
+    except jwt.JWTError as e:
+        logger.warning(f"JWT error: {e}")
+        return None
+
+async def get_current_user(authorization: Optional[str] = Header(None)) -> Optional[UserInfo]:
+    """Get the current user from the authorization header."""
+    if not authorization:
+        return None
+    
+    if not authorization.startswith("Bearer "):
+        return None
+    
+    token = authorization.split(" ")[1]
+    payload = verify_token(token)
+    
+    if not payload:
+        return None
+    
+    username = payload.get("sub")
+    role = payload.get("role", "user")
+    
+    if not username:
+        return None
+    
+    return UserInfo(username=username, role=role)
+
+async def require_user(user: Optional[UserInfo] = Depends(get_current_user)) -> UserInfo:
+    """Require an authenticated user."""
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return user
+
+async def require_admin(user: UserInfo = Depends(require_user)) -> UserInfo:
+    """Require an admin user."""
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return user
+
+# ============================================================================
+# AUTH ENDPOINTS
+# ============================================================================
+
+@app.post("/auth/login", response_model=TokenResponse)
+async def login(request: LoginRequest):
+    """Authenticate user and return access token."""
+    user = USERS_DB.get(request.username)
+    
+    if not user:
+        logger.warning(f"Login attempt for non-existent user: {request.username}")
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    if not verify_password(request.password, user["hashed_password"]):
+        logger.warning(f"Failed login attempt for user: {request.username}")
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    access_token = create_access_token(
+        data={"sub": request.username, "role": user["role"]}
+    )
+    
+    logger.info(f"Successful login for user: {request.username}")
+    
+    return TokenResponse(
+        access_token=access_token,
+        role=user["role"]
+    )
+
+@app.get("/auth/me", response_model=UserInfo)
+async def get_me(user: UserInfo = Depends(require_user)):
+    """Get current user information."""
+    return user
+
+@app.post("/auth/logout")
+async def logout():
+    """Logout endpoint (client should remove token)."""
+    # In a real application, you might want to blacklist the token here
+    return {"message": "Logged out successfully"}
 
 # ============================================================================
 # GLOBALS
@@ -127,8 +281,174 @@ if OPENAI_AVAILABLE and os.getenv("OPENAI_API_KEY"):
     except Exception as e:
         logger.warning(f"OpenAI init failed: {e}")
         openai_client = None
+else:
+    logger.info("OpenAI not configured - will use fallback AI insights")
 
-analysis_cache: Dict[str, Dict[str, Any]] = {}# app.py — Part 2/6
+# Analysis cache
+analysis_cache: Dict[str, Dict[str, Any]] = {}
+
+# User search counts (in production, use database)
+user_search_counts: Dict[str, int] = {}# ============================================================================
+# MODELS (kopioi tämä edellisen osan perään)
+# ============================================================================
+
+class CompetitorAnalysisRequest(BaseModel):
+    url: str = Field(..., description="Website URL to analyze", example="https://example.com")
+    company_name: Optional[str] = Field(None, description="Company name (optional)", max_length=100)
+    analysis_type: str = Field("comprehensive", description="basic | comprehensive | ai_enhanced")
+    language: str = Field("en", description="Must be 'en' (English-only backend)", pattern="^(en)$")
+    include_ai: bool = Field(True, description="Include AI-powered insights")
+    include_social: bool = Field(True, description="Include social media analysis")
+
+class ScoreBreakdown(BaseModel):
+    security: int = Field(0, ge=0, le=15)
+    seo_basics: int = Field(0, ge=0, le=20)
+    content: int = Field(0, ge=0, le=20)
+    technical: int = Field(0, ge=0, le=15)
+    mobile: int = Field(0, ge=0, le=15)
+    social: int = Field(0, ge=0, le=10)
+    performance: int = Field(0, ge=0, le=5)
+
+class BasicAnalysis(BaseModel):
+    company: str
+    website: str
+    industry: Optional[str] = None
+    digital_maturity_score: int = Field(..., ge=0, le=100)
+    social_platforms: int = Field(0, ge=0)
+    technical_score: int = Field(0, ge=0, le=100)
+    content_score: int = Field(0, ge=0, le=100)
+    seo_score: int = Field(0, ge=0, le=100)
+    score_breakdown: Optional[ScoreBreakdown] = None
+    analysis_timestamp: datetime = Field(default_factory=datetime.now)
+
+class TechnicalAudit(BaseModel):
+    has_ssl: bool = False
+    has_mobile_optimization: bool = False
+    page_speed_score: int = Field(0, ge=0, le=100)
+    has_analytics: bool = False
+    has_sitemap: bool = False
+    has_robots_txt: bool = False
+    meta_tags_score: int = Field(0, ge=0, le=100)
+    overall_technical_score: int = Field(0, ge=0, le=100)
+    security_headers: Dict[str, bool] = {}
+    performance_indicators: List[str] = []
+
+class ContentAnalysis(BaseModel):
+    word_count: int = Field(0, ge=0)
+    readability_score: int = Field(0, ge=0, le=100)
+    keyword_density: Dict[str, float] = {}
+    content_freshness: str = Field("unknown", pattern="^(very_fresh|fresh|moderate|dated|unknown)$")
+    has_blog: bool = False
+    content_quality_score: int = Field(0, ge=0, le=100)
+    media_types: List[str] = []
+    interactive_elements: List[str] = []
+
+class SocialMediaAnalysis(BaseModel):
+    platforms: List[str] = []
+    total_followers: int = Field(0, ge=0)
+    engagement_rate: float = Field(0.0, ge=0.0, le=100.0)
+    posting_frequency: str = "unknown"
+    social_score: int = Field(0, ge=0, le=100)
+    has_sharing_buttons: bool = False
+    open_graph_tags: int = 0
+    twitter_cards: bool = False
+
+class UXAnalysis(BaseModel):
+    navigation_score: int = Field(0, ge=0, le=100)
+    visual_design_score: int = Field(0, ge=0, le=100)
+    accessibility_score: int = Field(0, ge=0, le=100)
+    mobile_ux_score: int = Field(0, ge=0, le=100)
+    overall_ux_score: int = Field(0, ge=0, le=100)
+    accessibility_issues: List[str] = []
+    navigation_elements: List[str] = []
+    design_frameworks: List[str] = []
+
+class CompetitiveAnalysis(BaseModel):
+    market_position: str = Field("unknown", description="Market position assessment")
+    competitive_advantages: List[str] = []
+    competitive_threats: List[str] = []
+    market_share_estimate: str = "Data not available"
+    competitive_score: int = Field(0, ge=0, le=100)
+    industry_comparison: Dict[str, Any] = {}
+
+class AIInsight(BaseModel):
+    category: str
+    insight: str
+    confidence: float = Field(0.0, ge=0.0, le=1.0)
+    priority: str = Field("medium", pattern="^(critical|high|medium|low)$")
+
+class AIAnalysis(BaseModel):
+    summary: str = ""
+    strengths: List[str] = []
+    weaknesses: List[str] = []
+    opportunities: List[str] = []
+    threats: List[str] = []
+    recommendations: List[str] = []
+    confidence_score: int = Field(0, ge=0, le=100)
+    sentiment_score: float = Field(0.0, ge=-1.0, le=1.0)
+    key_metrics: Dict[str, Any] = {}
+    action_priority: List[AIInsight] = []
+
+class SmartAction(BaseModel):
+    title: str
+    description: str
+    priority: str = Field(..., pattern="^(critical|high|medium|low)$")
+    effort: str = Field(..., pattern="^(low|medium|high)$")
+    impact: str = Field(..., pattern="^(low|medium|high|critical)$")
+    estimated_score_increase: int = Field(0, ge=0, le=100)
+    category: str = ""
+    estimated_time: str = ""
+
+class SmartActions(BaseModel):
+    actions: List[SmartAction] = []
+    priority_matrix: Dict[str, List[str]] = {}
+    total_potential_score_increase: int = 0
+    implementation_roadmap: List[Dict[str, Any]] = []
+
+class SmartScores(BaseModel):
+    overall: int = Field(0, ge=0, le=100)
+    technical: int = Field(0, ge=0, le=100)
+    content: int = Field(0, ge=0, le=100)
+    social: int = Field(0, ge=0, le=100)
+    ux: int = Field(0, ge=0, le=100)
+    competitive: int = Field(0, ge=0, le=100)
+    trend: str = "stable"
+    percentile: int = Field(0, ge=0, le=100)
+
+class DetailedAnalysis(BaseModel):
+    social_media: SocialMediaAnalysis
+    technical_audit: TechnicalAudit
+    content_analysis: ContentAnalysis
+    ux_analysis: UXAnalysis
+    competitive_analysis: CompetitiveAnalysis
+
+    class Config:
+        json_encoders = {datetime: lambda v: v.isoformat()}
+
+class EnhancedFeatures(BaseModel):
+    industry_benchmarking: Dict[str, Any] = {}
+    competitor_gaps: Dict[str, Any] = {}
+    growth_opportunities: Dict[str, Any] = {}
+    risk_assessment: Dict[str, Any] = {}
+    market_trends: Dict[str, Any] = {}
+    technology_stack: Dict[str, Any] = {}
+    estimated_traffic_rank: Dict[str, Any] = {}
+    mobile_first_index_ready: Dict[str, Any] = {}
+    core_web_vitals_assessment: Dict[str, Any] = {}
+
+class AnalysisResponse(BaseModel):
+    success: bool
+    company_name: str
+    analysis_date: str
+    basic_analysis: BasicAnalysis
+    ai_analysis: AIAnalysis
+    detailed_analysis: DetailedAnalysis
+    smart: Dict[str, Any] = {}
+    enhanced_features: Optional[EnhancedFeatures] = None
+    metadata: Dict[str, Any] = {}
+
+    class Config:
+        json_encoders = {datetime: lambda v: v.isoformat()}
 
 # ============================================================================
 # UTILS
@@ -149,14 +469,11 @@ def ensure_integer_scores(data: Any) -> Any:
                         ensure_integer_scores(item)
     return data
 
-
 def get_cache_key(url: str, analysis_type: str = "basic") -> str:
     return hashlib.md5(f"{url}_{analysis_type}_{APP_VERSION}".encode()).hexdigest()
 
-
 def is_cache_valid(ts: datetime) -> bool:
     return (datetime.now() - ts).total_seconds() < CACHE_TTL
-
 
 async def fetch_url(url: str, timeout: int = REQUEST_TIMEOUT, retries: int = MAX_RETRIES) -> Optional[httpx.Response]:
     headers = {'User-Agent': USER_AGENT}
@@ -182,196 +499,15 @@ async def fetch_url(url: str, timeout: int = REQUEST_TIMEOUT, retries: int = MAX
             await asyncio.sleep(1 * (attempt + 1))
     return None
 
-
 def clean_url(url: str) -> str:
     url = url.strip()
     if not url.startswith(("http://", "https://")):
         url = f"https://{url}"
     return url.rstrip('/')
 
-
 def get_domain_from_url(url: str) -> str:
     p = urlparse(url)
     return p.netloc or p.path.split('/')[0]
-
-# ============================================================================
-# MODELS
-# ============================================================================
-
-class CompetitorAnalysisRequest(BaseModel):
-    url: str = Field(..., description="Website URL to analyze", example="https://example.com")
-    company_name: Optional[str] = Field(None, description="Company name (optional)", max_length=100)
-    analysis_type: str = Field("comprehensive", description="basic | comprehensive | ai_enhanced")
-    # English-only backend. Keep param for future i18n, but validate 'en' only.
-    language: str = Field("en", description="Must be 'en' (English-only backend)", pattern="^(en)$")
-    include_ai: bool = Field(True, description="Include AI-powered insights")
-    include_social: bool = Field(True, description="Include social media analysis")
-
-
-class ScoreBreakdown(BaseModel):
-    security: int = Field(0, ge=0, le=15)
-    seo_basics: int = Field(0, ge=0, le=20)
-    content: int = Field(0, ge=0, le=20)
-    technical: int = Field(0, ge=0, le=15)
-    mobile: int = Field(0, ge=0, le=15)
-    social: int = Field(0, ge=0, le=10)
-    performance: int = Field(0, ge=0, le=5)
-
-
-class BasicAnalysis(BaseModel):
-    company: str
-    website: str
-    industry: Optional[str] = None
-    digital_maturity_score: int = Field(..., ge=0, le=100)
-    social_platforms: int = Field(0, ge=0)
-    technical_score: int = Field(0, ge=0, le=100)
-    content_score: int = Field(0, ge=0, le=100)
-    seo_score: int = Field(0, ge=0, le=100)
-    score_breakdown: Optional[ScoreBreakdown] = None
-    analysis_timestamp: datetime = Field(default_factory=datetime.now)
-
-
-class TechnicalAudit(BaseModel):
-    has_ssl: bool = False
-    has_mobile_optimization: bool = False
-    page_speed_score: int = Field(0, ge=0, le=100)
-    has_analytics: bool = False
-    has_sitemap: bool = False
-    has_robots_txt: bool = False
-    meta_tags_score: int = Field(0, ge=0, le=100)
-    overall_technical_score: int = Field(0, ge=0, le=100)
-    security_headers: Dict[str, bool] = {}
-    performance_indicators: List[str] = []
-
-
-class ContentAnalysis(BaseModel):
-    word_count: int = Field(0, ge=0)
-    readability_score: int = Field(0, ge=0, le=100)
-    keyword_density: Dict[str, float] = {}
-    content_freshness: str = Field("unknown", pattern="^(very_fresh|fresh|moderate|dated|unknown)$")
-    has_blog: bool = False
-    content_quality_score: int = Field(0, ge=0, le=100)
-    media_types: List[str] = []
-    interactive_elements: List[str] = []
-
-
-class SocialMediaAnalysis(BaseModel):
-    platforms: List[str] = []
-    total_followers: int = Field(0, ge=0)
-    engagement_rate: float = Field(0.0, ge=0.0, le=100.0)
-    posting_frequency: str = "unknown"
-    social_score: int = Field(0, ge=0, le=100)
-    has_sharing_buttons: bool = False
-    open_graph_tags: int = 0
-    twitter_cards: bool = False
-
-
-class UXAnalysis(BaseModel):
-    navigation_score: int = Field(0, ge=0, le=100)
-    visual_design_score: int = Field(0, ge=0, le=100)
-    accessibility_score: int = Field(0, ge=0, le=100)
-    mobile_ux_score: int = Field(0, ge=0, le=100)
-    overall_ux_score: int = Field(0, ge=0, le=100)
-    accessibility_issues: List[str] = []
-    navigation_elements: List[str] = []
-    design_frameworks: List[str] = []
-
-
-class CompetitiveAnalysis(BaseModel):
-    market_position: str = Field("unknown", description="Market position assessment")
-    competitive_advantages: List[str] = []
-    competitive_threats: List[str] = []
-    market_share_estimate: str = "Data not available"
-    competitive_score: int = Field(0, ge=0, le=100)
-    industry_comparison: Dict[str, Any] = {}
-
-
-class AIInsight(BaseModel):
-    category: str
-    insight: str
-    confidence: float = Field(0.0, ge=0.0, le=1.0)
-    priority: str = Field("medium", pattern="^(critical|high|medium|low)$")
-
-
-class AIAnalysis(BaseModel):
-    # English fields only
-    summary: str = ""
-    strengths: List[str] = []
-    weaknesses: List[str] = []
-    opportunities: List[str] = []
-    threats: List[str] = []
-    recommendations: List[str] = []
-    confidence_score: int = Field(0, ge=0, le=100)
-    sentiment_score: float = Field(0.0, ge=-1.0, le=1.0)
-    key_metrics: Dict[str, Any] = {}
-    action_priority: List[AIInsight] = []
-
-
-class SmartAction(BaseModel):
-    title: str
-    description: str
-    priority: str = Field(..., pattern="^(critical|high|medium|low)$")
-    effort: str = Field(..., pattern="^(low|medium|high)$")
-    impact: str = Field(..., pattern="^(low|medium|high|critical)$")
-    estimated_score_increase: int = Field(0, ge=0, le=100)
-    category: str = ""
-    estimated_time: str = ""
-
-
-class SmartActions(BaseModel):
-    actions: List[SmartAction] = []
-    priority_matrix: Dict[str, List[str]] = {}
-    total_potential_score_increase: int = 0
-    implementation_roadmap: List[Dict[str, Any]] = []
-
-
-class SmartScores(BaseModel):
-    overall: int = Field(0, ge=0, le=100)
-    technical: int = Field(0, ge=0, le=100)
-    content: int = Field(0, ge=0, le=100)
-    social: int = Field(0, ge=0, le=100)
-    ux: int = Field(0, ge=0, le=100)
-    competitive: int = Field(0, ge=0, le=100)
-    trend: str = "stable"  # declining | stable | improving
-    percentile: int = Field(0, ge=0, le=100)
-
-
-class DetailedAnalysis(BaseModel):
-    social_media: SocialMediaAnalysis
-    technical_audit: TechnicalAudit
-    content_analysis: ContentAnalysis
-    ux_analysis: UXAnalysis
-    competitive_analysis: CompetitiveAnalysis
-
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}
-
-
-class EnhancedFeatures(BaseModel):
-    industry_benchmarking: Dict[str, Any] = {}
-    competitor_gaps: Dict[str, Any] = {}
-    growth_opportunities: Dict[str, Any] = {}
-    risk_assessment: Dict[str, Any] = {}
-    market_trends: Dict[str, Any] = {}
-    technology_stack: Dict[str, Any] = {}
-    estimated_traffic_rank: Dict[str, Any] = {}
-    mobile_first_index_ready: Dict[str, Any] = {}
-    core_web_vitals_assessment: Dict[str, Any] = {}
-
-
-class AnalysisResponse(BaseModel):
-    success: bool
-    company_name: str
-    analysis_date: str
-    basic_analysis: BasicAnalysis
-    ai_analysis: AIAnalysis
-    detailed_analysis: DetailedAnalysis
-    smart: Dict[str, Any] = {}
-    enhanced_features: Optional[EnhancedFeatures] = None
-    metadata: Dict[str, Any] = {}
-
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}# app.py — Part 3/6
 
 # ============================================================================
 # HELPERS (analysis)
@@ -385,13 +521,11 @@ def check_security_headers(html: str) -> Dict[str, bool]:
         'strict_transport': 'strict-transport-security' in hl
     }
 
-
 def check_clean_urls(url: str) -> bool:
     if '?' in url and '=' in url: return False
     if any(ext in url for ext in ['.php', '.asp', '.jsp']): return False
     if '__' in url or url.count('_') > 3: return False
     return True
-
 
 def extract_clean_text(soup: BeautifulSoup) -> str:
     for e in soup(['script', 'style', 'noscript']):
@@ -400,7 +534,6 @@ def extract_clean_text(soup: BeautifulSoup) -> str:
     lines = (line.strip() for line in text.splitlines())
     chunks = (p.strip() for line in lines for p in line.split("  "))
     return ' '.join(chunk for chunk in chunks if chunk)
-
 
 def check_content_freshness(soup: BeautifulSoup, html: str) -> int:
     score = 0
@@ -415,7 +548,6 @@ def check_content_freshness(soup: BeautifulSoup, html: str) -> int:
     mod = soup.find('meta', attrs={'property': 'article:modified_time'}) or soup.find('meta', attrs={'name': 'last-modified'})
     if mod: score += 2
     return min(5, score)
-
 
 def analyze_image_optimization(soup: BeautifulSoup) -> Dict[str, Any]:
     imgs = soup.find_all('img')
@@ -433,7 +565,6 @@ def analyze_image_optimization(soup: BeautifulSoup) -> Dict[str, Any]:
     ratio = optimized / len(imgs)
     return {'score': int(ratio * 5), 'total_images': len(imgs), 'optimized_images': optimized, 'optimization_ratio': ratio}
 
-
 def analyze_structured_data(soup: BeautifulSoup, html: str) -> Dict[str, Any]:
     score = 0
     types = []
@@ -444,7 +575,6 @@ def analyze_structured_data(soup: BeautifulSoup, html: str) -> Dict[str, Any]:
     if soup.find_all(attrs={'typeof': True}): score += 1; types.append('RDFa')
     if len(soup.find_all('meta', property=re.compile('^og:'))) >= 4: score += 1; types.append('Open Graph')
     return {'score': min(5, score), 'types': types, 'has_structured_data': bool(types)}
-
 
 def detect_analytics_tools(html: str) -> Dict[str, Any]:
     tools = []
@@ -463,17 +593,14 @@ def detect_analytics_tools(html: str) -> Dict[str, Any]:
             tools.append(tool)
     return {'has_analytics': bool(tools), 'tools': tools, 'count': len(tools)}
 
-
 def check_sitemap_indicators(soup: BeautifulSoup) -> bool:
     if soup.find('link', {'rel': 'sitemap'}): return True
     for a in soup.find_all('a', href=True):
         if 'sitemap' in a['href'].lower(): return True
     return False
 
-
 def check_robots_indicators(html: str) -> bool:
     return 'robots.txt' in html.lower()
-
 
 def analyze_performance_indicators(soup: BeautifulSoup, html: str) -> Dict[str, Any]:
     score = 0
@@ -485,7 +612,6 @@ def analyze_performance_indicators(soup: BeautifulSoup, html: str) -> Dict[str, 
     if soup.find('link', {'rel': 'preconnect'}): score += 1; indicators.setdefault('hints', []).append('preconnect')
     if soup.find('link', {'rel': re.compile('^pre(load|fetch)$')}): score += 1; indicators.setdefault('hints', []).append('prefetch/preload')
     return {'score': min(5, score), 'indicators': indicators.get('hints', [])}
-
 
 def check_responsive_design(html: str) -> Dict[str, Any]:
     hl = html.lower()
@@ -502,7 +628,6 @@ def check_responsive_design(html: str) -> Dict[str, Any]:
     if 'display: grid' in hl or 'display:grid' in hl: score += 1; indicators.append('css grid')
     return {'score': min(7, score), 'indicators': indicators}
 
-
 def estimate_page_speed(soup: BeautifulSoup, html: str) -> int:
     score = 0
     size = len(html)
@@ -518,7 +643,6 @@ def estimate_page_speed(soup: BeautifulSoup, html: str) -> int:
     if soup.find('link', {'rel': 'preload'}): score += 1
     return min(15, score)
 
-
 def calculate_readability_score(text: str) -> int:
     words = text.split()
     sentences = [s for s in text.split('.') if s.strip()]
@@ -530,16 +654,13 @@ def calculate_readability_score(text: str) -> int:
     if avg <= 25: return 50
     return 30
 
-
 def get_freshness_label(score: int) -> str:
     if score >= 4: return "very_fresh"
     if score >= 3: return "fresh"
     if score >= 2: return "moderate"
     if score >= 1: return "dated"
-    return "unknown"# app.py — Part 4/6
-
-# ============================================================================
-# CORE ANALYSIS
+    return "unknown"# ============================================================================
+# CORE ANALYSIS (kopioi tämä edellisen osan perään)
 # ============================================================================
 
 async def analyze_basic_metrics(url: str, html: str) -> Dict[str, Any]:
@@ -571,6 +692,7 @@ async def analyze_basic_metrics(url: str, html: str) -> Dict[str, Any]:
         elif 20 <= l < 30 or 60 < l <= 70: score_components['seo_basics'] += 3
         elif l > 0: score_components['seo_basics'] += 1
         details['title_length'] = l
+    
     meta_desc = soup.find('meta', attrs={'name': 'description'})
     if meta_desc:
         d = meta_desc.get('content', '').strip()
@@ -579,6 +701,7 @@ async def analyze_basic_metrics(url: str, html: str) -> Dict[str, Any]:
         elif 80 <= L < 120 or 160 < L <= 200: score_components['seo_basics'] += 3
         elif L > 0: score_components['seo_basics'] += 1
         details['meta_desc_length'] = L
+    
     h1_tags = soup.find_all('h1'); h2_tags = soup.find_all('h2'); h3_tags = soup.find_all('h3')
     if len(h1_tags) == 1: score_components['seo_basics'] += 3
     elif len(h1_tags) in [2, 3]: score_components['seo_basics'] += 1
@@ -768,10 +891,7 @@ async def analyze_content_quality(html: str) -> Dict[str, Any]:
         'interactive_elements': interactive
     }
 
-# ============================================================================
-# UX
-# ============================================================================
-
+# UX Analysis functions
 def calculate_navigation_score(soup: BeautifulSoup) -> int:
     score = 0
     if soup.find('nav'): score += 20
@@ -879,7 +999,7 @@ async def analyze_ux_elements(html: str) -> Dict[str, Any]:
         'accessibility_issues': issues,
         'navigation_elements': nav_elements,
         'design_frameworks': frameworks
-    }# app.py — Part 5/6
+    }
 
 async def analyze_social_media_presence(url: str, html: str) -> Dict[str, Any]:
     soup = BeautifulSoup(html, 'html.parser')
@@ -958,10 +1078,7 @@ async def analyze_competitive_positioning(url: str, basic: Dict[str, Any]) -> Di
         }
     }
 
-# ============================================================================
-# ENHANCED FEATURES
-# ============================================================================
-
+# Enhanced features functions
 def detect_technology_stack(html: str, soup: BeautifulSoup) -> Dict[str, Any]:
     detected = []
     hl = html.lower()
@@ -998,28 +1115,7 @@ def detect_technology_stack(html: str, soup: BeautifulSoup) -> Dict[str, Any]:
     if 'google-analytics' in hl or 'gtag' in hl: detected.append("Analytics: Google Analytics")
     if 'googletagmanager' in hl: detected.append("Analytics: Google Tag Manager")
     if 'matomo' in hl or 'piwik' in hl: detected.append("Analytics: Matomo")
-    if 'hotjar' in hl: detected.append("Analytics: Hotjar")
-    if 'clarity.ms' in hl: detected.append("Analytics: Microsoft Clarity")
-    # CDN/Hosting
-    if 'cloudflare' in hl: detected.append("CDN: Cloudflare")
-    if 'akamai' in hl: detected.append("CDN: Akamai")
-    if 'fastly' in hl: detected.append("CDN: Fastly")
-    if 'amazonaws' in hl: detected.append("Hosting: AWS")
-    if 'azurewebsites' in hl: detected.append("Hosting: Azure")
-    # E-comm
-    if 'woocommerce' in hl: detected.append("E-commerce: WooCommerce")
-    if 'shopify' in hl: detected.append("E-commerce: Shopify")
-    if 'magento' in hl: detected.append("E-commerce: Magento")
-    # CSS
-    if 'bootstrap' in hl: detected.append("CSS: Bootstrap")
-    if 'tailwind' in hl: detected.append("CSS: Tailwind")
-    if 'bulma' in hl: detected.append("CSS: Bulma")
-    if 'material' in hl: detected.append("CSS: Material Design")
-    # JS libs
-    if 'jquery' in hl: detected.append("JS: jQuery")
-    if 'lodash' in hl: detected.append("JS: Lodash")
-    if 'axios' in hl: detected.append("JS: Axios")
-
+    
     return {
         "detected": detected,
         "count": len(detected),
@@ -1027,8 +1123,6 @@ def detect_technology_stack(html: str, soup: BeautifulSoup) -> Dict[str, Any]:
             "cms": [t.split(": ")[1] for t in detected if t.startswith("CMS:")],
             "frameworks": [t.split(": ")[1] for t in detected if t.startswith("Framework:")],
             "analytics": [t.split(": ")[1] for t in detected if t.startswith("Analytics:")],
-            "cdn": [t.split(": ")[1] for t in detected if t.startswith("CDN:")],
-            "ecommerce": [t.split(": ")[1] for t in detected if t.startswith("E-commerce:")]
         }
     }
 
@@ -1056,7 +1150,6 @@ def assess_mobile_first_readiness(soup: BeautifulSoup, html: str) -> Dict[str, A
         else: issues.append("Fixed font sizes used"); recs.append("Use relative font sizes (rem/em)")
     if 'touch' in hl or 'tap' in hl: score += 10
     if soup.find('meta', attrs={'name':'apple-mobile-web-app-capable'}): score += 10
-    if 'flash' in hl: score -= 20; issues.append("Uses Flash"); recs.append("Remove Flash content")
 
     imgs = soup.find_all('img')
     if imgs:
@@ -1095,7 +1188,6 @@ def estimate_core_web_vitals(soup: BeautifulSoup, html: str) -> Dict[str, Any]:
     if len(imgs_no_dims) > 5: cls += 0.15
     elif len(imgs_no_dims) > 2: cls += 0.10
     elif imgs_no_dims: cls += 0.05
-    if 'font-face' in html.lower(): cls += 0.05
 
     lcp_status = "Good" if lcp <= 2.5 else "Needs Improvement" if lcp <= 4.0 else "Poor"
     fid_status = "Good" if fid <= 100 else "Needs Improvement" if fid <= 300 else "Poor"
@@ -1103,16 +1195,16 @@ def estimate_core_web_vitals(soup: BeautifulSoup, html: str) -> Dict[str, Any]:
 
     if lcp_status != "Good": recs.append("Optimize images with lazy loading and proper sizing")
     if fid_status != "Good": recs.append("Reduce JavaScript execution time and split bundles")
-    if cls_status != "Good": recs.append("Add explicit width/height to images and embeds; avoid FOIT")
+    if cls_status != "Good": recs.append("Add explicit width/height to images and embeds")
 
     overall = "Pass"
     if "Poor" in (lcp_status, fid_status, cls_status): overall = "Fail"
     elif "Needs Improvement" in (lcp_status, fid_status, cls_status): overall = "Needs Improvement"
 
     return {
-        "lcp": {"value": f"{lcp:.1f}s", "status": lcp_status, "threshold": "≤2.5s Good, ≤4.0s Needs Improvement"},
-        "fid": {"value": f"{fid}ms", "status": fid_status, "threshold": "≤100ms Good, ≤300ms Needs Improvement"},
-        "cls": {"value": f"{cls:.2f}", "status": cls_status, "threshold": "≤0.1 Good, ≤0.25 Needs Improvement"},
+        "lcp": {"value": f"{lcp:.1f}s", "status": lcp_status},
+        "fid": {"value": f"{fid}ms", "status": fid_status},
+        "cls": {"value": f"{cls:.2f}", "status": cls_status},
         "overall_status": overall,
         "recommendations": recs
     }
@@ -1133,14 +1225,6 @@ def generate_market_trends(industry: str = None) -> List[str]:
         "Video content drives significantly higher engagement than text",
         "Voice search pushes toward longer, conversational queries"
     ]
-    if industry:
-        il = industry.lower()
-        if "retail" in il or "commerce" in il:
-            trends += ["Social commerce is table stakes", "Personalization can lift conversion by 10–20%"]
-        elif "tech" in il:
-            trends += ["Developer docs and API portals are expected", "Open source presence builds credibility"]
-        elif "service" in il:
-            trends += ["Online booking is a baseline expectation", "Reviews are critical to trust"]
     return trends[:5]
 
 def calculate_improvement_potential(basic: Dict[str, Any]) -> int:
@@ -1165,8 +1249,8 @@ def generate_competitor_gaps(basic: Dict[str, Any], competitive: Dict[str, Any])
         return ["Gap to top performers remains", "Potential to catch up with focused investments", "Conversion optimization required"]
     return ["Competitive vs. most peers", "Focus on innovation to differentiate", "Maintain lead with continuous improvement"]
 
-# ============================================================================
-# AI INSIGHTS (EN-only)
+# AI Insights# ============================================================================
+# AI INSIGHTS (jatko edelliseen osaan)
 # ============================================================================
 
 async def generate_ai_insights(
@@ -1346,7 +1430,8 @@ def generate_english_insights(
         'recommendations': (recs + quick_wins)[:5],
         'confidence_score': min(95, max(60, overall + 20)),
         'sentiment_score': (overall / 100) * 0.8 + 0.2,
-        'key_metrics': {}
+        'key_metrics': {},
+        'action_priority': []
     }
 
 def generate_smart_actions(ai: AIAnalysis, technical: Dict[str, Any], content: Dict[str, Any], basic: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -1371,13 +1456,6 @@ def generate_smart_actions(ai: AIAnalysis, technical: Dict[str, Any], content: D
                 "priority": "high", "effort": "low", "impact": "high",
                 "estimated_score_increase": 15 - sec, "category": "security", "estimated_time": "1 day"
             })
-        else:
-            actions.append({
-                "title": "Tighten security headers",
-                "description": f"Security {sec}/15. Finalize header policies.",
-                "priority": "medium", "effort": "low", "impact": "medium",
-                "estimated_score_increase": 15 - sec, "category": "security", "estimated_time": "2–4 hours"
-            })
 
     # SEO
     seo = breakdown.get('seo_basics', 0)
@@ -1396,13 +1474,6 @@ def generate_smart_actions(ai: AIAnalysis, technical: Dict[str, Any], content: D
                 "description": f"SEO {seo}/20. Optimize metadata and URL structure.",
                 "priority": "high", "effort": "medium", "impact": "high",
                 "estimated_score_increase": gap, "category": "seo", "estimated_time": "3–5 days"
-            })
-        else:
-            actions.append({
-                "title": "Fine-tune advanced SEO",
-                "description": f"SEO {seo}/20. Add canonical, hreflang, and structured data.",
-                "priority": "medium", "effort": "medium", "impact": "medium",
-                "estimated_score_increase": gap, "category": "seo", "estimated_time": "1 week"
             })
 
     # CONTENT
@@ -1424,17 +1495,10 @@ def generate_smart_actions(ai: AIAnalysis, technical: Dict[str, Any], content: D
                 "priority": "high", "effort": "high", "impact": "high",
                 "estimated_score_increase": min(10, gap), "category": "content", "estimated_time": "2 weeks"
             })
-        else:
-            actions.append({
-                "title": "Improve content quality & readability",
-                "description": f"Content {c}/20. Increase readability and add rich media.",
-                "priority": "medium", "effort": "medium", "impact": "medium",
-                "estimated_score_increase": gap, "category": "content", "estimated_time": "1 week"
-            })
 
     priority_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
     actions.sort(key=lambda x: (priority_order.get(x['priority'], 4), -x.get('estimated_score_increase', 0)))
-    return actions[:15]# app.py — Part 6/6
+    return actions[:15]
 
 # ============================================================================
 # API ENDPOINTS
@@ -1448,16 +1512,25 @@ async def root():
         "status": "operational",
         "endpoints": {
             "health": "/health",
-            "basic_analysis": "/api/v1/analyze",
-            "ai_analysis": "/api/v1/ai-analyze"
+            "auth": {
+                "login": "/auth/login",
+                "logout": "/auth/logout",
+                "me": "/auth/me"
+            },
+            "analysis": {
+                "basic": "/api/v1/analyze",
+                "comprehensive": "/api/v1/ai-analyze"
+            }
         },
         "features": [
+            "Authentication required",
             "Fair 0–100 scoring system",
             "No arbitrary baselines",
             "Comprehensive analysis",
             "AI-powered insights",
             "Enhanced features (trends, tech stack, CWV, mobile-first)"
-        ]
+        ],
+        "authentication": "Bearer token required for all analysis endpoints"
     }
 
 @app.get("/health")
@@ -1467,18 +1540,36 @@ async def health_check():
         "version": APP_VERSION,
         "timestamp": datetime.now().isoformat(),
         "openai_available": bool(openai_client),
-        "cache_size": len(analysis_cache)
+        "cache_size": len(analysis_cache),
+        "authentication": "enabled"
     }
 
 @app.post("/api/v1/ai-analyze")
-async def ai_analyze(request: CompetitorAnalysisRequest):
+async def ai_analyze(
+    request: CompetitorAnalysisRequest,
+    user: UserInfo = Depends(require_user)
+):
+    """Comprehensive AI-powered website analysis (requires authentication)."""
     try:
+        # Check user limits for non-admin users
+        if user.role != "admin":
+            user_limit = USERS_DB.get(user.username, {}).get("search_limit", 3)
+            current_count = user_search_counts.get(user.username, 0)
+            if user_limit > 0 and current_count >= user_limit:
+                raise HTTPException(
+                    status_code=403, 
+                    detail=f"Search limit reached ({user_limit} searches). Upgrade to admin for unlimited access."
+                )
+
         url = clean_url(request.url)
         cache_key = get_cache_key(url, "ai_v5_enhanced_enonly")
+        
+        # Check cache
         if cache_key in analysis_cache and is_cache_valid(analysis_cache[cache_key]['timestamp']):
-            logger.info(f"Cache hit for {url}")
+            logger.info(f"Cache hit for {url} (user: {user.username})")
             return analysis_cache[cache_key]['data']
 
+        # Fetch website
         resp = await fetch_url(url)
         if not resp or resp.status_code != 200:
             raise HTTPException(400, f"Cannot fetch {url}")
@@ -1486,6 +1577,7 @@ async def ai_analyze(request: CompetitorAnalysisRequest):
         html = resp.text
         soup = BeautifulSoup(html, 'html.parser')
 
+        # Run all analyses
         basic = await analyze_basic_metrics(url, html)
         technical = await analyze_technical_aspects(url, html)
         content = await analyze_content_quality(html)
@@ -1493,8 +1585,10 @@ async def ai_analyze(request: CompetitorAnalysisRequest):
         social = await analyze_social_media_presence(url, html)
         competitive = await analyze_competitive_positioning(url, basic)
 
+        # Generate AI insights
         ai = await generate_ai_insights(url, basic, technical, content, ux, social)
 
+        # Enhanced features
         tech_stack = detect_technology_stack(html, soup)
         mobile_first = assess_mobile_first_readiness(soup, html)
         core_vitals = estimate_core_web_vitals(soup, html)
@@ -1572,6 +1666,7 @@ async def ai_analyze(request: CompetitorAnalysisRequest):
             }
         }
 
+        # Build response
         result = {
             "success": True,
             "company_name": request.company_name or basic.get('title', 'Unknown'),
@@ -1612,25 +1707,38 @@ async def ai_analyze(request: CompetitorAnalysisRequest):
                 "version": APP_VERSION,
                 "analysis_depth": "comprehensive",
                 "confidence_level": ai.confidence_score,
-                "data_points_analyzed": len(tech_stack['detected']) + len(basic.get('detailed_findings', {}))
+                "data_points_analyzed": len(tech_stack['detected']) + len(basic.get('detailed_findings', {})),
+                "analyzed_by": user.username
             }
         }
 
         result = ensure_integer_scores(result)
 
+        # Cache result
         analysis_cache[cache_key] = {'data': result, 'timestamp': datetime.now()}
         if len(analysis_cache) > MAX_CACHE_SIZE:
             oldest = min(analysis_cache.keys(), key=lambda k: analysis_cache[k]['timestamp'])
             del analysis_cache[oldest]
 
-        logger.info(f"Enhanced analysis complete for {url}: score={basic['digital_maturity_score']}")
+        # Update user search count
+        if user.role != "admin":
+            user_search_counts[user.username] = user_search_counts.get(user.username, 0) + 1
+
+        logger.info(f"Enhanced analysis complete for {url}: score={basic['digital_maturity_score']} (user: {user.username})")
         return result
+        
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Analysis error for {request.url}: {e}", exc_info=True)
         raise HTTPException(500, f"Analysis failed: {str(e)}")
 
 @app.post("/api/v1/analyze")
-async def basic_analyze(request: CompetitorAnalysisRequest):
+async def basic_analyze(
+    request: CompetitorAnalysisRequest,
+    user: UserInfo = Depends(require_user)
+):
+    """Basic website analysis (requires authentication)."""
     try:
         url = clean_url(request.url)
         resp = await fetch_url(url)
@@ -1638,6 +1746,7 @@ async def basic_analyze(request: CompetitorAnalysisRequest):
             raise HTTPException(400, "Cannot fetch website")
 
         basic = await analyze_basic_metrics(url, resp.text)
+        
         return {
             "success": True,
             "company": request.company_name or "Unknown",
@@ -1645,7 +1754,8 @@ async def basic_analyze(request: CompetitorAnalysisRequest):
             "digital_maturity_score": basic['digital_maturity_score'],
             "social_platforms": basic.get('social_platforms', 0),
             "score_breakdown": basic.get('score_breakdown', {}),
-            "analysis_date": datetime.now().isoformat()
+            "analysis_date": datetime.now().isoformat(),
+            "analyzed_by": user.username
         }
     except Exception as e:
         logger.error(f"Basic analysis error: {e}")
@@ -1659,5 +1769,7 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
     host = "0.0.0.0"
-    logger.info(f"{APP_NAME} v{APP_VERSION} — English-only, no PDF")
+    logger.info(f"{APP_NAME} v{APP_VERSION} — Complete with Authentication")
+    logger.info(f"Admin password: {ADMIN_PASSWORD[:3]}... (check ADMIN_PASSWORD env var)")
+    logger.info(f"Starting server on {host}:{port}")
     uvicorn.run(app, host=host, port=port, log_level="info", access_log=True)
