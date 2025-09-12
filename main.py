@@ -55,7 +55,7 @@ users_db = {
     },
     "admin@brandista.fi": {
         "username": "admin@brandista.fi",
-        "hashed_password": pwd_context.hash("SecureAdminPassword123!"),
+        "hashed_password": pwd_context.hash("kaikka123"),
         "role": "admin",
         "usage_count": 0,
         "max_usage": None  # Unlimited
