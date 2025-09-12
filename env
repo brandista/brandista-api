@@ -1,10 +1,11 @@
-REDIS_URL=redis://localhost:6379
-OPENAI_API_KEY=your-api-key
+# Kommentoi pois tai käytä Railway Redis URL:ia
+# REDIS_URL=redis://default:password@redis.railway.internal:6379
+
+OPENAI_API_KEY=your-actual-api-key-here
 HUGGINGFACE_TOKEN=your-token
 PORT=8000
 ENV=production
-ALLOW_ORIGINS=http://localhost:5173
-
+ALLOW_ORIGINS=*
 ADMIN_PASSWORD=kaikka123
 JWT_SECRET=aklsjdfölaksjfdklj
 SESSION_COOKIE=session
