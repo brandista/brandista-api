@@ -1,27 +1,39 @@
+# Core FastAPI dependencies
 fastapi==0.109.0
-uvicorn==0.27.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+pydantic==2.5.3
+
+# Authentication & Security
+PyJWT==2.9.0
+passlib[bcrypt]==1.7.4
+python-jose[cryptography]
+bcrypt
+
+# HTTP & Web scraping
 httpx==0.26.0
 beautifulsoup4==4.12.2
-pydantic==2.5.3
-openai==1.54.0
-python-dotenv==1.0.1
-reportlab==4.0.7
 lxml==5.1.0
-python-multipart==0.0.6
+
+# Data & ML
 numpy>=2.0
-fastapi
-httpx
-beautifulsoup4
-numpy
-pydantic
+openai==1.54.0
+
+# PDF generation
+reportlab==4.0.7
+
+# Monitoring
 prometheus-client
-reportlab
-PyJWT==2.9.0
-# Valinnaiset
+
+# Browser automation
+playwright==1.40.0
+
+# Configuration
+python-dotenv==1.0.1
+
+# Optional dependencies
 redis
 validators
 spacy
 textstat
-openai
 sqlalchemy
-playwright==1.40.0
