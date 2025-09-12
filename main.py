@@ -659,7 +659,370 @@ def get_freshness_label(score: int) -> str:
     if score >= 3: return "fresh"
     if score >= 2: return "moderate"
     if score >= 1: return "dated"
-    return "unknown"# ============================================================================
+    return "unknown"
+# ============================================================================
+# ENHANCED ANALYSIS HELPER FUNCTIONS
+# Add these after the HELPERS section (around line 600-700)
+# Before the CORE ANALYSIS section
+# ============================================================================
+
+async def fetch_with_real_headers(url: str, timeout: int = 10) -> Dict[str, Any]:
+    """
+    Enhanced fetch with real HTTP headers and redirect tracking.
+    Returns complete response metadata including headers, redirects, and timing.
+    """
+    try:
+        async with httpx.AsyncClient(
+            timeout=timeout, 
+            follow_redirects=False,
+            verify=True
+        ) as client:
+            
+            redirect_chain = []
+            current_url = url
+            final_response = None
+            
+            # Follow redirects manually (max 5)
+            for redirect_count in range(5):
+                response = await client.get(
+                    current_url, 
+                    headers={'User-Agent': USER_AGENT}
+                )
+                
+                if response.status_code in [301, 302, 303, 307, 308]:
+                    location = response.headers.get('location')
+                    if location:
+                        # Handle relative redirects
+                        if location.startswith('/'):
+                            parsed = urlparse(current_url)
+                            location = f"{parsed.scheme}://{parsed.netloc}{location}"
+                        
+                        redirect_chain.append({
+                            'from': current_url,
+                            'to': location,
+                            'status': response.status_code
+                        })
+                        current_url = location
+                else:
+                    final_response = response
+                    break
+            
+            if not final_response:
+                return None
+            
+            # Calculate response time
+            response_time_ms = None
+            if hasattr(final_response, 'elapsed'):
+                response_time_ms = int(final_response.elapsed.total_seconds() * 1000)
+            
+            return {
+                'url': url,
+                'final_url': current_url,
+                'status_code': final_response.status_code,
+                'headers': dict(final_response.headers),
+                'content': final_response.text if final_response.status_code == 200 else None,
+                'redirect_chain': redirect_chain,
+                'redirect_count': len(redirect_chain),
+                'response_time_ms': response_time_ms
+            }
+            
+    except httpx.TimeoutException:
+        logger.warning(f"Enhanced fetch timeout for {url}")
+        return None
+    except Exception as e:
+        logger.error(f"Enhanced fetch failed for {url}: {e}")
+        return None
+
+
+def analyze_real_security_headers(headers: Dict[str, str]) -> Dict[str, Any]:
+    """
+    Analyze actual HTTP security headers and assign security grade A-F.
+    Provides detailed analysis of security posture based on headers.
+    """
+    result = {
+        'score': 0,
+        'max_score': 100,
+        'grade': 'F',
+        'headers_found': [],
+        'headers_missing': [],
+        'recommendations': [],
+        'details': {}
+    }
+    
+    # Convert headers to lowercase for case-insensitive comparison
+    headers_lower = {k.lower(): v for k, v in headers.items()}
+    
+    # Security header checks with weights
+    security_checks = {
+        'strict-transport-security': {
+            'weight': 20,
+            'name': 'HSTS',
+            'check': lambda v: 'max-age=' in v and int(re.search(r'max-age=(\d+)', v).group(1)) >= 31536000 if re.search(r'max-age=(\d+)', v) else False,
+            'recommendation': 'Add Strict-Transport-Security: max-age=31536000; includeSubDomains'
+        },
+        'content-security-policy': {
+            'weight': 20,
+            'name': 'CSP',
+            'check': lambda v: len(v) > 20,
+            'recommendation': 'Implement Content-Security-Policy to prevent XSS attacks'
+        },
+        'x-frame-options': {
+            'weight': 15,
+            'name': 'X-Frame-Options',
+            'check': lambda v: v.upper() in ['DENY', 'SAMEORIGIN'],
+            'recommendation': 'Add X-Frame-Options: DENY or SAMEORIGIN to prevent clickjacking'
+        },
+        'x-content-type-options': {
+            'weight': 15,
+            'name': 'X-Content-Type-Options',
+            'check': lambda v: 'nosniff' in v.lower(),
+            'recommendation': 'Add X-Content-Type-Options: nosniff to prevent MIME sniffing'
+        },
+        'referrer-policy': {
+            'weight': 10,
+            'name': 'Referrer-Policy',
+            'check': lambda v: len(v) > 0,
+            'recommendation': 'Add Referrer-Policy: strict-origin-when-cross-origin for privacy'
+        },
+        'permissions-policy': {
+            'weight': 10,
+            'name': 'Permissions-Policy',
+            'check': lambda v: len(v) > 0,
+            'recommendation': 'Add Permissions-Policy header to control browser features'
+        },
+        'x-xss-protection': {
+            'weight': 10,
+            'name': 'X-XSS-Protection',
+            'check': lambda v: '1' in v,
+            'recommendation': 'Add X-XSS-Protection: 1; mode=block (legacy but still useful)'
+        }
+    }
+    
+    # Check each security header
+    for header, config in security_checks.items():
+        if header in headers_lower:
+            try:
+                if config['check'](headers_lower[header]):
+                    result['score'] += config['weight']
+                    result['headers_found'].append(config['name'])
+                    result['details'][config['name']] = {
+                        'status': 'present',
+                        'value': headers_lower[header][:100]  # Truncate long values
+                    }
+                else:
+                    result['headers_missing'].append(config['name'])
+                    result['recommendations'].append(config['recommendation'])
+                    result['details'][config['name']] = {
+                        'status': 'invalid',
+                        'value': headers_lower[header][:100]
+                    }
+            except Exception:
+                result['headers_missing'].append(config['name'])
+                result['recommendations'].append(config['recommendation'])
+        else:
+            result['headers_missing'].append(config['name'])
+            result['recommendations'].append(config['recommendation'])
+            result['details'][config['name']] = {'status': 'missing'}
+    
+    # Calculate grade based on score
+    if result['score'] >= 90:
+        result['grade'] = 'A'
+    elif result['score'] >= 75:
+        result['grade'] = 'B'
+    elif result['score'] >= 60:
+        result['grade'] = 'C'
+    elif result['score'] >= 40:
+        result['grade'] = 'D'
+    else:
+        result['grade'] = 'F'
+    
+    return result
+
+
+async def check_robots_and_sitemap(base_url: str) -> Dict[str, Any]:
+    """
+    Check robots.txt and sitemap.xml existence and analyze their content.
+    Returns SEO-relevant information about crawlability and indexing.
+    """
+    parsed = urlparse(base_url)
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    
+    result = {
+        'robots': {
+            'exists': False,
+            'url': f"{base}/robots.txt",
+            'allows_crawling': True,
+            'sitemap_refs': [],
+            'disallow_rules': [],
+            'user_agents': []
+        },
+        'sitemap': {
+            'exists': False,
+            'location': None,
+            'url_count': 0,
+            'has_lastmod': False
+        },
+        'seo_score_impact': 0
+    }
+    
+    # Check robots.txt
+    try:
+        resp = await fetch_url(f"{base}/robots.txt", timeout=5)
+        if resp and resp.status_code == 200:
+            result['robots']['exists'] = True
+            result['seo_score_impact'] += 10
+            
+            content = resp.text
+            current_agent = None
+            
+            # Parse robots.txt (first 100 lines)
+            for line in content.split('\n')[:100]:
+                line = line.strip()
+                
+                if line.startswith('User-agent:'):
+                    agent = line.replace('User-agent:', '').strip()
+                    result['robots']['user_agents'].append(agent)
+                    current_agent = agent
+                elif line.startswith('Disallow:'):
+                    rule = line.replace('Disallow:', '').strip()
+                    if rule:
+                        result['robots']['disallow_rules'].append(rule)
+                        # Check if site blocks all crawling
+                        if rule == '/' and current_agent in ['*', 'Googlebot']:
+                            result['robots']['allows_crawling'] = False
+                            result['seo_score_impact'] -= 20
+                elif line.startswith('Sitemap:'):
+                    sitemap_url = line.replace('Sitemap:', '').strip()
+                    result['robots']['sitemap_refs'].append(sitemap_url)
+                    if not result['sitemap']['location']:
+                        result['sitemap']['location'] = sitemap_url
+    except Exception as e:
+        logger.debug(f"Could not fetch robots.txt: {e}")
+    
+    # Check sitemap
+    sitemap_urls = result['robots']['sitemap_refs'] + [
+        f"{base}/sitemap.xml",
+        f"{base}/sitemap_index.xml",
+        f"{base}/sitemap.xml.gz"
+    ]
+    
+    for sitemap_url in sitemap_urls[:3]:  # Check max 3 URLs
+        if not sitemap_url:
+            continue
+        try:
+            resp = await fetch_url(sitemap_url, timeout=5)
+            if resp and resp.status_code == 200:
+                result['sitemap']['exists'] = True
+                result['sitemap']['location'] = sitemap_url
+                result['seo_score_impact'] += 15
+                
+                content = resp.text[:50000]  # Check first 50KB
+                
+                # Count URLs
+                url_count = content.count('<url>') + content.count('<sitemap>')
+                result['sitemap']['url_count'] = url_count
+                
+                # Check for lastmod
+                if '<lastmod>' in content:
+                    result['sitemap']['has_lastmod'] = True
+                    result['seo_score_impact'] += 5
+                
+                break
+        except Exception as e:
+            logger.debug(f"Could not fetch sitemap: {e}")
+    
+    return result
+
+
+async def analyze_page_performance(soup: BeautifulSoup, html: str, response_time_ms: Optional[int] = None) -> Dict[str, Any]:
+    """
+    Analyze page performance metrics including loading indicators.
+    Provides detailed performance analysis and recommendations.
+    """
+    performance = {
+        'score': 0,
+        'metrics': {},
+        'issues': [],
+        'recommendations': []
+    }
+    
+    # Page size analysis
+    size_kb = len(html) / 1024
+    performance['metrics']['page_size_kb'] = round(size_kb, 2)
+    
+    if size_kb < 100:
+        performance['score'] += 25
+    elif size_kb < 200:
+        performance['score'] += 15
+    elif size_kb < 500:
+        performance['score'] += 5
+    else:
+        performance['issues'].append(f"Large page size: {round(size_kb)}KB")
+        performance['recommendations'].append("Reduce page size below 200KB for optimal performance")
+    
+    # Response time analysis
+    if response_time_ms:
+        performance['metrics']['response_time_ms'] = response_time_ms
+        if response_time_ms < 200:
+            performance['score'] += 25
+        elif response_time_ms < 500:
+            performance['score'] += 15
+        elif response_time_ms < 1000:
+            performance['score'] += 5
+        else:
+            performance['issues'].append(f"Slow server response: {response_time_ms}ms")
+            performance['recommendations'].append("Optimize server response time to under 500ms")
+    
+    # Script optimization
+    scripts = soup.find_all('script')
+    if scripts:
+        async_scripts = [s for s in scripts if s.get('async') or s.get('defer')]
+        optimization_ratio = len(async_scripts) / len(scripts)
+        performance['metrics']['script_optimization'] = round(optimization_ratio * 100)
+        
+        if optimization_ratio > 0.5:
+            performance['score'] += 15
+        else:
+            performance['recommendations'].append("Add async/defer to non-critical scripts")
+    
+    # Image optimization
+    images = soup.find_all('img')
+    if images:
+        lazy_images = [i for i in images if i.get('loading') == 'lazy']
+        lazy_ratio = len(lazy_images) / len(images)
+        performance['metrics']['lazy_loading_ratio'] = round(lazy_ratio * 100)
+        
+        if lazy_ratio > 0.5:
+            performance['score'] += 15
+        else:
+            performance['recommendations'].append("Implement lazy loading for images")
+        
+        # Check for modern image formats
+        webp_images = [i for i in images if 'webp' in str(i.get('src', '')).lower()]
+        if webp_images:
+            performance['score'] += 5
+            performance['metrics']['uses_modern_formats'] = True
+    
+    # Resource hints
+    if soup.find('link', {'rel': 'preconnect'}):
+        performance['score'] += 5
+        performance['metrics']['has_preconnect'] = True
+    
+    if soup.find('link', {'rel': 'preload'}):
+        performance['score'] += 5
+        performance['metrics']['has_preload'] = True
+    
+    # Modern bundling
+    if any(x in html.lower() for x in ['webpack', 'vite', 'parcel']):
+        performance['score'] += 10
+        performance['metrics']['has_modern_bundler'] = True
+    
+    # Cap score at 100
+    performance['score'] = min(100, performance['score'])
+    
+    return performance
+
+# ============================================================================
 # CORE ANALYSIS (kopioi tämä edellisen osan perään)
 # ============================================================================
 
@@ -1549,7 +1912,7 @@ async def ai_analyze(
     request: CompetitorAnalysisRequest,
     user: UserInfo = Depends(require_user)
 ):
-    """Comprehensive AI-powered website analysis (requires authentication)."""
+    """Comprehensive AI-powered website analysis with enhanced features for admin users."""
     try:
         # Check user limits for non-admin users
         if user.role != "admin":
@@ -1569,15 +1932,62 @@ async def ai_analyze(
             logger.info(f"Cache hit for {url} (user: {user.username})")
             return analysis_cache[cache_key]['data']
 
-        # Fetch website
-        resp = await fetch_url(url)
-        if not resp or resp.status_code != 200:
-            raise HTTPException(400, f"Cannot fetch {url}")
+        # Enhanced fetch for admin users
+        enhanced_data = None
+        if user.role == "admin":
+            logger.info(f"Running enhanced analysis for admin user: {user.username}")
+            
+            # Try enhanced fetch with real headers
+            enhanced_response = await fetch_with_real_headers(url)
+            
+            if enhanced_response and enhanced_response.get('content'):
+                html = enhanced_response['content']
+                
+                # Run enhanced analyses
+                security_analysis = analyze_real_security_headers(enhanced_response.get('headers', {}))
+                robots_sitemap = await check_robots_and_sitemap(url)
+                
+                soup = BeautifulSoup(html, 'html.parser')
+                performance = await analyze_page_performance(
+                    soup, 
+                    html,
+                    enhanced_response.get('response_time_ms')
+                )
+                
+                enhanced_data = {
+                    'enabled': True,
+                    'security_headers_analysis': security_analysis,
+                    'robots_sitemap': robots_sitemap,
+                    'performance_metrics': performance,
+                    'response_metadata': {
+                        'final_url': enhanced_response.get('final_url', url),
+                        'redirect_count': enhanced_response.get('redirect_count', 0),
+                        'redirect_chain': enhanced_response.get('redirect_chain', []),
+                        'response_time_ms': enhanced_response.get('response_time_ms'),
+                        'server': enhanced_response.get('headers', {}).get('server', 'Unknown'),
+                        'content-type': enhanced_response.get('headers', {}).get('content-type', 'Unknown')
+                    }
+                }
+                logger.info("Enhanced analysis completed successfully")
+            else:
+                # Fallback to regular fetch for admin if enhanced fails
+                logger.warning("Enhanced fetch failed, falling back to regular fetch")
+                resp = await fetch_url(url)
+                if not resp or resp.status_code != 200:
+                    raise HTTPException(400, f"Cannot fetch {url}")
+                html = resp.text
+                enhanced_data = {'enabled': False}
+        else:
+            # Regular fetch for non-admin users
+            resp = await fetch_url(url)
+            if not resp or resp.status_code != 200:
+                raise HTTPException(400, f"Cannot fetch {url}")
+            html = resp.text
+            enhanced_data = {'enabled': False}
 
-        html = resp.text
         soup = BeautifulSoup(html, 'html.parser')
 
-        # Run all analyses
+        # Run all standard analyses
         basic = await analyze_basic_metrics(url, html)
         technical = await analyze_technical_aspects(url, html)
         content = await analyze_content_quality(html)
@@ -1588,7 +1998,7 @@ async def ai_analyze(
         # Generate AI insights
         ai = await generate_ai_insights(url, basic, technical, content, ux, social)
 
-        # Enhanced features
+        # Enhanced features (existing)
         tech_stack = detect_technology_stack(html, soup)
         mobile_first = assess_mobile_first_readiness(soup, html)
         core_vitals = estimate_core_web_vitals(soup, html)
@@ -1597,6 +2007,7 @@ async def ai_analyze(
         improvement_potential = calculate_improvement_potential(basic)
         competitor_gaps = generate_competitor_gaps(basic, competitive)
 
+        # Build enhanced features dictionary
         enhanced = {
             "industry_benchmarking": {
                 "value": f"{basic['digital_maturity_score']} / 100",
@@ -1666,7 +2077,59 @@ async def ai_analyze(
             }
         }
 
-        # Build response
+        # Add admin-only enhanced features if available
+        if enhanced_data.get('enabled'):
+            # Security headers grade
+            if enhanced_data.get('security_headers_analysis'):
+                sec_analysis = enhanced_data['security_headers_analysis']
+                enhanced['security_headers_grade'] = {
+                    'value': sec_analysis['grade'],
+                    'description': f"Security headers score: {sec_analysis['score']}/100",
+                    'headers_found': sec_analysis['headers_found'],
+                    'headers_missing': sec_analysis['headers_missing'],
+                    'recommendations': sec_analysis['recommendations'][:3],
+                    'details': sec_analysis.get('details', {})
+                }
+            
+            # Robots and sitemap status
+            if enhanced_data.get('robots_sitemap'):
+                rs = enhanced_data['robots_sitemap']
+                enhanced['robots_sitemap_status'] = {
+                    'value': 'Configured' if rs['robots']['exists'] and rs['sitemap']['exists'] else 'Incomplete',
+                    'robots_exists': rs['robots']['exists'],
+                    'robots_url': rs['robots']['url'],
+                    'sitemap_exists': rs['sitemap']['exists'],
+                    'sitemap_location': rs['sitemap']['location'],
+                    'sitemap_urls': rs['sitemap']['url_count'],
+                    'allows_crawling': rs['robots']['allows_crawling'],
+                    'disallow_rules': rs['robots']['disallow_rules'][:5],
+                    'seo_impact': rs['seo_score_impact']
+                }
+            
+            # Advanced performance metrics
+            if enhanced_data.get('performance_metrics'):
+                perf = enhanced_data['performance_metrics']
+                enhanced['advanced_performance'] = {
+                    'value': f"{perf['score']}/100",
+                    'description': 'Advanced performance analysis',
+                    'metrics': perf['metrics'],
+                    'issues': perf['issues'][:3],
+                    'recommendations': perf['recommendations'][:3]
+                }
+            
+            # HTTP response metadata
+            if enhanced_data.get('response_metadata'):
+                enhanced['http_analysis'] = enhanced_data['response_metadata']
+            
+            # Add admin feature flag
+            enhanced['admin_features_enabled'] = True
+            
+            logger.info(f"Admin features added: Security={enhanced.get('security_headers_grade', {}).get('value', 'N/A')}, "
+                       f"Robots/Sitemap={enhanced.get('robots_sitemap_status', {}).get('value', 'N/A')}")
+        else:
+            enhanced['admin_features_enabled'] = False
+
+        # Build final response
         result = {
             "success": True,
             "company_name": request.company_name or basic.get('title', 'Unknown'),
@@ -1708,10 +2171,13 @@ async def ai_analyze(
                 "analysis_depth": "comprehensive",
                 "confidence_level": ai.confidence_score,
                 "data_points_analyzed": len(tech_stack['detected']) + len(basic.get('detailed_findings', {})),
-                "analyzed_by": user.username
+                "analyzed_by": user.username,
+                "user_role": user.role,
+                "admin_features": enhanced_data.get('enabled', False)
             }
         }
 
+        # Ensure all scores are integers
         result = ensure_integer_scores(result)
 
         # Cache result
@@ -1720,11 +2186,11 @@ async def ai_analyze(
             oldest = min(analysis_cache.keys(), key=lambda k: analysis_cache[k]['timestamp'])
             del analysis_cache[oldest]
 
-        # Update user search count
+        # Update user search count for non-admin users
         if user.role != "admin":
             user_search_counts[user.username] = user_search_counts.get(user.username, 0) + 1
 
-        logger.info(f"Enhanced analysis complete for {url}: score={basic['digital_maturity_score']} (user: {user.username})")
+        logger.info(f"Analysis complete for {url}: score={basic['digital_maturity_score']} (user: {user.username}, role: {user.role})")
         return result
         
     except HTTPException:
