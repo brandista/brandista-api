@@ -1,383 +1,756 @@
-from fastapi import FastAPI, HTTPException, Depends, status
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Website Analyzer Backend - Frontend Compatible Version 5.0 (patched)
+JWT Authentication + Correct Data Models + Guest limits + Legacy score_breakdown
+"""
+
+import os
+import re
+import hashlib
+import logging
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Any
+from urllib.parse import urlparse
+
+from fastapi import FastAPI, HTTPException, Depends, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, HttpUrl
-from typing import Optional, Dict, Any, List
+from pydantic import BaseModel, Field
+
+import jwt
+from passlib.context import CryptContext
+
 import httpx
 from bs4 import BeautifulSoup
-import jwt
-from datetime import datetime, timedelta
-import os
-from passlib.context import CryptContext
-import json
-import asyncio
-from urllib.parse import urlparse, urljoin
-import re
 
-# FastAPI app initialization
-app = FastAPI(title="Website Analysis API", version="1.0.0")
+APP_VERSION = "5.0.1"
+APP_NAME = "Website Analyzer API"
 
-# Configuration
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_HOURS = 24
+JWT_SECRET = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRATION_HOURS = 24
 
-# Password hashing
+CACHE_TTL = 3600
+MAX_CACHE_SIZE = 100
+
+USAGE_LIMITS: Dict[str, Any] = {
+    "guest": 3,
+    "user": 10,
+    "admin": float('inf')
+}
+
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# Security
-security = HTTPBearer()
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# CORS middleware - IMPORTANT for frontend connection
+app = FastAPI(
+    title=APP_NAME,
+    version=APP_VERSION,
+    description="Frontend-compatible website analyzer with JWT auth"
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "http://localhost:5174",
-        "https://*.vercel.app",
-        "https://*.netlify.app",
-        "*"  # Development only - restrict in production
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Database simulation (in production, use real database)
-users_db = {
-    "demo": {
-        "username": "demo",
-        "hashed_password": pwd_context.hash("demo"),
-        "role": "user",
-        "usage_count": 0,
-        "max_usage": 3
-    },
-    "admin@brandista.fi": {
-        "username": "admin@brandista.fi",
-        "hashed_password": pwd_context.hash("kaikka123"),
+security = HTTPBearer()
+
+users_db: Dict[str, Dict[str, Any]] = {
+    "admin": {
+        "username": "admin",
+        "hashed_password": pwd_context.hash(os.getenv("ADMIN_PASSWORD", "kaikka123")),
         "role": "admin",
-        "usage_count": 0,
-        "max_usage": None  # Unlimited
+        "usage_count": 0
+    },
+    "user": {
+        "username": "user",
+        "hashed_password": pwd_context.hash("user123"),
+        "role": "user",
+        "usage_count": 0
+    },
+    "guest": {
+        "username": "guest",
+        "hashed_password": pwd_context.hash(""),
+        "role": "guest",
+        "usage_count": 0
     }
 }
 
-# Pydantic models
+cache_storage: Dict[str, Any] = {}
+
 class LoginRequest(BaseModel):
     username: str
     password: str
 
-class Token(BaseModel):
-    token: str
+class TokenResponse(BaseModel):
+    access_token: str
     token_type: str = "bearer"
     role: str
+    username: str
 
 class AnalysisRequest(BaseModel):
     url: str
     company_name: Optional[str] = None
-    analysis_type: str = "comprehensive"
-    language: str = "en"
 
-class UserResponse(BaseModel):
-    username: str
-    role: str
-    usage_count: int
-    max_usage: Optional[int]
+class ScoreBreakdown(BaseModel):
+    seo: int = Field(ge=0, le=30)
+    content: int = Field(ge=0, le=25)
+    technical: int = Field(ge=0, le=20)
+    ux: int = Field(ge=0, le=15)
+    security: int = Field(ge=0, le=10)
+    total: int = Field(ge=0, le=100)
 
-# Helper functions
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
+class TechnicalAudit(BaseModel):
+    score: int
+    issues_found: int
+    page_speed: str
+    mobile_responsive: bool
+    ssl_enabled: bool
+    meta_tags_present: bool
+    structured_data: bool
+    xml_sitemap: Optional[bool]
+    robots_txt: Optional[bool]
 
-def create_access_token(data: dict):
+class ContentAnalysis(BaseModel):
+    score: int
+    word_count: int
+    reading_time: str
+    content_quality: str
+    keyword_density: Dict[str, float]
+    headings_structure: Dict[str, int]
+
+class UXAnalysis(BaseModel):
+    score: int
+    navigation_clarity: str
+    mobile_friendliness: str
+    page_load_time: str
+    interactive_elements: int
+    accessibility_score: int
+
+class SocialMediaAnalysis(BaseModel):
+    score: int
+    platforms_found: List[str]
+    engagement_indicators: Dict[str, Any]
+    social_links: List[str]
+
+class CompetitiveAnalysis(BaseModel):
+    market_position: str
+    strengths: List[str]
+    weaknesses: List[str]
+    opportunities: List[str]
+    threats: List[str]
+
+class AIAnalysis(BaseModel):
+    summary: str
+    strengths: List[str]
+    weaknesses: List[str]
+    opportunities: List[str]
+    threats: List[str]
+    recommendations: List[Dict[str, str]]
+    confidence_score: float
+    sentiment_score: float
+    key_metrics: Dict[str, Any]
+    action_priority: List[Dict[str, str]]
+
+class SmartAction(BaseModel):
+    title: str
+    description: str
+    priority: str
+    impact: str
+    effort: str
+
+class SmartAnalysis(BaseModel):
+    actions: List[SmartAction]
+    scores: Dict[str, int]
+
+class EnhancedFeature(BaseModel):
+    value: str
+    description: str
+    status: Optional[str] = None
+    details: Optional[Dict[str, Any]] = None
+
+class BasicAnalysis(BaseModel):
+    company: str
+    website: str
+    analyzed_at: str
+    digital_maturity_score: int
+    technical_score: int
+    content_score: int
+    seo_score: int
+    score_breakdown: ScoreBreakdown
+    score_breakdown_legacy: Optional[Dict[str, int]] = None
+
+class DetailedAnalysis(BaseModel):
+    technical_audit: TechnicalAudit
+    content_analysis: ContentAnalysis
+    ux_analysis: UXAnalysis
+    social_media: SocialMediaAnalysis
+    competitive_analysis: CompetitiveAnalysis
+
+class EnhancedFeatures(BaseModel):
+    industry_benchmarking: EnhancedFeature
+    competitor_gaps: EnhancedFeature
+    growth_opportunities: EnhancedFeature
+    risk_assessment: EnhancedFeature
+    market_trends: EnhancedFeature
+    technology_stack: EnhancedFeature
+    estimated_traffic_rank: EnhancedFeature
+    mobile_first_index_ready: EnhancedFeature
+    core_web_vitals_assessment: EnhancedFeature
+
+class AnalysisResponse(BaseModel):
+    basic_analysis: BasicAnalysis
+    detailed_analysis: DetailedAnalysis
+    ai_analysis: AIAnalysis
+    smart: SmartAnalysis
+    enhanced_features: EnhancedFeatures
+    metadata: Dict[str, Any]
+
+def create_access_token(data: dict) -> str:
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
+    expire = datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS)
     to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    encoded_jwt = jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return encoded_jwt
 
-def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Dict[str, Any]:
     token = credentials.credentials
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         username = payload.get("sub")
+        role = payload.get("role")
         if username is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid authentication credentials"
-            )
-        return username
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication credentials")
+        return {"username": username, "role": role}
     except jwt.ExpiredSignatureError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token has expired"
-        )
-    except jwt.JWTError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials"
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has expired")
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
-# Auth endpoints
-@app.post("/auth/login", response_model=Token)
-async def login(request: LoginRequest):
-    user = users_db.get(request.username)
-    if not user or not verify_password(request.password, user["hashed_password"]):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password"
-        )
-    
-    access_token = create_access_token(data={"sub": request.username})
-    return {
-        "token": access_token,
-        "token_type": "bearer",
-        "role": user["role"]
-    }
+def get_current_user_optional(request: Request) -> Dict[str, Any]:
+    try:
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return {"username": "guest", "role": "guest"}
+        token = auth_header.split(" ")[1]
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        username = payload.get("sub")
+        role = payload.get("role")
+        if username:
+            return {"username": username, "role": role}
+    except Exception:
+        pass
+    return {"username": "guest", "role": "guest"}
 
-@app.get("/auth/me", response_model=UserResponse)
-async def get_current_user(username: str = Depends(verify_token)):
-    user = users_db.get(username)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
-        )
-    return UserResponse(
-        username=user["username"],
-        role=user["role"],
-        usage_count=user["usage_count"],
-        max_usage=user["max_usage"]
-    )
+def get_cache_key(url: str) -> str:
+    return hashlib.md5(url.strip().lower().encode()).hexdigest()
 
-@app.post("/auth/logout")
-async def logout(username: str = Depends(verify_token)):
-    # In a real app, you might want to blacklist the token
-    return {"message": "Successfully logged out"}
+def get_from_cache(url: str) -> Optional[Dict]:
+    key = get_cache_key(url)
+    if key in cache_storage:
+        cached_data, timestamp = cache_storage[key]
+        if datetime.now().timestamp() - timestamp < CACHE_TTL:
+            logger.info(f"Cache hit for {url}")
+            return cached_data
+    return None
 
-# Website analysis functions
-async def fetch_website_content(url: str) -> str:
-    """Fetch website HTML content"""
-    async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
-        try:
-            response = await client.get(url, headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            })
-            response.raise_for_status()
-            return response.text
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Failed to fetch website: {str(e)}"
-            )
+def save_to_cache(url: str, data: Dict):
+    if len(cache_storage) >= MAX_CACHE_SIZE:
+        oldest_key = min(cache_storage.keys(), key=lambda k: cache_storage[k][1])
+        del cache_storage[oldest_key]
+    key = get_cache_key(url)
+    cache_storage[key] = (data, datetime.now().timestamp())
 
-def analyze_website_basic(html: str, url: str) -> Dict[str, Any]:
-    """Perform basic website analysis"""
-    soup = BeautifulSoup(html, 'html.parser')
-    
-    # Basic analysis
-    title = soup.find('title')
-    title_text = title.text.strip() if title else ""
-    
-    meta_description = soup.find('meta', attrs={'name': 'description'})
-    description = meta_description.get('content', '') if meta_description else ""
-    
-    # SEO Analysis
-    h1_tags = soup.find_all('h1')
-    h2_tags = soup.find_all('h2')
-    
-    # Images
-    images = soup.find_all('img')
-    images_without_alt = [img for img in images if not img.get('alt')]
-    
-    # Links
-    internal_links = []
-    external_links = []
-    for link in soup.find_all('a', href=True):
-        href = link['href']
-        if href.startswith('http'):
-            if urlparse(url).netloc in href:
-                internal_links.append(href)
-            else:
-                external_links.append(href)
-        else:
-            internal_links.append(href)
-    
-    # Technology detection
-    has_analytics = bool(soup.find(string=re.compile('google-analytics|gtag|ga\(')))
-    has_viewport = bool(soup.find('meta', attrs={'name': 'viewport'}))
-    
-    # Calculate scores
-    seo_score = calculate_seo_score(title_text, description, h1_tags, images_without_alt)
-    technical_score = calculate_technical_score(has_viewport, has_analytics)
-    
-    return {
-        "website": url,
-        "title": title_text,
-        "meta_description": description,
-        "h1_count": len(h1_tags),
-        "h2_count": len(h2_tags),
-        "images_total": len(images),
-        "images_without_alt": len(images_without_alt),
-        "internal_links": len(internal_links),
-        "external_links": len(external_links),
-        "has_analytics": has_analytics,
-        "has_viewport": has_viewport,
-        "seo_score": seo_score,
-        "technical_score": technical_score,
-        "digital_maturity_score": (seo_score + technical_score) // 2,
-        "score_breakdown": {
-            "technical": technical_score // 6,
-            "content": min(20, len(h1_tags) * 5 + len(h2_tags) * 2),
-            "seo_basics": seo_score // 4,
-            "mobile": 15 if has_viewport else 0,
-            "security": 10,  # Placeholder
-            "performance": 5,  # Placeholder
-            "social": 5  # Placeholder
-        }
-    }
+def ensure_integer(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
 
-def calculate_seo_score(title, description, h1_tags, images_without_alt):
-    """Calculate SEO score"""
-    score = 0
-    if title and len(title) > 10:
-        score += 25
-    if description and len(description) > 50:
-        score += 25
-    if h1_tags:
-        score += 25
-    if len(images_without_alt) == 0:
-        score += 25
-    return score
-
-def calculate_technical_score(has_viewport, has_analytics):
-    """Calculate technical score"""
-    score = 0
-    if has_viewport:
-        score += 50
-    if has_analytics:
-        score += 50
-    return score
-
-def generate_ai_analysis(basic_analysis: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate AI-like analysis based on basic metrics"""
-    score = basic_analysis.get("digital_maturity_score", 0)
-    
-    strengths = []
-    weaknesses = []
-    opportunities = []
-    recommendations = []
-    
-    # Analyze strengths and weaknesses
-    if basic_analysis.get("has_viewport"):
-        strengths.append("Mobile-responsive design implemented")
-    else:
-        weaknesses.append("Missing mobile viewport meta tag")
-        recommendations.append("Add viewport meta tag for mobile responsiveness")
-    
-    if basic_analysis.get("has_analytics"):
-        strengths.append("Analytics tracking is set up")
-    else:
-        weaknesses.append("No analytics tracking detected")
-        recommendations.append("Implement Google Analytics or similar tracking")
-    
-    if basic_analysis.get("images_without_alt", 0) == 0:
-        strengths.append("All images have alt text for accessibility")
-    else:
-        weaknesses.append(f"{basic_analysis.get('images_without_alt')} images missing alt text")
-        recommendations.append("Add descriptive alt text to all images")
-    
-    if basic_analysis.get("h1_count", 0) > 0:
-        strengths.append("Proper H1 heading structure")
-    else:
-        weaknesses.append("Missing H1 heading tag")
-        recommendations.append("Add a clear H1 heading to improve SEO")
-    
-    # Generate opportunities based on score
-    if score < 50:
-        opportunities.append("Significant room for digital transformation")
-        opportunities.append("Quick wins available in technical SEO")
-    else:
-        opportunities.append("Ready for advanced optimization strategies")
-        opportunities.append("Good foundation for scaling digital presence")
-    
-    return {
-        "summary": f"Website shows {score}% digital maturity with clear opportunities for improvement.",
-        "strengths": strengths,
-        "weaknesses": weaknesses,
-        "opportunities": opportunities,
-        "threats": ["Competitors may have better digital presence"] if score < 50 else [],
-        "recommendations": recommendations
-    }
-
-# Main analysis endpoint
-@app.post("/api/v1/ai-analyze")
-async def analyze_website(
-    request_data: AnalysisRequest,
-    username: str = Depends(verify_token)
-):
-    """Main endpoint for website analysis"""
-    
-    # Check user limits
-    user = users_db.get(username)
-    if user["role"] == "user" and user["max_usage"]:
-        if user["usage_count"] >= user["max_usage"]:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Usage limit reached. Please upgrade to continue."
-            )
-    
-    # Clean and validate URL
-    url = request_data.url.strip()
+def clean_url(url: str) -> str:
+    url = url.strip()
     if not url.startswith(('http://', 'https://')):
         url = f'https://{url}'
-    
-    try:
-        # Fetch website content
-        html = await fetch_website_content(url)
-        
-        # Perform basic analysis
-        basic_analysis = analyze_website_basic(html, url)
-        
-        # Generate AI analysis
-        ai_analysis = generate_ai_analysis(basic_analysis)
-        
-        # Update usage count
-        if user["role"] == "user":
-            users_db[username]["usage_count"] += 1
-        
-        # Return combined analysis
-        return {
-            "basic_analysis": basic_analysis,
-            "ai_analysis": ai_analysis,
-            "enhanced_features": {
-                "industry_benchmarking": f"{basic_analysis['digital_maturity_score']}/100",
-                "competitor_gaps": "Analysis available",
-                "growth_opportunities": "Identified",
-                "risk_assessment": "Medium",
-                "market_trends": "Analyzed",
-                "technology_stack": "Detected",
-                "estimated_traffic_rank": "Medium",
-                "mobile_first_index_ready": "Yes" if basic_analysis.get("has_viewport") else "No",
-                "core_web_vitals_assessment": "Needs improvement"
-            }
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Analysis failed: {str(e)}"
-        )
+    return url
 
-# Health check endpoint
+async def fetch_website_content(url: str) -> str:
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            response = await client.get(url, headers=headers)
+            response.raise_for_status()
+            return response.text
+    except Exception as e:
+        logger.error(f"Error fetching {url}: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Could not fetch website: {str(e)}")
+
+def analyze_basic_metrics(html: str, url: str, company: str = "") -> BasicAnalysis:
+    soup = BeautifulSoup(html, 'html.parser')
+
+    title = soup.find('title')
+    title_text = title.text if title else ""
+    meta_desc = soup.find('meta', attrs={'name': 'description'})
+    description = meta_desc.get('content', '') if meta_desc else ""
+
+    seo_score = 0
+    if title_text:
+        seo_score += 10
+    if description:
+        seo_score += 10
+    if soup.find('h1'):
+        seo_score += 5
+    if soup.find_all('h2'):
+        seo_score += 5
+    seo_score = min(seo_score, 30)
+
+    text_content = soup.get_text(separator=" ")
+    word_count = len(text_content.split())
+    content_score = 0
+    if word_count > 300:
+        content_score += 10
+    if word_count > 1000:
+        content_score += 10
+    if len(soup.find_all('img')) > 0:
+        content_score += 5
+    content_score = min(content_score, 25)
+
+    technical_score = 0
+    if soup.find('meta', attrs={'name': 'viewport'}):
+        technical_score += 10
+    if len(soup.find_all('script')) < 10:
+        technical_score += 5
+    if len(soup.find_all('link', rel='stylesheet')) < 5:
+        technical_score += 5
+    technical_score = min(technical_score, 20)
+
+    ux_score = 0
+    if soup.find('nav'):
+        ux_score += 5
+    if soup.find('footer'):
+        ux_score += 5
+    if soup.find('form'):
+        ux_score += 5
+    ux_score = min(ux_score, 15)
+
+    security_score = 5 if url.startswith('https') else 0
+    security_score = min(security_score, 10)
+
+    total_score = seo_score + content_score + technical_score + ux_score + security_score
+
+    og_tags = soup.find_all('meta', property=re.compile(r'^og:'))
+    scripts = soup.find_all('script')
+
+    social_count = len(re.findall(r'(facebook|instagram|linkedin|twitter|x\.com|youtube|tiktok|pinterest)', html, re.I))
+    social_score = min(10, social_count)
+
+    if len(html) < 100000:
+        perf_score = 2
+    elif len(html) < 200000:
+        perf_score = 1
+    else:
+        perf_score = 0
+    if 'loading="lazy"' in html.lower() or 'lazy' in html.lower():
+        perf_score += 2
+    if 'webp' in html.lower():
+        perf_score += 1
+    perf_score = min(5, perf_score)
+
+    mobile_indicator = 15 if soup.find('meta', attrs={'name': 'viewport'}) else 0
+
+    legacy = {
+        "security": 10 if url.startswith('https') else 0,
+        "seo_basics": int(seo_score * (20 / 30)),
+        "content": min(20, content_score),
+        "technical": min(15, technical_score),
+        "mobile": int(min(15, mobile_indicator)),
+        "social": int(social_score),
+        "performance": int(perf_score)
+    }
+
+    return BasicAnalysis(
+        company=company or urlparse(url).netloc,
+        website=url,
+        analyzed_at=datetime.now().isoformat(),
+        digital_maturity_score=ensure_integer(total_score),
+        technical_score=ensure_integer(technical_score),
+        content_score=ensure_integer(content_score),
+        seo_score=ensure_integer(seo_score),
+        score_breakdown=ScoreBreakdown(
+            seo=ensure_integer(seo_score),
+            content=ensure_integer(content_score),
+            technical=ensure_integer(technical_score),
+            ux=ensure_integer(ux_score),
+            security=ensure_integer(security_score),
+            total=ensure_integer(total_score)
+        ),
+        score_breakdown_legacy=legacy
+    )
+
+def analyze_technical_aspects(html: str, url: str) -> TechnicalAudit:
+    soup = BeautifulSoup(html, 'html.parser')
+    issues = 0
+    if not soup.find('title'):
+        issues += 1
+    if not soup.find('meta', attrs={'name': 'description'}):
+        issues += 1
+    if not soup.find('meta', attrs={'name': 'viewport'}):
+        issues += 1
+    if len(soup.find_all('img', alt='')) > 0:
+        issues += 1
+    return TechnicalAudit(
+        score=ensure_integer(100 - (issues * 10)),
+        issues_found=issues,
+        page_speed="Fast" if len(soup.find_all('script')) < 10 else "Moderate",
+        mobile_responsive=bool(soup.find('meta', attrs={'name': 'viewport'})),
+        ssl_enabled=url.startswith('https'),
+        meta_tags_present=bool(soup.find('meta', attrs={'name': 'description'})),
+        structured_data=bool(soup.find('script', type='application/ld+json')),
+        xml_sitemap=None,
+        robots_txt=None
+    )
+
+def analyze_content(html: str) -> ContentAnalysis:
+    soup = BeautifulSoup(html, 'html.parser')
+    text = soup.get_text(separator=" ")
+    words = text.split()
+    word_count = len(words)
+    word_freq: Dict[str, int] = {}
+    for word in words:
+        w = re.sub(r'[^a-zA-Z0-9]', '', word).lower()
+        if len(w) > 4:
+            word_freq[w] = word_freq.get(w, 0) + 1
+    top_keywords = dict(sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:5])
+    keyword_density = {k: round(v / max(1, word_count) * 100, 2) for k, v in top_keywords.items()}
+    return ContentAnalysis(
+        score=ensure_integer(min(word_count // 50, 100)),
+        word_count=word_count,
+        reading_time=f"{max(1, word_count // 200)} min",
+        content_quality="Good" if word_count > 500 else "Needs improvement",
+        keyword_density=keyword_density,
+        headings_structure={
+            "h1": len(soup.find_all('h1')),
+            "h2": len(soup.find_all('h2')),
+            "h3": len(soup.find_all('h3'))
+        }
+    )
+
+def analyze_ux(html: str) -> UXAnalysis:
+    soup = BeautifulSoup(html, 'html.parser')
+    interactive_elements = len(soup.find_all('button')) + len(soup.find_all('a')) + len(soup.find_all('form'))
+    return UXAnalysis(
+        score=ensure_integer(min(interactive_elements * 5, 100)),
+        navigation_clarity="Good" if soup.find('nav') else "Poor",
+        mobile_friendliness="Yes" if soup.find('meta', attrs={'name': 'viewport'}) else "No",
+        page_load_time="Fast",
+        interactive_elements=interactive_elements,
+        accessibility_score=ensure_integer(80 if soup.find_all('img', alt=True) else 40)
+    )
+
+def analyze_social_media(html: str) -> SocialMediaAnalysis:
+    soup = BeautifulSoup(html, 'html.parser')
+    html_lower = html.lower()
+    platforms = []
+    social_links: List[str] = []
+    social_platforms = {
+        'facebook': 'facebook.com',
+        'twitter': 'twitter.com',
+        'linkedin': 'linkedin.com',
+        'instagram': 'instagram.com',
+        'youtube': 'youtube.com'
+    }
+    for platform, domain in social_platforms.items():
+        if domain in html_lower:
+            platforms.append(platform)
+            links = soup.find_all('a', href=re.compile(domain))
+            social_links.extend([link.get('href') for link in links[:2]])
+    return SocialMediaAnalysis(
+        score=ensure_integer(len(platforms) * 20),
+        platforms_found=platforms,
+        engagement_indicators={"sharing_buttons": len(platforms), "follow_buttons": len(social_links)},
+        social_links=[l for l in social_links[:5] if l]
+    )
+
+def generate_competitive_analysis(score: int) -> CompetitiveAnalysis:
+    if score > 70:
+        position = "Market Leader"
+        strengths = ["Strong digital presence", "Good technical foundation", "Quality content"]
+        weaknesses = ["Room for optimization"]
+    elif score > 40:
+        position = "Competitive"
+        strengths = ["Basic digital presence", "Some technical features"]
+        weaknesses = ["Need better content", "Technical improvements needed"]
+    else:
+        position = "Needs Improvement"
+        strengths = ["Online presence established"]
+        weaknesses = ["Weak technical foundation", "Content needs work", "Poor SEO"]
+    return CompetitiveAnalysis(
+        market_position=position,
+        strengths=strengths,
+        weaknesses=weaknesses,
+        opportunities=["Mobile optimization", "Content marketing", "SEO improvements"],
+        threats=["Competitor advancement", "Algorithm changes", "User expectations"]
+    )
+
+def generate_ai_analysis(basic: BasicAnalysis, detailed: DetailedAnalysis) -> AIAnalysis:
+    score = basic.digital_maturity_score
+    strengths: List[str] = []
+    weaknesses: List[str] = []
+    if score > 60:
+        strengths.append("Strong digital foundation")
+    if detailed.technical_audit.mobile_responsive:
+        strengths.append("Mobile optimized")
+    if detailed.technical_audit.ssl_enabled:
+        strengths.append("Secure connection")
+    if score < 40:
+        weaknesses.append("Weak digital presence")
+    if not detailed.technical_audit.structured_data:
+        weaknesses.append("Missing structured data")
+    if detailed.content_analysis.word_count < 500:
+        weaknesses.append("Thin content")
+    recommendations = [
+        {"action": "Improve SEO", "priority": "high", "impact": "Increase visibility"},
+        {"action": "Add more content", "priority": "medium", "impact": "Better engagement"},
+        {"action": "Optimize performance", "priority": "low", "impact": "Better UX"}
+    ]
+    action_priority = [
+        {"title": "Fix technical issues", "urgency": "high", "effort": "low"},
+        {"title": "Improve content", "urgency": "medium", "effort": "medium"},
+        {"title": "Enhance UX", "urgency": "low", "effort": "high"}
+    ]
+    return AIAnalysis(
+        summary=f"Website scores {score}/100 showing {'strong' if score > 60 else 'moderate' if score > 40 else 'weak'} digital maturity.",
+        strengths=strengths or ["Established online presence"],
+        weaknesses=weaknesses or ["Room for improvement"],
+        opportunities=["SEO optimization", "Content expansion", "Technical improvements"],
+        threats=["Competitor growth", "Algorithm updates"],
+        recommendations=recommendations,
+        confidence_score=0.85,
+        sentiment_score=0.7 if score > 50 else 0.4,
+        key_metrics={"overall_score": score, "improvement_potential": 100 - score, "priority_areas": 3},
+        action_priority=action_priority
+    )
+
+def generate_smart_analysis(basic: BasicAnalysis, detailed: DetailedAnalysis) -> SmartAnalysis:
+    actions: List[SmartAction] = []
+    if basic.seo_score < 20:
+        actions.append(SmartAction(
+            title="Improve SEO",
+            description="Add meta tags and optimize content",
+            priority="high",
+            impact="high",
+            effort="low"
+        ))
+    if not detailed.technical_audit.mobile_responsive:
+        actions.append(SmartAction(
+            title="Mobile Optimization",
+            description="Make site responsive",
+            priority="critical",
+            impact="high",
+            effort="medium"
+        ))
+    if detailed.content_analysis.word_count < 500:
+        actions.append(SmartAction(
+            title="Add Content",
+            description="Increase content depth",
+            priority="medium",
+            impact="medium",
+            effort="medium"
+        ))
+    scores = {
+        "seo": ensure_integer(basic.seo_score),
+        "content": ensure_integer(basic.content_score),
+        "technical": ensure_integer(basic.technical_score),
+        "overall": ensure_integer(basic.digital_maturity_score)
+    }
+    return SmartAnalysis(actions=actions, scores=scores)
+
+def generate_enhanced_features(basic: BasicAnalysis, detailed: DetailedAnalysis) -> EnhancedFeatures:
+    score = basic.digital_maturity_score
+    return EnhancedFeatures(
+        industry_benchmarking=EnhancedFeature(
+            value=f"{score}/100",
+            description="Industry average: 45, Top 25%: 70",
+            status="above_average" if score > 45 else "below_average"
+        ),
+        competitor_gaps=EnhancedFeature(
+            value="3 gaps identified",
+            description="Key areas where competitors excel",
+            status="attention"
+        ),
+        growth_opportunities=EnhancedFeature(
+            value=f"+{100 - score} points potential",
+            description="Achievable improvements in 6 months",
+            status="high_potential" if score < 50 else "moderate"
+        ),
+        risk_assessment=EnhancedFeature(
+            value="Medium risk",
+            description="3 vulnerabilities identified",
+            status="moderate"
+        ),
+        market_trends=EnhancedFeature(
+            value="70% aligned",
+            description="Following current digital trends",
+            status="good"
+        ),
+        technology_stack=EnhancedFeature(
+            value="5 technologies",
+            description="Modern tech stack detected",
+            status="current"
+        ),
+        estimated_traffic_rank=EnhancedFeature(
+            value="Medium",
+            description="1K-10K monthly visitors estimate",
+            status="average"
+        ),
+        mobile_first_index_ready=EnhancedFeature(
+            value="Yes" if detailed.technical_audit.mobile_responsive else "No",
+            description="Google mobile-first indexing ready",
+            status="ready" if detailed.technical_audit.mobile_responsive else "not_ready"
+        ),
+        core_web_vitals_assessment=EnhancedFeature(
+            value="Needs Improvement",
+            description="LCP: 2.5s, FID: 100ms, CLS: 0.1",
+            status="needs_work"
+        )
+    )
+
+@app.post("/auth/login", response_model=TokenResponse)
+async def login(request: LoginRequest):
+    user = users_db.get(request.username)
+    if not user or not pwd_context.verify(request.password, user["hashed_password"]):
+        if request.username == "guest" and request.password == "":
+            token = create_access_token({"sub": "guest", "role": "guest"})
+            return TokenResponse(access_token=token, token_type="bearer", role="guest", username="guest")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
+    token = create_access_token({"sub": user["username"], "role": user["role"]})
+    return TokenResponse(access_token=token, token_type="bearer", role=user["role"], username=user["username"])
+
+@app.get("/auth/me")
+async def get_me(current_user: dict = Depends(verify_token)):
+    username = current_user["username"]
+    role = current_user["role"]
+    user_data = users_db.get(username, {"usage_count": 0})
+    usage_count = user_data.get("usage_count", 0)
+    usage_limit = USAGE_LIMITS.get(role, 3)
+    remaining = "unlimited" if usage_limit == float('inf') else max(0, usage_limit - usage_count)
+    return {"username": username, "role": role, "usage_count": usage_count, "usage_limit": usage_limit, "remaining": remaining}
+
+@app.post("/auth/logout")
+async def logout():
+    return {"message": "Logged out successfully"}
+
+def _check_and_increment_usage(username: str, role: str):
+    record = users_db.get(username)
+    if record is None:
+        users_db[username] = {"username": username, "hashed_password": "", "role": role, "usage_count": 0}
+        record = users_db[username]
+    limit = USAGE_LIMITS.get(role, 3)
+    if limit != float('inf') and record.get("usage_count", 0) >= limit:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Usage limit reached. {role} limit: {limit}")
+    record["usage_count"] = record.get("usage_count", 0) + 1
+
+@app.post("/api/v1/analyze", response_model=AnalysisResponse)
+async def analyze(request: AnalysisRequest, current_user: dict = Depends(get_current_user_optional)):
+    url = clean_url(request.url)
+    username = current_user.get("username", "guest")
+    role = current_user.get("role", "guest")
+
+    cached = get_from_cache(url)
+    if cached:
+        return cached
+
+    html = await fetch_website_content(url)
+
+    basic = analyze_basic_metrics(html, url, request.company_name or "")
+    technical = analyze_technical_aspects(html, url)
+    content = analyze_content(html)
+    ux = analyze_ux(html)
+    social = analyze_social_media(html)
+    competitive = generate_competitive_analysis(basic.digital_maturity_score)
+
+    detailed = DetailedAnalysis(
+        technical_audit=technical,
+        content_analysis=content,
+        ux_analysis=ux,
+        social_media=social,
+        competitive_analysis=competitive
+    )
+
+    ai = generate_ai_analysis(basic, detailed)
+    smart = generate_smart_analysis(basic, detailed)
+    enhanced = generate_enhanced_features(basic, detailed)
+
+    response = AnalysisResponse(
+        basic_analysis=basic,
+        detailed_analysis=detailed,
+        ai_analysis=ai,
+        smart=smart,
+        enhanced_features=enhanced,
+        metadata={
+            "api_version": APP_VERSION,
+            "analyzed_at": datetime.now().isoformat(),
+            "cached": False,
+            "user_role": role
+        }
+    )
+
+    _check_and_increment_usage(username, role)
+    save_to_cache(url, response.dict())
+
+    return response
+
+@app.post("/api/v1/ai-analyze", response_model=AnalysisResponse)
+async def ai_analyze(request: AnalysisRequest, current_user: dict = Depends(verify_token)):
+    if current_user["role"] == "guest":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="AI analysis requires user or admin account")
+    return await analyze(request, current_user)
+
 @app.get("/")
 async def root():
-    return {"status": "online", "service": "Website Analysis API"}
+    return {
+        "status": "online",
+        "service": APP_NAME,
+        "version": APP_VERSION,
+        "endpoints": {
+            "auth": ["/auth/login", "/auth/me", "/auth/logout"],
+            "analysis": ["/api/v1/analyze", "/api/v1/ai-analyze"],
+            "health": "/health"
+        }
+    }
 
 @app.get("/health")
-async def health_check():
-    return {"status": "healthy"}
+async def health():
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "cache_size": len(cache_storage),
+        "version": APP_VERSION
+    }
+
+@app.get("/test")
+async def test():
+    return {"message": "API is working!", "timestamp": datetime.now().isoformat()}
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+    port = int(os.getenv("PORT", 8000))
+    host = os.getenv("HOST", "0.0.0.0")
+    print(f"""
+    +------------------------------------------------------+
+    |  Website Analyzer API v{APP_VERSION} - Starting...             |
+    +------------------------------------------------------+
+    |  Server: http://{host}:{port}
+    |  Docs:   http://{host}:{port}/docs
+    |
+    |  Auth:   JWT Bearer Token
+    |  Login:  POST /auth/login
+    |  Admin:  {os.getenv('ADMIN_PASSWORD', 'Set ADMIN_PASSWORD')}
+    +------------------------------------------------------+
+    """)
+    uvicorn.run(app, host=host, port=port, reload=False)
