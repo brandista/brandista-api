@@ -16,7 +16,7 @@ numpy
 pydantic
 prometheus-client
 reportlab
-
+PyJWT==2.9.0
 # Valinnaiset
 redis
 validators
