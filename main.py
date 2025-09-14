@@ -176,11 +176,14 @@ app.add_middleware(
     allow_credentials=not ("*" in ALLOWED_ORIGINS),
     allow_methods=["*"],
     allow_headers=[
-        "Authorization",
-        "Content-Type",
-        "X-Requested-With",
-        "Accept",
-        "Origin"
+    "Authorization",
+    "Content-Type",
+    "X-Requested-With", 
+    "Accept",
+    "Origin",
+    "Access-Control-Request-Method",
+    "Access-Control-Request-Headers"
+],
     ],
     expose_headers=["*"],
     max_age=600
