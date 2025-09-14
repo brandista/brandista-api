@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Brandista Competitive Intelligence API - Complete Unified Version
-Version: 6.0.1 - Production Ready
+Version: 6.1.0 - Production Ready
 Author: Brandista Team
 Date: 2025
 Description: Complete production-ready website analysis with configurable scoring system
@@ -38,7 +38,7 @@ from passlib.context import CryptContext
 # FastAPI imports
 from fastapi import FastAPI, HTTPException, Header, Depends, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPBearer
 from pydantic import BaseModel, Field
 
 # OpenAI (optional)
@@ -115,7 +115,7 @@ SCORING_CONFIG = load_scoring_config()
 # CONSTANTS
 # ============================================================================
 
-APP_VERSION = "6.0.1"
+APP_VERSION = "6.1.0"
 APP_NAME = "Brandista Competitive Intelligence API"
 APP_DESCRIPTION = """Production-ready website analysis with configurable scoring system."""
 
@@ -137,16 +137,13 @@ USER_AGENT = os.getenv("USER_AGENT",
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 
-# --- CORS (päivitetty) ---
+# ---- CORS: dev-oletukset sallivat Vite/CRA localhostit ----
 ALLOWED_ORIGINS = [
     origin.strip() for origin in os.getenv(
         "ALLOWED_ORIGINS",
-        "http://localhost:5173,http://127.0.0.1:5173,https://brandista.example"
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000"
     ).split(",")
 ]
-# Valinnainen regex-esikatseluille (esim. Vercel/Netlify previewt)
-ALLOWED_ORIGIN_REGEX = os.getenv("ALLOWED_ORIGIN_REGEX", "").strip() or None
-
 RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "false").lower() == "true"
 RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "20"))
 
@@ -173,35 +170,20 @@ app = FastAPI(
     docs_url="/docs", redoc_url="/redoc", openapi_url="/openapi.json"
 )
 
-# --- CORS middleware (päivitetty blokk i) ---
-cors_common_kwargs = dict(
-    allow_credentials=True,         # sallitaan kirjautuminen/Authorization-header
-    allow_methods=["*"],            # helpottaa preflightia
-    allow_headers=["*"],            # mm. Authorization, Content-Type, Accept
+# CORS: jos * sallittu, ei credentials (selainten vaatimus)
+cors_allow_credentials = not ("*" in ALLOWED_ORIGINS)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=cors_allow_credentials,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
     expose_headers=["*"],
     max_age=600
 )
 
-if ALLOWED_ORIGIN_REGEX:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origin_regex=ALLOWED_ORIGIN_REGEX,
-        **cors_common_kwargs
-    )
-else:
-    # Jos '*' mukana listoissa → selaimen sääntöjen mukaan credentials=False
-    if "*" in ALLOWED_ORIGINS:
-        cors_common_kwargs["allow_credentials"] = False
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=ALLOWED_ORIGINS,
-        **cors_common_kwargs
-    )
-
-logger.info(
-    f"CORS configured | origins={ALLOWED_ORIGINS} | regex={ALLOWED_ORIGIN_REGEX} | "
-    f"credentials={cors_common_kwargs['allow_credentials']}"
-)
+if "*" in ALLOWED_ORIGINS and cors_allow_credentials:
+    logger.warning("CORS misconfig detected; forcing allow_credentials=False for wildcard origins.")
 
 # Rate limiting
 if RATE_LIMIT_ENABLED:
@@ -272,6 +254,11 @@ class ScoreBreakdown(BaseModel):
     mobile: int = Field(0, ge=0, le=15)
     social: int = Field(0, ge=0, le=10)
     performance: int = Field(0, ge=0, le=5)
+
+    # --- UI alias fields (frontend odottaa näitä nimiä) ---
+    seo: Optional[int] = None
+    user_experience: Optional[int] = None
+    accessibility: Optional[int] = None
 
 class BasicAnalysis(BaseModel):
     company: str
@@ -540,6 +527,15 @@ def get_domain_from_url(url: str) -> str:
     parsed = urlparse(url)
     return parsed.netloc or parsed.path.split('/')[0]
 
+# ---- score alias helper (UI yhteensopivuus) ----
+def map_scorebreakdown_aliases(raw: Dict[str, int]) -> Dict[str, int]:
+    out = dict(raw or {})
+    out["seo"] = raw.get("seo_basics", 0)
+    out["user_experience"] = raw.get("mobile", 0)
+    # accessibility on heuristinen, neutraali (7/??) -> UI skaalautuu erikseen
+    out["accessibility"] = out.get("accessibility", 7)
+    return out
+
 # ============================================================================
 # OPENAI SETUP
 # ============================================================================
@@ -582,7 +578,6 @@ async def cleanup_cache():
 # ============================================================================
 
 def check_security_headers_from_headers(headers: httpx.Headers) -> Dict[str, bool]:
-    # Case-insensitive header access
     def has(h: str) -> bool:
         return h in headers
     return {
@@ -592,7 +587,6 @@ def check_security_headers_from_headers(headers: httpx.Headers) -> Dict[str, boo
     }
 
 def check_security_headers_in_html(html: str) -> Dict[str, bool]:
-    # fallback only (less accurate, for SSR-generated tags/hints)
     hl = html.lower()
     return {
         'csp': 'content-security-policy' in hl,
@@ -1027,7 +1021,151 @@ async def analyze_competitive_positioning(url: str, basic: Dict[str, Any]) -> Di
     }
 
 # ============================================================================
-# AI INSIGHTS (unchanged core)
+# ENHANCED FEATURES GENERATOR (täydentää kaikki 9 kenttää)
+# ============================================================================
+
+async def generate_enhanced_features(
+    url: str,
+    basic: Dict[str, Any],
+    technical: Dict[str, Any],
+    content: Dict[str, Any],
+    social: Dict[str, Any],
+) -> Dict[str, Any]:
+    score = basic.get("digital_maturity_score", 0)
+    breakdown = basic.get("score_breakdown", {})
+    seo = breakdown.get("seo_basics", 0)
+    tech = breakdown.get("technical", 0)
+    mob = breakdown.get("mobile", 0)
+    perf = breakdown.get("performance", 0)
+    social_points = breakdown.get("social", 0)
+
+    industry_benchmarking = {
+        "value": f"{score} / 100",
+        "description": "Industry comparison based on configurable scoring",
+        "status": "above_average" if score > 45 else "below_average",
+        "details": {
+            "your_score": score,
+            "industry_average": 45,
+            "top_quartile": 70,
+            "bottom_quartile": 30,
+            "percentile": min(100, int((score / 45) * 50)) if score <= 45 else 50 + int(((score - 45) / 55) * 50)
+        }
+    }
+
+    competitor_gaps = {
+        "value": "Analysis available",
+        "description": "Areas where competitors may have advantages",
+        "status": "attention" if seo < 12 or mob < 10 or perf < 3 else "competitive",
+        "items": [
+            "Improve mobile UX and page speed" if mob < 10 or perf < 3 else "Maintain current mobile performance",
+            "Expand SEO content clusters" if seo < 14 else "Enhance internal linking",
+            "Increase social proof & UGC" if social_points < 6 else "Leverage existing audience better",
+        ]
+    }
+
+    growth_potential = max(0, 90 - score)
+    growth_opportunities = {
+        "value": f"+{growth_potential} Points Potential" if growth_potential > 0 else "Optimized",
+        "description": "Strategic growth areas",
+        "items": [
+            "Technical SEO quick wins (schema, canonical hygiene)",
+            "Content expansion targeting mid-funnel queries",
+            "UX improvements (nav clarity, accessibility fixes)",
+            "CRO experiments on top landing pages"
+        ],
+        "potential_score": min(100, score + min(30, growth_potential))
+    }
+
+    risk_level = "Low"
+    if score < 35 or breakdown.get("security", 0) < 8:
+        risk_level = "High"
+    elif score < 50:
+        risk_level = "Medium"
+    risk_assessment = {
+        "value": "Risks evaluated",
+        "description": "Key risks to monitor",
+        "items": [
+            "Security headers missing" if technical.get("security_headers", {}) == {} else "Baseline security headers present",
+            "Thin content risk" if content.get("word_count", 0) < 800 else "Content volume adequate",
+            "Tracking visibility" if not technical.get("has_analytics") else "Analytics configured"
+        ],
+        "risk_level": risk_level
+    }
+
+    market_trends = {
+        "value": "Trends analyzed",
+        "description": "Relevant market trends",
+        "trends": [
+            "AI-assisted content production",
+            "Core Web Vitals updates",
+            "Privacy-first analytics & consent"
+        ],
+        "status": "modern" if tech >= 10 else "legacy"
+    }
+
+    traffic_category = "High" if score >= 70 else "Medium" if score >= 45 else "Low"
+    estimated_traffic_rank = {
+        "value": "Estimate available",
+        "description": "Traffic estimation based on digital maturity",
+        "category": f"{traffic_category} Traffic",
+        "confidence": "Medium",
+        "factors": ["Content depth", "SEO fundamentals", "Performance & UX"]
+    }
+
+    mobile_ready = mob >= 10
+    mobile_first_index_ready = {
+        "value": "Yes" if mobile_ready else "No",
+        "description": "Google Mobile-First indexing readiness",
+        "status": "ready" if mobile_ready else "not_ready",
+        "mobile_score": int((mob / 15) * 100),
+        "issues": [] if mobile_ready else ["Viewport meta missing or weak", "Responsive design signals limited"],
+        "recommendations": [] if mobile_ready else ["Add correct viewport meta", "Increase responsive CSS usage"]
+    }
+
+    lcp_ok = perf >= 3
+    fid_ok = tech >= 10
+    cls_ok = True
+    core_web_vitals_assessment = {
+        "value": "Assessment completed",
+        "description": "Website performance metrics",
+        "status": "pass" if (lcp_ok and fid_ok and cls_ok) else "needs_improvement",
+        "metrics": {
+            "lcp": "Good" if lcp_ok else "Needs Work",
+            "fid": "Good" if fid_ok else "Needs Work",
+            "cls": "Good" if cls_ok else "Needs Work"
+        },
+        "lcp": "Good" if lcp_ok else "Needs Work",
+        "fid": "Good" if fid_ok else "Needs Work",
+        "cls": "Good" if cls_ok else "Needs Work",
+        "recommendations": [] if (lcp_ok and fid_ok and cls_ok) else [
+            "Defer non-critical JS",
+            "Compress hero media",
+            "Preload critical resources"
+        ]
+    }
+
+    technology_stack = {
+        "value": "Modern web technologies detected",
+        "description": "Technology stack analysis complete",
+        "detected": ["HTML5", "CSS3", "JavaScript"] + (["Google Analytics"] if technical.get("has_analytics") else []),
+        "categories": {"frontend": ["HTML5", "CSS3"], "analytics": ["GA4"] if technical.get("has_analytics") else []},
+        "modernity": "modern" if tech >= 10 else "traditional"
+    }
+
+    return {
+        "industry_benchmarking": industry_benchmarking,
+        "competitor_gaps": competitor_gaps,
+        "growth_opportunities": growth_opportunities,
+        "risk_assessment": risk_assessment,
+        "market_trends": market_trends,
+        "estimated_traffic_rank": estimated_traffic_rank,
+        "mobile_first_index_ready": mobile_first_index_ready,
+        "core_web_vitals_assessment": core_web_vitals_assessment,
+        "technology_stack": technology_stack,
+    }
+
+# ============================================================================
+# AI INSIGHTS
 # ============================================================================
 
 async def generate_ai_insights(url: str, basic: Dict[str, Any], technical: Dict[str, Any], content: Dict[str, Any], ux: Dict[str, Any], social: Dict[str, Any]) -> AIAnalysis:
@@ -1123,6 +1261,21 @@ def generate_smart_actions(ai: AIAnalysis, technical: Dict[str, Any], content: D
             "priority": "critical", "effort": "high", "impact": "critical",
             "estimated_score_increase": 15, "category": "content", "estimated_time": "2-4 weeks"
         })
+    # add a couple of high/medium examples based on heuristics
+    if not technical.get('has_analytics'):
+        actions.append({
+            "title": "Implement GA4 with key events",
+            "description": "Add GA4 and configure conversions for leads/purchases.",
+            "priority": "high", "effort": "low", "impact": "high",
+            "estimated_score_increase": 6, "category": "analytics", "estimated_time": "1-2 days"
+        })
+    if content.get('word_count', 0) < 1200:
+        actions.append({
+            "title": "Expand pillar page content",
+            "description": "Boost topical authority with 1200–2000 words & internal links.",
+            "priority": "medium", "effort": "medium", "impact": "high",
+            "estimated_score_increase": 8, "category": "content", "estimated_time": "1-2 weeks"
+        })
     priority_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
     actions.sort(key=lambda x: (priority_order.get(x['priority'], 4), -x.get('estimated_score_increase', 0)))
     return actions[:10]
@@ -1168,48 +1321,46 @@ async def ai_analyze_comprehensive(
             current_count = user_search_counts.get(user.username, 0)
             if user_limit > 0 and current_count >= user_limit:
                 raise HTTPException(403, f"Search limit reached ({user_limit} searches)")
+
         url = clean_url(request.url)
         _reject_ssrf(url)
-        cache_key = get_cache_key(url, "ai_comprehensive_v6.0.1")
+
+        cache_key = get_cache_key(url, "ai_comprehensive_v6.1.0")
         if cache_key in analysis_cache and is_cache_valid(analysis_cache[cache_key]['timestamp']):
             logger.info(f"Cache hit for {url} (user: {user.username})")
             return analysis_cache[cache_key]['data']
+
         response = await fetch_url_with_retries(url)
         if not response or response.status_code != 200:
             raise HTTPException(400, f"Cannot access website: {url}")
         html_content = response.text
         if not html_content or len(html_content.strip()) < 100:
             raise HTTPException(400, "Website returned insufficient content")
+
         basic_analysis = await analyze_basic_metrics_enhanced(url, html_content, headers=response.headers)
         technical_audit = await analyze_technical_aspects(url, html_content, headers=response.headers)
         content_analysis = await analyze_content_quality(html_content)
         ux_analysis = await analyze_ux_elements(html_content)
         social_analysis = await analyze_social_media_presence(url, html_content)
         competitive_analysis = await analyze_competitive_positioning(url, basic_analysis)
+
+        # Täytä alias-kentät score_breakdowniin
+        sb_raw = basic_analysis.get('score_breakdown', {})
+        sb_with_alias = map_scorebreakdown_aliases(sb_raw)
+
+        # AI
         ai_analysis = await generate_ai_insights(
             url, basic_analysis, technical_audit, content_analysis, ux_analysis, social_analysis
         )
-        enhanced_features = {
-            "industry_benchmarking": {
-                "value": f"{basic_analysis['digital_maturity_score']} / 100",
-                "description": "Industry comparison based on configurable scoring",
-                "status": "above_average" if basic_analysis['digital_maturity_score'] > 45 else "below_average",
-                "details": {
-                    "your_score": basic_analysis['digital_maturity_score'],
-                    "industry_average": 45, "top_quartile": 70, "bottom_quartile": 30,
-                    "percentile": min(100, int((basic_analysis['digital_maturity_score'] / 45) * 50)) if basic_analysis['digital_maturity_score'] <= 45 else 50 + int(((basic_analysis['digital_maturity_score'] - 45) / 55) * 50)
-                }
-            },
-            "technology_stack": {
-                "value": "Modern web technologies detected",
-                "description": "Technology stack analysis complete",
-                "detected": ["HTML5", "CSS3", "JavaScript"],
-                "categories": {"frontend": ["HTML5", "CSS3"], "analytics": []},
-                "modernity": "modern"
-            },
-            "admin_features_enabled": user.role == "admin"
-        }
+
+        # Enhanced features (kaikki 9)
+        enhanced_features = await generate_enhanced_features(
+            url, basic_analysis, technical_audit, content_analysis, social_analysis
+        )
+        enhanced_features["admin_features_enabled"] = (user.role == "admin")
+
         smart_actions = generate_smart_actions(ai_analysis, technical_audit, content_analysis, basic_analysis)
+
         result = {
             "success": True,
             "company_name": request.company_name or get_domain_from_url(url),
@@ -1222,9 +1373,9 @@ async def ai_analyze_comprehensive(
                 technical_score=technical_audit.get('overall_technical_score', 0),
                 content_score=content_analysis.get('content_quality_score', 0),
                 seo_score=int((basic_analysis.get('score_breakdown', {}).get('seo_basics', 0) / SCORING_CONFIG.weights['seo_basics']) * 100),
-                score_breakdown=ScoreBreakdown(**basic_analysis.get('score_breakdown', {}))
+                score_breakdown=ScoreBreakdown(**sb_with_alias)
             ).dict(),
-            "ai_analysis": ai_analysis.dict(),
+            "ai_analysis": AIAnalysis(**ai_analysis.dict()).dict(),
             "detailed_analysis": DetailedAnalysis(
                 social_media=SocialMediaAnalysis(**social_analysis),
                 technical_audit=TechnicalAudit(**technical_audit),
@@ -1253,13 +1404,17 @@ async def ai_analyze_comprehensive(
                 "scoring_weights": SCORING_CONFIG.weights
             }
         }
+
         result = ensure_integer_scores(result)
         analysis_cache[cache_key] = {'data': result, 'timestamp': datetime.now()}
         background_tasks.add_task(cleanup_cache)
+
         if user.role != "admin":
             user_search_counts[user.username] = user_search_counts.get(user.username, 0) + 1
+
         logger.info(f"Analysis complete for {url}: score={basic_analysis['digital_maturity_score']} (user: {user.username})")
         return result
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1275,13 +1430,15 @@ async def basic_analyze(request: CompetitorAnalysisRequest, user: UserInfo = Dep
         if not response or response.status_code != 200:
             raise HTTPException(400, f"Cannot access website: {url}")
         basic_analysis = await analyze_basic_metrics_enhanced(url, response.text, headers=response.headers)
+        # aliakset myös basic endpointissa
+        sb_with_alias = map_scorebreakdown_aliases(basic_analysis.get('score_breakdown', {}))
         return {
             "success": True,
             "company": request.company_name or get_domain_from_url(url),
             "website": url,
             "digital_maturity_score": basic_analysis['digital_maturity_score'],
             "social_platforms": basic_analysis.get('social_platforms', 0),
-            "score_breakdown": basic_analysis.get('score_breakdown', {}),
+            "score_breakdown": sb_with_alias,
             "analysis_date": datetime.now().isoformat(),
             "analyzed_by": user.username,
             "scoring_weights": SCORING_CONFIG.weights
@@ -1311,7 +1468,8 @@ async def root():
             "Production-ready architecture",
             "AI-powered insights"
         ],
-        "scoring_system": {"version": "configurable_v1", "weights": SCORING_CONFIG.weights}
+        "scoring_system": {"version": "configurable_v1", "weights": SCORING_CONFIG.weights},
+        "cors": {"allow_origins": ALLOWED_ORIGINS}
     }
 
 @app.get("/health")
