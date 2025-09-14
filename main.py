@@ -422,10 +422,9 @@ async def require_admin(user: UserInfo = Depends(require_user)) -> UserInfo:
 # ============================================================================
 
 def ensure_integer_scores(data: Any) -> Any:
-    """Convert score fields to integers"""
     if isinstance(data, dict):
         for k, v in data.items():
-            if ('_score' in k.lower()) or (k == 'score'):
+            if (k != 'sentiment_score') and (k.endswith('_score') or k == 'score'):
                 if isinstance(v, (int, float)):
                     data[k] = max(0, min(100, int(round(v))))
             elif isinstance(v, dict):
@@ -1124,7 +1123,7 @@ async def generate_enhanced_features(
             "risk_level": "Medium" if risks else "Low"
         }
 
-        # --- Market trends (simple heuristics)
+                # --- Market trends (simple heuristics)
         trends = [
             "EEAT & first-party data importance growing",
             "Core Web Vitals and page experience remain ranking signals",
@@ -1134,9 +1133,14 @@ async def generate_enhanced_features(
             "name": "Market Trends",
             "value": "Trends analyzed",
             "description": "Relevant market trends",
+            # FRONTEND YHTEENSOPIVUUS: käytä 'items'
+            "items": trends,
+            # (valinnainen back-compat, jos haluat säilyttää myös 'trends')
             "trends": trends,
             "status": "modern" if score >= 55 else "developing"
         }
+        
+        
 
         # --- Estimated traffic rank (heuristic)
         traffic_category = (
@@ -1169,18 +1173,25 @@ async def generate_enhanced_features(
             ])
         }
 
-        # --- Core Web Vitals (heuristics → no more 'unknown')
+        # --- Core Web Vitals (heuristics → explicit value/score/grade)
         ps = int(technical.get("page_speed_score", 0))
-        cwv_status = "pass" if ps >= 70 else "needs_improvement"
+        passed = ps >= 70
+        cwv_status = "pass" if passed else "needs_improvement"
+        cwv_grade = "A" if ps >= 90 else "B" if ps >= 80 else "C" if ps >= 70 else "D" if ps >= 60 else "E"
+
         core_web_vitals_assessment = {
             "name": "Core Web Vitals",
-            "value": "Assessment completed",
+            # FRONTEND YHTEENSOPIVUUS: anna konkreettinen arvo
+            "value": "Pass" if passed else "Needs improvement",
             "description": "Website performance metrics",
             "status": cwv_status,
+            # FRONTENDILLE NUMEERINEN SCORE
+            "score": ps,
+            "grade": cwv_grade,
             "metrics": {
-                "lcp": 2400 if ps >= 70 else 3500,  # ms
-                "fid": 100 if ps >= 70 else 180,    # ms (placeholder; TBT proxy)
-                "cls": 0.08 if ps >= 70 else 0.18
+                "lcp_ms": 2400 if passed else 3500,
+                "tbt_ms": 100 if passed else 180,   # FID/TBT proxy
+                "cls": 0.08 if passed else 0.18
             },
             "recommendations": [
                 "Optimize hero images (modern formats, compression)",
