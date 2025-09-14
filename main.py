@@ -138,11 +138,7 @@ USER_AGENT = os.getenv("USER_AGENT",
 )
 
 # ---- CORS: dev-oletukset sallivat Vite/CRA localhostit ----
-ALLOWED_ORIGINS = [
-    origin.strip() for origin in os.getenv(
-        "ALLOWED_ORIGINS",
-        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000"
-    ).split(",")
+ALLOWED_ORIGINS = http://localhost:5173,https://brandista.eu,https://fastapi-production-51f9.up.railway.app
 ]
 RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "false").lower() == "true"
 RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "20"))
