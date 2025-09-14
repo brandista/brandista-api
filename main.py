@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Brandista Competitive Intelligence API - Complete Unified Version
-Version: 6.1.0 - Production Ready
+Version: 6.1.1 - Production Ready
 Author: Brandista Team
 Date: 2025
 Description: Complete production-ready website analysis with configurable scoring system
@@ -115,7 +115,7 @@ SCORING_CONFIG = load_scoring_config()
 # CONSTANTS
 # ============================================================================
 
-APP_VERSION = "6.1.0"
+APP_VERSION = "6.1.1"
 APP_NAME = "Brandista Competitive Intelligence API"
 APP_DESCRIPTION = """Production-ready website analysis with configurable scoring system."""
 
@@ -170,7 +170,7 @@ app = FastAPI(
     docs_url="/docs", redoc_url="/redoc", openapi_url="/openapi.json"
 )
 
-# CORS: jos * sallittu, ei credentials (selainten vaatimus)
+# CORS
 cors_allow_credentials = not ("*" in ALLOWED_ORIGINS)
 app.add_middleware(
     CORSMiddleware,
@@ -247,6 +247,7 @@ class CompetitorAnalysisRequest(BaseModel):
     include_social: bool = Field(True)
 
 class ScoreBreakdown(BaseModel):
+    # Backend (weighted points)
     security: int = Field(0, ge=0, le=15)
     seo_basics: int = Field(0, ge=0, le=20)
     content: int = Field(0, ge=0, le=20)
@@ -255,7 +256,7 @@ class ScoreBreakdown(BaseModel):
     social: int = Field(0, ge=0, le=10)
     performance: int = Field(0, ge=0, le=5)
 
-    # --- UI alias fields (frontend odottaa näitä nimiä) ---
+    # Frontend aliases (0–100)
     seo: Optional[int] = None
     user_experience: Optional[int] = None
     accessibility: Optional[int] = None
@@ -451,7 +452,6 @@ def _reject_ssrf(url: str):
     if host == "localhost" or host.endswith(".local"):
         raise HTTPException(400, "URL not allowed")
     try:
-        # Resolve both IPv4/IPv6
         for fam in (socket.AF_INET, socket.AF_INET6):
             try:
                 infos = socket.getaddrinfo(host, None, fam, socket.SOCK_STREAM)
@@ -527,14 +527,18 @@ def get_domain_from_url(url: str) -> str:
     parsed = urlparse(url)
     return parsed.netloc or parsed.path.split('/')[0]
 
-# ---- score alias helper (UI yhteensopivuus) ----
-def map_scorebreakdown_aliases(raw: Dict[str, int]) -> Dict[str, int]:
-    out = dict(raw or {})
-    out["seo"] = raw.get("seo_basics", 0)
-    out["user_experience"] = raw.get("mobile", 0)
-    # accessibility on heuristinen, neutraali (7/??) -> UI skaalautuu erikseen
-    out["accessibility"] = out.get("accessibility", 7)
-    return out
+# ---- ScoreBreakdown aliases helper ----
+def create_score_breakdown_with_aliases(breakdown_raw: Dict[str, int]) -> Dict[str, int]:
+    """Create score breakdown with both backend and frontend fields (aliases 0-100)."""
+    weights = SCORING_CONFIG.weights
+    result = dict(breakdown_raw or {})
+    result['seo'] = int((result.get('seo_basics', 0) / weights['seo_basics']) * 100)
+    result['user_experience'] = int((result.get('mobile', 0) / weights['mobile']) * 100)
+    result['accessibility'] = min(100, int((
+        (result.get('mobile', 0) / weights['mobile'] * 0.6) + 
+        (result.get('technical', 0) / weights['technical'] * 0.4)
+    ) * 100))
+    return result
 
 # ============================================================================
 # OPENAI SETUP
@@ -574,7 +578,7 @@ async def cleanup_cache():
     logger.info(f"Cache cleanup: removed {items_to_remove} entries")
 
 # ============================================================================
-# ANALYSIS HELPER FUNCTIONS
+# ANALYSIS HELPERS
 # ============================================================================
 
 def check_security_headers_from_headers(headers: httpx.Headers) -> Dict[str, bool]:
@@ -775,7 +779,7 @@ async def analyze_basic_metrics_enhanced(url: str, html: str, headers: Optional[
         else:
             details['https'] = False
         
-        # SEO using configurable scoring
+        # SEO
         seo_score, seo_details = calculate_seo_score_configurable(soup, url)
         score_components['seo_basics'] = seo_score
         details.update(seo_details)
@@ -817,7 +821,7 @@ async def analyze_basic_metrics_enhanced(url: str, html: str, headers: Optional[
         social_platforms = extract_social_platforms(html)
         score_components['social'] = min(10, len(social_platforms))
         
-        # PERFORMANCE (karkeat heuristiikat)
+        # PERFORMANCE
         if len(html) < 100_000: score_components['performance'] += 2
         elif len(html) < 200_000: score_components['performance'] += 1
         if 'lazy' in html.lower() or 'loading="lazy"' in html: score_components['performance'] += 2
@@ -855,7 +859,6 @@ async def analyze_technical_aspects(url: str, html: str, headers: Optional[httpx
     has_ssl = url.startswith('https')
     if has_ssl: tech_score += 20
 
-    # Mobile viewport
     viewport = soup.find('meta', attrs={'name': 'viewport'})
     has_mobile = False
     if viewport:
@@ -866,7 +869,6 @@ async def analyze_technical_aspects(url: str, html: str, headers: Optional[httpx
     analytics = detect_analytics_tools(html)
     if analytics['has_analytics']: tech_score += 10
 
-    # Meta tags scoring (max 15) -> skaalataan 0–100
     meta_points = 0
     title = soup.find('title')
     if title:
@@ -883,7 +885,6 @@ async def analyze_technical_aspects(url: str, html: str, headers: Optional[httpx
     meta_tags_score = int(min(15, meta_points) / 15 * 100)
     tech_score += min(15, meta_points)
 
-    # Page speed estimation -> skaalattu 0–100
     size = len(html)
     if size < 50_000: ps_points = 15
     elif size < 100_000: ps_points = 12
@@ -893,7 +894,6 @@ async def analyze_technical_aspects(url: str, html: str, headers: Optional[httpx
     page_speed_score = int(ps_points / 15 * 100)
     tech_score += ps_points
 
-    # Security headers from real HTTP headers (fallback to HTML heuristic)
     if headers is not None:
         sh = check_security_headers_from_headers(headers)
     else:
@@ -1021,148 +1021,159 @@ async def analyze_competitive_positioning(url: str, basic: Dict[str, Any]) -> Di
     }
 
 # ============================================================================
-# ENHANCED FEATURES GENERATOR (täydentää kaikki 9 kenttää)
+# ENHANCED FEATURES (try/except + 9 korttia)
 # ============================================================================
 
-async def generate_enhanced_features(
-    url: str,
-    basic: Dict[str, Any],
-    technical: Dict[str, Any],
-    content: Dict[str, Any],
-    social: Dict[str, Any],
-) -> Dict[str, Any]:
-    score = basic.get("digital_maturity_score", 0)
-    breakdown = basic.get("score_breakdown", {})
-    seo = breakdown.get("seo_basics", 0)
-    tech = breakdown.get("technical", 0)
-    mob = breakdown.get("mobile", 0)
-    perf = breakdown.get("performance", 0)
-    social_points = breakdown.get("social", 0)
+async def generate_enhanced_features(url: str, basic: Dict[str, Any], technical: Dict[str, Any], content: Dict[str, Any], social: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        score = basic.get("digital_maturity_score", 0)
+        breakdown = basic.get("score_breakdown", {})
+        seo = breakdown.get("seo_basics", 0)
+        tech = breakdown.get("technical", 0)
+        mob = breakdown.get("mobile", 0)
+        perf = breakdown.get("performance", 0)
+        social_points = breakdown.get("social", 0)
 
-    industry_benchmarking = {
-        "value": f"{score} / 100",
-        "description": "Industry comparison based on configurable scoring",
-        "status": "above_average" if score > 45 else "below_average",
-        "details": {
-            "your_score": score,
-            "industry_average": 45,
-            "top_quartile": 70,
-            "bottom_quartile": 30,
-            "percentile": min(100, int((score / 45) * 50)) if score <= 45 else 50 + int(((score - 45) / 55) * 50)
+        industry_benchmarking = {
+            "value": f"{score} / 100",
+            "description": "Industry comparison based on configurable scoring",
+            "status": "above_average" if score > 45 else "below_average",
+            "details": {
+                "your_score": score,
+                "industry_average": 45,
+                "top_quartile": 70,
+                "bottom_quartile": 30,
+                "percentile": min(100, int((score / 45) * 50)) if score <= 45 else 50 + int(((score - 45) / 55) * 50)
+            }
         }
-    }
 
-    competitor_gaps = {
-        "value": "Analysis available",
-        "description": "Areas where competitors may have advantages",
-        "status": "attention" if seo < 12 or mob < 10 or perf < 3 else "competitive",
-        "items": [
-            "Improve mobile UX and page speed" if mob < 10 or perf < 3 else "Maintain current mobile performance",
-            "Expand SEO content clusters" if seo < 14 else "Enhance internal linking",
-            "Increase social proof & UGC" if social_points < 6 else "Leverage existing audience better",
-        ]
-    }
+        competitor_gaps = {
+            "value": "Analysis available",
+            "description": "Areas where competitors may have advantages",
+            "status": "attention" if seo < 12 or mob < 10 or perf < 3 else "competitive",
+            "items": [
+                "Improve mobile UX and page speed" if mob < 10 or perf < 3 else "Maintain current mobile performance",
+                "Expand SEO content clusters" if seo < 14 else "Enhance internal linking",
+                "Increase social proof & UGC" if social_points < 6 else "Leverage existing audience better",
+            ]
+        }
 
-    growth_potential = max(0, 90 - score)
-    growth_opportunities = {
-        "value": f"+{growth_potential} Points Potential" if growth_potential > 0 else "Optimized",
-        "description": "Strategic growth areas",
-        "items": [
-            "Technical SEO quick wins (schema, canonical hygiene)",
-            "Content expansion targeting mid-funnel queries",
-            "UX improvements (nav clarity, accessibility fixes)",
-            "CRO experiments on top landing pages"
-        ],
-        "potential_score": min(100, score + min(30, growth_potential))
-    }
+        growth_potential = max(0, 90 - score)
+        growth_opportunities = {
+            "value": f"+{growth_potential} Points Potential" if growth_potential > 0 else "Optimized",
+            "description": "Strategic growth areas",
+            "items": [
+                "Technical SEO quick wins (schema, canonical hygiene)",
+                "Content expansion targeting mid-funnel queries",
+                "UX improvements (nav clarity, accessibility fixes)",
+                "CRO experiments on top landing pages"
+            ],
+            "potential_score": min(100, score + min(30, growth_potential))
+        }
 
-    risk_level = "Low"
-    if score < 35 or breakdown.get("security", 0) < 8:
-        risk_level = "High"
-    elif score < 50:
-        risk_level = "Medium"
-    risk_assessment = {
-        "value": "Risks evaluated",
-        "description": "Key risks to monitor",
-        "items": [
-            "Security headers missing" if technical.get("security_headers", {}) == {} else "Baseline security headers present",
-            "Thin content risk" if content.get("word_count", 0) < 800 else "Content volume adequate",
-            "Tracking visibility" if not technical.get("has_analytics") else "Analytics configured"
-        ],
-        "risk_level": risk_level
-    }
+        risk_level = "Low"
+        if score < 35 or breakdown.get("security", 0) < 8:
+            risk_level = "High"
+        elif score < 50:
+            risk_level = "Medium"
+        risk_assessment = {
+            "value": "Risks evaluated",
+            "description": "Key risks to monitor",
+            "items": [
+                "Security headers missing" if technical.get("security_headers", {}) == {} else "Baseline security headers present",
+                "Thin content risk" if content.get("word_count", 0) < 800 else "Content volume adequate",
+                "Tracking visibility" if not technical.get("has_analytics") else "Analytics configured"
+            ],
+            "risk_level": risk_level
+        }
 
-    market_trends = {
-        "value": "Trends analyzed",
-        "description": "Relevant market trends",
-        "trends": [
-            "AI-assisted content production",
-            "Core Web Vitals updates",
-            "Privacy-first analytics & consent"
-        ],
-        "status": "modern" if tech >= 10 else "legacy"
-    }
+        market_trends = {
+            "value": "Trends analyzed",
+            "description": "Relevant market trends",
+            "trends": [
+                "AI-assisted content production",
+                "Core Web Vitals updates",
+                "Privacy-first analytics & consent"
+            ],
+            "status": "modern" if tech >= 10 else "legacy"
+        }
 
-    traffic_category = "High" if score >= 70 else "Medium" if score >= 45 else "Low"
-    estimated_traffic_rank = {
-        "value": "Estimate available",
-        "description": "Traffic estimation based on digital maturity",
-        "category": f"{traffic_category} Traffic",
-        "confidence": "Medium",
-        "factors": ["Content depth", "SEO fundamentals", "Performance & UX"]
-    }
+        traffic_category = "High" if score >= 70 else "Medium" if score >= 45 else "Low"
+        estimated_traffic_rank = {
+            "value": "Estimate available",
+            "description": "Traffic estimation based on digital maturity",
+            "category": f"{traffic_category} Traffic",
+            "confidence": "Medium",
+            "factors": ["Content depth", "SEO fundamentals", "Performance & UX"]
+        }
 
-    mobile_ready = mob >= 10
-    mobile_first_index_ready = {
-        "value": "Yes" if mobile_ready else "No",
-        "description": "Google Mobile-First indexing readiness",
-        "status": "ready" if mobile_ready else "not_ready",
-        "mobile_score": int((mob / 15) * 100),
-        "issues": [] if mobile_ready else ["Viewport meta missing or weak", "Responsive design signals limited"],
-        "recommendations": [] if mobile_ready else ["Add correct viewport meta", "Increase responsive CSS usage"]
-    }
+        mobile_ready = mob >= 10
+        mobile_first_index_ready = {
+            "value": "Yes" if mobile_ready else "No",
+            "description": "Google Mobile-First indexing readiness",
+            "status": "ready" if mobile_ready else "not_ready",
+            "mobile_score": int((mob / 15) * 100),
+            "issues": [] if mobile_ready else ["Viewport meta missing or weak", "Responsive design signals limited"],
+            "recommendations": [] if mobile_ready else ["Add correct viewport meta", "Increase responsive CSS usage"]
+        }
 
-    lcp_ok = perf >= 3
-    fid_ok = tech >= 10
-    cls_ok = True
-    core_web_vitals_assessment = {
-        "value": "Assessment completed",
-        "description": "Website performance metrics",
-        "status": "pass" if (lcp_ok and fid_ok and cls_ok) else "needs_improvement",
-        "metrics": {
+        lcp_ok = perf >= 3
+        fid_ok = tech >= 10
+        cls_ok = True
+        core_web_vitals_assessment = {
+            "value": "Assessment completed",
+            "description": "Website performance metrics",
+            "status": "pass" if (lcp_ok and fid_ok and cls_ok) else "needs_improvement",
+            "metrics": {
+                "lcp": "Good" if lcp_ok else "Needs Work",
+                "fid": "Good" if fid_ok else "Needs Work",
+                "cls": "Good" if cls_ok else "Needs Work"
+            },
             "lcp": "Good" if lcp_ok else "Needs Work",
             "fid": "Good" if fid_ok else "Needs Work",
-            "cls": "Good" if cls_ok else "Needs Work"
-        },
-        "lcp": "Good" if lcp_ok else "Needs Work",
-        "fid": "Good" if fid_ok else "Needs Work",
-        "cls": "Good" if cls_ok else "Needs Work",
-        "recommendations": [] if (lcp_ok and fid_ok and cls_ok) else [
-            "Defer non-critical JS",
-            "Compress hero media",
-            "Preload critical resources"
-        ]
-    }
+            "cls": "Good" if cls_ok else "Needs Work",
+            "recommendations": [] if (lcp_ok and fid_ok and cls_ok) else [
+                "Defer non-critical JS",
+                "Compress hero media",
+                "Preload critical resources"
+            ]
+        }
 
-    technology_stack = {
-        "value": "Modern web technologies detected",
-        "description": "Technology stack analysis complete",
-        "detected": ["HTML5", "CSS3", "JavaScript"] + (["Google Analytics"] if technical.get("has_analytics") else []),
-        "categories": {"frontend": ["HTML5", "CSS3"], "analytics": ["GA4"] if technical.get("has_analytics") else []},
-        "modernity": "modern" if tech >= 10 else "traditional"
-    }
+        technology_stack = {
+            "value": "Modern web technologies detected",
+            "description": "Technology stack analysis complete",
+            "detected": ["HTML5", "CSS3", "JavaScript"] + (["Google Analytics"] if technical.get("has_analytics") else []),
+            "categories": {"frontend": ["HTML5", "CSS3"], "analytics": ["GA4"] if technical.get("has_analytics") else []},
+            "modernity": "modern" if tech >= 10 else "traditional"
+        }
 
-    return {
-        "industry_benchmarking": industry_benchmarking,
-        "competitor_gaps": competitor_gaps,
-        "growth_opportunities": growth_opportunities,
-        "risk_assessment": risk_assessment,
-        "market_trends": market_trends,
-        "estimated_traffic_rank": estimated_traffic_rank,
-        "mobile_first_index_ready": mobile_first_index_ready,
-        "core_web_vitals_assessment": core_web_vitals_assessment,
-        "technology_stack": technology_stack,
-    }
+        return {
+            "industry_benchmarking": industry_benchmarking,
+            "competitor_gaps": competitor_gaps,
+            "growth_opportunities": growth_opportunities,
+            "risk_assessment": risk_assessment,
+            "market_trends": market_trends,
+            "estimated_traffic_rank": estimated_traffic_rank,
+            "mobile_first_index_ready": mobile_first_index_ready,
+            "core_web_vitals_assessment": core_web_vitals_assessment,
+            "technology_stack": technology_stack,
+        }
+    except Exception as e:
+        logger.error(f"Enhanced features generation failed: {e}")
+        score = basic.get("digital_maturity_score", 0)
+        return {
+            "industry_benchmarking": {
+                "value": f"{score}/100",
+                "description": "Basic scoring",
+                "status": "analyzed"
+            },
+            "technology_stack": {
+                "value": "Basic analysis",
+                "description": "Technology detected",
+                "detected": ["HTML5", "CSS3"],
+                "modernity": "unknown"
+            }
+        }
 
 # ============================================================================
 # AI INSIGHTS
@@ -1236,49 +1247,135 @@ def generate_english_insights(overall: int, basic: Dict[str, Any], technical: Di
     elif overall >= 60: summary = f"Good digital presence ({overall}/100) with solid fundamentals."
     elif overall >= 45: summary = f"Baseline achieved ({overall}/100) with improvement opportunities."
     else: summary = f"Early-stage digital maturity ({overall}/100) - immediate action required."
+
+    # ----- Action priority + key metrics (KORJAUS) -----
+    action_priority = [
+        {
+            'category': 'security',
+            'priority': 'critical' if breakdown.get('security', 0) <= 5 else 'low',
+            'score_impact': 15 if breakdown.get('security', 0) <= 5 else 3,
+            'description': 'HTTPS and security headers'
+        },
+        {
+            'category': 'content',
+            'priority': 'high' if wc < 1000 else 'medium',
+            'score_impact': 12 if wc < 1000 else 5,
+            'description': 'Content depth and quality'
+        },
+        {
+            'category': 'seo',
+            'priority': 'high' if breakdown.get('seo_basics', 0) < 12 else 'medium',
+            'score_impact': 8 if breakdown.get('seo_basics', 0) < 12 else 4,
+            'description': 'SEO fundamentals and optimization'
+        },
+        {
+            'category': 'mobile',
+            'priority': 'medium' if breakdown.get('mobile', 0) < 10 else 'low',
+            'score_impact': 8 if breakdown.get('mobile', 0) < 10 else 3,
+            'description': 'Mobile experience and responsiveness'
+        }
+    ]
+
     return {
-        'summary': summary, 'strengths': strengths[:5], 'weaknesses': weaknesses[:5],
-        'opportunities': opportunities[:4], 'threats': threats[:3],
-        'recommendations': recommendations[:5], 'confidence_score': min(95, max(60, overall + 20)),
-        'sentiment_score': (overall / 100) * 0.8 + 0.2, 'key_metrics': {}, 'action_priority': []
+        'summary': summary, 
+        'strengths': strengths[:5], 
+        'weaknesses': weaknesses[:5],
+        'opportunities': opportunities[:4], 
+        'threats': threats[:3],
+        'recommendations': recommendations[:5], 
+        'confidence_score': min(95, max(60, overall + 20)),
+        'sentiment_score': (overall / 100) * 0.8 + 0.2, 
+        'key_metrics': {
+            'digital_maturity': overall,
+            'content_words': wc,
+            'security_score': breakdown.get('security', 0),
+            'seo_score': breakdown.get('seo_basics', 0),
+            'mobile_score': breakdown.get('mobile', 0),
+            'social_platforms': len(social.get('platforms', []))
+        }, 
+        'action_priority': action_priority
     }
 
 def generate_smart_actions(ai: AIAnalysis, technical: Dict[str, Any], content: Dict[str, Any], basic: Dict[str, Any]) -> List[Dict[str, Any]]:
     actions = []
     breakdown = basic.get('score_breakdown', {})
-    sec = breakdown.get('security', 0)
-    if sec == 0:
+
+    # Critical
+    if breakdown.get('security', 0) <= 5:
         actions.append({
-            "title": "Critical: Enable HTTPS immediately",
-            "description": "No SSL certificate present - critical security issue",
-            "priority": "critical", "effort": "low", "impact": "critical",
-            "estimated_score_increase": 10, "category": "security", "estimated_time": "1-2 days"
+            "title": "Enable HTTPS and security headers",
+            "description": "Install SSL certificate and configure CSP, X-Frame-Options, HSTS.",
+            "priority": "critical", "effort": "medium", "impact": "critical",
+            "estimated_score_increase": 12, "category": "security", "estimated_time": "1-3 days"
         })
-    if breakdown.get('content', 0) <= 5:
+    if breakdown.get('content', 0) <= 8:
         actions.append({
-            "title": "Create comprehensive content strategy",
-            "description": f"Content score very low - substantial development needed",
+            "title": "Develop comprehensive content",
+            "description": "Create in-depth pillar content (2000+ words) targeting core topics.",
             "priority": "critical", "effort": "high", "impact": "critical",
             "estimated_score_increase": 15, "category": "content", "estimated_time": "2-4 weeks"
         })
-    # add a couple of high/medium examples based on heuristics
-    if not technical.get('has_analytics'):
+
+    # High
+    if breakdown.get('seo_basics', 0) < 12:
         actions.append({
-            "title": "Implement GA4 with key events",
-            "description": "Add GA4 and configure conversions for leads/purchases.",
-            "priority": "high", "effort": "low", "impact": "high",
-            "estimated_score_increase": 6, "category": "analytics", "estimated_time": "1-2 days"
+            "title": "Optimize SEO fundamentals",
+            "description": "Improve titles, meta descriptions, H1/H2 structure, canonical tags.",
+            "priority": "high", "effort": "medium", "impact": "high",
+            "estimated_score_increase": 10, "category": "seo", "estimated_time": "1-2 weeks"
         })
-    if content.get('word_count', 0) < 1200:
+    if breakdown.get('mobile', 0) < 10:
         actions.append({
-            "title": "Expand pillar page content",
-            "description": "Boost topical authority with 1200–2000 words & internal links.",
-            "priority": "medium", "effort": "medium", "impact": "high",
-            "estimated_score_increase": 8, "category": "content", "estimated_time": "1-2 weeks"
+            "title": "Implement responsive design",
+            "description": "Add viewport meta + CSS media queries; test on key devices.",
+            "priority": "high", "effort": "medium", "impact": "high",
+            "estimated_score_increase": 8, "category": "mobile", "estimated_time": "1-2 weeks"
         })
+    if not technical.get('has_analytics', False):
+        actions.append({
+            "title": "Install Google Analytics 4",
+            "description": "Set up GA4 + conversion events; verify data layer.",
+            "priority": "high", "effort": "low", "impact": "medium",
+            "estimated_score_increase": 5, "category": "analytics", "estimated_time": "1-2 days"
+        })
+
+    # Medium
+    if breakdown.get('social', 0) < 6:
+        actions.append({
+            "title": "Build social media presence",
+            "description": "Create/refresh profiles and add sharing buttons site-wide.",
+            "priority": "medium", "effort": "medium", "impact": "medium",
+            "estimated_score_increase": 6, "category": "social", "estimated_time": "1-2 weeks"
+        })
+    if breakdown.get('performance', 0) < 3:
+        actions.append({
+            "title": "Optimize website performance",
+            "description": "Compress images, minify CSS/JS, implement lazy-loading.",
+            "priority": "medium", "effort": "medium", "impact": "medium",
+            "estimated_score_increase": 4, "category": "performance", "estimated_time": "3-5 days"
+        })
+
+    # Low
+    if breakdown.get('technical', 0) < 10:
+        actions.append({
+            "title": "Improve technical SEO",
+            "description": "Add sitemap.xml, robots.txt, and key schema markup.",
+            "priority": "low", "effort": "low", "impact": "medium",
+            "estimated_score_increase": 3, "category": "technical", "estimated_time": "2-3 days"
+        })
+
+    # Ensure minimum actions
+    while len(actions) < 3:
+        actions.append({
+            "title": "Content optimization",
+            "description": "Update existing pages for UX & engagement; add internal links.",
+            "priority": "low", "effort": "medium", "impact": "low",
+            "estimated_score_increase": 2, "category": "content", "estimated_time": "1 week"
+        })
+
     priority_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
     actions.sort(key=lambda x: (priority_order.get(x['priority'], 4), -x.get('estimated_score_increase', 0)))
-    return actions[:10]
+    return actions[:8]
 
 # ============================================================================
 # AUTH ENDPOINTS
@@ -1325,7 +1422,7 @@ async def ai_analyze_comprehensive(
         url = clean_url(request.url)
         _reject_ssrf(url)
 
-        cache_key = get_cache_key(url, "ai_comprehensive_v6.1.0")
+        cache_key = get_cache_key(url, "ai_comprehensive_v6.1.1")
         if cache_key in analysis_cache and is_cache_valid(analysis_cache[cache_key]['timestamp']):
             logger.info(f"Cache hit for {url} (user: {user.username})")
             return analysis_cache[cache_key]['data']
@@ -1344,16 +1441,15 @@ async def ai_analyze_comprehensive(
         social_analysis = await analyze_social_media_presence(url, html_content)
         competitive_analysis = await analyze_competitive_positioning(url, basic_analysis)
 
-        # Täytä alias-kentät score_breakdowniin
-        sb_raw = basic_analysis.get('score_breakdown', {})
-        sb_with_alias = map_scorebreakdown_aliases(sb_raw)
+        # Aliakset score_breakdowniin
+        sb_with_aliases = create_score_breakdown_with_aliases(basic_analysis.get('score_breakdown', {}))
 
         # AI
         ai_analysis = await generate_ai_insights(
             url, basic_analysis, technical_audit, content_analysis, ux_analysis, social_analysis
         )
 
-        # Enhanced features (kaikki 9)
+        # Enhanced features
         enhanced_features = await generate_enhanced_features(
             url, basic_analysis, technical_audit, content_analysis, social_analysis
         )
@@ -1373,7 +1469,7 @@ async def ai_analyze_comprehensive(
                 technical_score=technical_audit.get('overall_technical_score', 0),
                 content_score=content_analysis.get('content_quality_score', 0),
                 seo_score=int((basic_analysis.get('score_breakdown', {}).get('seo_basics', 0) / SCORING_CONFIG.weights['seo_basics']) * 100),
-                score_breakdown=ScoreBreakdown(**sb_with_alias)
+                score_breakdown=ScoreBreakdown(**sb_with_aliases)
             ).dict(),
             "ai_analysis": AIAnalysis(**ai_analysis.dict()).dict(),
             "detailed_analysis": DetailedAnalysis(
@@ -1393,7 +1489,7 @@ async def ai_analyze_comprehensive(
                     ux=ux_analysis.get('overall_ux_score', 0),
                     competitive=competitive_analysis.get('competitive_score', 0),
                     trend="stable",
-                    percentile=enhanced_features['industry_benchmarking']['details']['percentile']
+                    percentile=enhanced_features['industry_benchmarking']['details'].get('percentile', 50)
                 ).dict()
             },
             "enhanced_features": enhanced_features,
@@ -1430,15 +1526,14 @@ async def basic_analyze(request: CompetitorAnalysisRequest, user: UserInfo = Dep
         if not response or response.status_code != 200:
             raise HTTPException(400, f"Cannot access website: {url}")
         basic_analysis = await analyze_basic_metrics_enhanced(url, response.text, headers=response.headers)
-        # aliakset myös basic endpointissa
-        sb_with_alias = map_scorebreakdown_aliases(basic_analysis.get('score_breakdown', {}))
+        sb_with_aliases = create_score_breakdown_with_aliases(basic_analysis.get('score_breakdown', {}))
         return {
             "success": True,
             "company": request.company_name or get_domain_from_url(url),
             "website": url,
             "digital_maturity_score": basic_analysis['digital_maturity_score'],
             "social_platforms": basic_analysis.get('social_platforms', 0),
-            "score_breakdown": sb_with_alias,
+            "score_breakdown": sb_with_aliases,
             "analysis_date": datetime.now().isoformat(),
             "analyzed_by": user.username,
             "scoring_weights": SCORING_CONFIG.weights
