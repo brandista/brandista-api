@@ -172,25 +172,26 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,        # täsmää UI-origin (https://www.brandista.eu tms)
-    allow_credentials=not ("*" in ALLOWED_ORIGINS),
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,  # Always enable for JWT authentication
     allow_methods=["*"],
     allow_headers=[
-    "Authorization",
-    "Content-Type",
-    "X-Requested-With", 
-    "Accept",
-    "Origin",
-    "Access-Control-Request-Method",
-    "Access-Control-Request-Headers"
-],
+        "Authorization",
+        "Content-Type",
+        "X-Requested-With", 
+        "Accept",
+        "Origin",
+        "Access-Control-Request-Method",
+        "Access-Control-Request-Headers"
+    ],
+    expose_headers=["*"],
+    max_age=600
+)
     ],
     expose_headers=["*"],
     max_age=600
 )
 
-if "*" in ALLOWED_ORIGINS and cors_allow_credentials:
-    logger.warning("CORS misconfig detected; forcing allow_credentials=False for wildcard origins.")
 
 # Rate limiting
 if RATE_LIMIT_ENABLED:
