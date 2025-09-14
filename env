@@ -1,6 +1,6 @@
 # Kommentoi pois tai käytä Railway Redis URL:ia
 # REDIS_URL=redis://default:password@redis.railway.internal:6379
-
+ALLOWED_ORIGINS=https://brandista.eu,https://www.brandista.eu
 OPENAI_API_KEY=your-actual-api-key-here
 HUGGINGFACE_TOKEN=your-token
 PORT=8000
