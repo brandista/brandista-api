@@ -187,6 +187,10 @@ app.add_middleware(
     expose_headers=["*"],
     max_age=600
 )
+@app.options("/{full_path:path}")
+async def options_handler():
+    return {}
+    
 # Rate limiting
 if RATE_LIMIT_ENABLED:
     request_counts = defaultdict(list)
