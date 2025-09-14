@@ -170,7 +170,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,  # Always enable for JWT authentication
+    allow_credentials=False,  # Always enable for JWT authentication
     allow_methods=["*"],
     allow_headers=[
         "Authorization",
