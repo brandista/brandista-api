@@ -169,8 +169,16 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,  # Always enable for JWT authentication
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000", 
+        "http://127.0.0.1:3000",
+        "https://brandista.eu",
+        "https://www.brandista.eu",
+        "https://fastapi-production-51f9.up.railway.app"
+    ],
+    allow_credentials=True,  # Tämä PAKOLLINEN JWT:lle
     allow_methods=["*"],
     allow_headers=[
         "Authorization",
