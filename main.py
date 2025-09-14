@@ -187,12 +187,6 @@ app.add_middleware(
     expose_headers=["*"],
     max_age=600
 )
-    ],
-    expose_headers=["*"],
-    max_age=600
-)
-
-
 # Rate limiting
 if RATE_LIMIT_ENABLED:
     request_counts = defaultdict(list)
