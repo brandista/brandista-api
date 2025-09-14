@@ -176,8 +176,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=cors_allow_credentials,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
+    allow_methods=["*"],                  # voi olla ["GET","POST",...], mutta * on helpoin
+    allow_headers=["*"],                  # << TÄMÄ: ei tarvitse arvailla Authorization vs authorization
     expose_headers=["*"],
     max_age=600
 )
