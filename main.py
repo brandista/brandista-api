@@ -170,14 +170,18 @@ app = FastAPI(
     docs_url="/docs", redoc_url="/redoc", openapi_url="/openapi.json"
 )
 
-# CORS
-cors_allow_credentials = not ("*" in ALLOWED_ORIGINS)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=cors_allow_credentials,
-    allow_methods=["*"],                  # voi olla ["GET","POST",...], mutta * on helpoin
-    allow_headers=["*"],                  # << TÄMÄ: ei tarvitse arvailla Authorization vs authorization
+    allow_origins=ALLOWED_ORIGINS,        # täsmää UI-origin (https://www.brandista.eu tms)
+    allow_credentials=not ("*" in ALLOWED_ORIGINS),
+    allow_methods=["*"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-Requested-With",
+        "Accept",
+        "Origin"
+    ],
     expose_headers=["*"],
     max_age=600
 )
