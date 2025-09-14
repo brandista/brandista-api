@@ -139,11 +139,8 @@ USER_AGENT = os.getenv("USER_AGENT",
 
 # ---- CORS: dev-oletukset sallivat Vite/CRA localhostit ----
 
-ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "https://brandista.eu", 
-    "https://fastapi-production-51f9.up.railway.app"
-]
+ALLOWED_ORIGINS = ["*"]
+
 RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "false").lower() == "true"
 RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "20"))
 
@@ -172,7 +169,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=["*"],
     allow_credentials=True,  # Always enable for JWT authentication
     allow_methods=["*"],
     allow_headers=[
