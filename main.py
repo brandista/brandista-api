@@ -373,6 +373,27 @@ class DetailedAnalysis(BaseModel):
     ux_analysis: UXAnalysis
     competitive_analysis: CompetitiveAnalysis
 
+# --- NEW: admin quota models ---
+class QuotaUpdateRequest(BaseModel):
+    """
+    Admin-käyttöliittymän pyyntömalli kvotojen hallintaan.
+    - search_limit: aseta uusi kiintiö ( -1 = rajaton )
+    - grant_extra:  lisää X hakua nykyiseen kiintiöön (jos kiintiö on rajallinen)
+    - reset_count:  nollaa käytetyt haut
+    """
+    search_limit: Optional[int] = None  # -1 = unlimited
+    grant_extra: Optional[int] = Field(None, ge=1)  # add N to current limit (if finite)
+    reset_count: bool = False  # reset user's used count
+
+class UserQuotaView(BaseModel):
+    """
+    Admin-näkymän listausmalli käyttäjäkohtaisesta kvotasta ja käytöstä.
+    """
+    username: str
+    role: str
+    search_limit: int
+    searches_used: int
+
 # ============================================================================
 # AUTH FUNCTIONS
 # ============================================================================
@@ -1672,6 +1693,86 @@ async def get_config(user: UserInfo = Depends(require_admin)):
         "seo_thresholds": SCORING_CONFIG.seo_thresholds,
         "version": APP_VERSION
     }
+
+# ============================================================================
+# ADMIN RESET ENDPOINTS
+# ============================================================================
+
+@app.post("/admin/reset-all")
+async def admin_reset_all(user: UserInfo = Depends(require_admin)):
+    """
+    Nollaa KAIKKIEN käyttäjien laskurit ja tyhjentää analyysicachen.
+    Käyttö: vain admin.
+    """
+    user_search_counts.clear()
+    analysis_cache.clear()
+    logger.info("Admin reset: all counters and cache cleared")
+    return {"ok": True, "message": "All user counters and cache cleared."}
+
+@app.post("/admin/reset/{username}")
+async def admin_reset_user(username: str, user: UserInfo = Depends(require_admin)):
+    """
+    Nollaa yhden käyttäjän laskurin.
+    Käyttö: vain admin.
+    """
+    user_search_counts.pop(username, None)
+    logger.info(f"Admin reset: counter cleared for {username}")
+    return {"ok": True, "message": f"Counter cleared for {username}."}
+
+
+# ============================================================================
+# ADMIN QUOTA MANAGEMENT
+# ============================================================================
+
+@app.get("/admin/users", response_model=List[UserQuotaView])
+async def admin_list_users(user: UserInfo = Depends(require_admin)):
+    """
+    Listaa kaikki käyttäjät ja heidän kvotat + käytön.
+    Käyttö: vain admin.
+    """
+    return [
+        UserQuotaView(
+            username=u,
+            role=USERS_DB[u]["role"],
+            search_limit=USERS_DB[u]["search_limit"],
+            searches_used=user_search_counts.get(u, 0),
+        )
+        for u in USERS_DB.keys()
+    ]
+
+@app.post("/admin/users/{username}/quota", response_model=UserQuotaView)
+async def admin_update_quota(
+    username: str,
+    payload: QuotaUpdateRequest,
+    user: UserInfo = Depends(require_admin),
+):
+    """
+    Päivitä käyttäjän kvotaa: aseta uusi limit, myönnä lisähakuja ja/tai nollaa laskuri.
+    Käyttö: vain admin.
+    """
+    if username not in USERS_DB:
+        raise HTTPException(404, "User not found")
+
+    # aseta uusi kiintiö
+    if payload.search_limit is not None:
+        USERS_DB[username]["search_limit"] = int(payload.search_limit)
+
+    # myönnä lisähakuja (vain jos kiintiö on rajallinen)
+    if payload.grant_extra is not None:
+        cur = USERS_DB[username]["search_limit"]
+        if cur != -1:
+            USERS_DB[username]["search_limit"] = cur + int(payload.grant_extra)
+
+    # nollaa käytettyjen hakujen laskuri
+    if payload.reset_count:
+        user_search_counts[username] = 0
+
+    return UserQuotaView(
+        username=username,
+        role=USERS_DB[username]["role"],
+        search_limit=USERS_DB[username]["search_limit"],
+        searches_used=user_search_counts.get(username, 0),
+    )
 
 # ============================================================================
 # MAIN APPLICATION ENTRY POINT
