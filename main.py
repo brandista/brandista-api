@@ -35,8 +35,7 @@ from bs4 import BeautifulSoup
 import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
 from passlib.context import CryptContext
-import os
-os.environ['PLAYWRIGHT_ENABLED'] = 'true'
+
 # FastAPI imports
 from fastapi import FastAPI, HTTPException, Header, Depends, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
