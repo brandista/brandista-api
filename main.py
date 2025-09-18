@@ -1754,6 +1754,8 @@ async def generate_enhanced_features(
         seo_pts = int(breakdown.get("seo_basics", 0))
         mob_pts = int(breakdown.get("mobile", 0))
         tech_pts = int(breakdown.get("technical", 0))
+        mobile_ready = mob_pts >= int(mob_w * 0.6)
+        mobile_score_out_of_100 = 0 if not mobile_ready else 100
 
         # 1. Industry benchmarking
         percentile = (
@@ -1763,10 +1765,10 @@ async def generate_enhanced_features(
         )
         industry_benchmarking = {
             "name": "Industry Benchmarking",
-            "value": f"{score} / 100",
+            "value": f"{score} / 100", 
             "description": "Industry comparison based on configurable scoring",
             "status": "above_average" if score > 45 else "below_average",
-            "details": {
+            "details": {  # VARMISTA ETTÄ TÄMÄ ON
                 "your_score": score,
                 "industry_average": 45,
                 "top_quartile": 70,
@@ -1871,7 +1873,7 @@ async def generate_enhanced_features(
 
         # 7. Mobile-first readiness
         # Korvaa koko mobile_first_index_ready osio:
-        mobile_score_out_of_100 = 0 if not mobile_ready else 100
+        
 
         mobile_first_index_ready = {
             "name": "Mobile-First Readiness", 
