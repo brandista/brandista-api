@@ -137,7 +137,8 @@ USER_AGENT = os.getenv("USER_AGENT",
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 
-# CORS settings
+# ---- CORS: dev-oletukset sallivat Vite/CRA localhostit ----
+
 ALLOWED_ORIGINS = ["*"]
 
 RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "false").lower() == "true"
@@ -155,7 +156,9 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 logger.info(f"Starting {APP_NAME} v{APP_VERSION}")
-logger.info(f"Scoring weights: {SCORING_CONFIG.weights}")# ============================================================================
+logger.info(f"Scoring weights: {SCORING_CONFIG.weights}")
+
+# ============================================================================
 # FASTAPI SETUP
 # ============================================================================
 
@@ -189,7 +192,6 @@ app.add_middleware(
     expose_headers=["*"],
     max_age=600
 )
-
 @app.options("/{full_path:path}")
 async def options_handler():
     return {}
@@ -371,17 +373,28 @@ class DetailedAnalysis(BaseModel):
     ux_analysis: UXAnalysis
     competitive_analysis: CompetitiveAnalysis
 
-# Admin quota models
+# --- NEW: admin quota models ---
 class QuotaUpdateRequest(BaseModel):
+    """
+    Admin-käyttöliittymän pyyntömalli kvotojen hallintaan.
+    - search_limit: aseta uusi kiintiö ( -1 = rajaton )
+    - grant_extra:  lisää X hakua nykyiseen kiintiöön (jos kiintiö on rajallinen)
+    - reset_count:  nollaa käytetyt haut
+    """
     search_limit: Optional[int] = None  # -1 = unlimited
     grant_extra: Optional[int] = Field(None, ge=1)  # add N to current limit (if finite)
     reset_count: bool = False  # reset user's used count
 
 class UserQuotaView(BaseModel):
+    """
+    Admin-näkymän listausmalli käyttäjäkohtaisesta kvotasta ja käytöstä.
+    """
     username: str
     role: str
     search_limit: int
-    searches_used: int# ============================================================================
+    searches_used: int
+
+# ============================================================================
 # AUTH FUNCTIONS
 # ============================================================================
 
@@ -545,6 +558,7 @@ def get_domain_from_url(url: str) -> str:
     parsed = urlparse(url)
     return parsed.netloc or parsed.path.split('/')[0]
 
+# ---- ScoreBreakdown aliases helper ----
 def create_score_breakdown_with_aliases(breakdown_raw: Dict[str, int]) -> Dict[str, int]:
     """Create score breakdown with both backend and frontend fields (aliases 0-100)."""
     weights = SCORING_CONFIG.weights
@@ -592,7 +606,9 @@ async def cleanup_cache():
     sorted_items = sorted(analysis_cache.items(), key=lambda x: x[1]['timestamp'])
     for key, _ in sorted_items[:items_to_remove]:
         del analysis_cache[key]
-    logger.info(f"Cache cleanup: removed {items_to_remove} entries")# ============================================================================
+    logger.info(f"Cache cleanup: removed {items_to_remove} entries")
+
+# ============================================================================
 # ANALYSIS HELPERS
 # ============================================================================
 
@@ -639,7 +655,6 @@ def analyze_image_optimization(soup: BeautifulSoup) -> Dict[str, Any]:
     imgs = soup.find_all('img')
     if not imgs:
         return {'score': 0, 'total_images': 0, 'optimized_images': 0, 'optimization_ratio': 0}
-    
     optimized = 0
     for img in imgs:
         s = 0
@@ -649,7 +664,6 @@ def analyze_image_optimization(soup: BeautifulSoup) -> Dict[str, Any]:
         if any(fmt in src for fmt in ('.webp', '.avif')): s += 1
         if img.get('srcset'): s += 1
         if s >= 2: optimized += 1
-    
     ratio = optimized / len(imgs)
     return {'score': int(ratio * 5), 'total_images': len(imgs), 'optimized_images': optimized, 'optimization_ratio': ratio}
 
@@ -736,15 +750,13 @@ def calculate_content_score_configurable(word_count: int) -> int:
     elif word_count >= thresholds['fair']: return int(max_score * 0.65)
     elif word_count >= thresholds['basic']: return int(max_score * 0.4)
     elif word_count >= thresholds['minimal']: return int(max_score * 0.2)
-    else: return max(0, int(max_score * (word_count / max(1, thresholds['minimal']) * 0.1)))
+    else: return max(0, int(max_score * (word_count / thresholds['minimal'] * 0.1)))
 
 def calculate_seo_score_configurable(soup: BeautifulSoup, url: str) -> Tuple[int, Dict[str, Any]]:
     config = SCORING_CONFIG.seo_thresholds
     scores = config['scores']
     details = {}
     total_score = 0
-    
-    # Title analysis
     title = soup.find('title')
     if title:
         title_length = len(title.get_text().strip())
@@ -755,8 +767,6 @@ def calculate_seo_score_configurable(soup: BeautifulSoup, url: str) -> Tuple[int
             total_score += scores['title_acceptable']
         elif title_length > 0:
             total_score += scores['title_basic']
-    
-    # Meta description analysis
     meta_desc = soup.find('meta', attrs={'name': 'description'})
     if meta_desc:
         desc_length = len(meta_desc.get('content', '').strip())
@@ -767,8 +777,6 @@ def calculate_seo_score_configurable(soup: BeautifulSoup, url: str) -> Tuple[int
             total_score += scores['meta_desc_acceptable']
         elif desc_length > 0:
             total_score += scores['meta_desc_basic']
-    
-    # Header structure analysis
     h1_tags = soup.find_all('h1')
     h2_tags = soup.find_all('h2')
     h3_tags = soup.find_all('h3')
@@ -776,17 +784,12 @@ def calculate_seo_score_configurable(soup: BeautifulSoup, url: str) -> Tuple[int
     elif len(h1_tags) in [2, 3]: total_score += 1
     if len(h2_tags) >= 2: total_score += 1
     if len(h3_tags) >= 1: total_score += 1
-    
-    # Technical SEO elements
-    if soup.find('link', {'rel': 'canonical'}): 
-        total_score += scores['canonical']
-        details['has_canonical'] = True
-    if soup.find('link', {'hreflang': True}): 
-        total_score += scores['hreflang']
-        details['has_hreflang'] = True
+    if soup.find('link', {'rel': 'canonical'}): total_score += scores['canonical']; details['has_canonical'] = True
+    if soup.find('link', {'hreflang': True}): total_score += scores['hreflang']; details['has_hreflang'] = True
     if check_clean_urls(url): total_score += scores['clean_urls']
-    
-    return min(total_score, SCORING_CONFIG.weights['seo_basics']), details# ============================================================================
+    return min(total_score, SCORING_CONFIG.weights['seo_basics']), details
+
+# ============================================================================
 # MAIN ANALYSIS FUNCTIONS
 # ============================================================================
 
@@ -794,7 +797,6 @@ async def analyze_basic_metrics_enhanced(url: str, html: str, headers: Optional[
     soup = BeautifulSoup(html, 'html.parser')
     score_components = {category: 0 for category in SCORING_CONFIG.weights.keys()}
     details: Dict[str, Any] = {}
-    
     try:
         # SECURITY
         if url.startswith('https://'):
@@ -1047,10 +1049,12 @@ async def analyze_competitive_positioning(url: str, basic: Dict[str, Any]) -> Di
         'competitive_threats': threats, 'market_share_estimate': "Data not available",
         'competitive_score': comp_score,
         'industry_comparison': {'your_score': score, 'industry_average': 45, 'top_quartile': 70, 'bottom_quartile': 30}
-    }# ============================================================================
-# ENHANCED FEATURES
-# ============================================================================
+    }
 
+# ============================================================================
+# ---------------------------------------------------------------------------
+# Enhanced features (full) - drop this below analyze_competitive_positioning()
+# ---------------------------------------------------------------------------
 async def generate_enhanced_features(
     url: str,
     basic: Dict[str, Any],
@@ -1059,7 +1063,16 @@ async def generate_enhanced_features(
     social: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
-    Returns all 9 enhanced_features the frontend expects
+    Returns all 9 enhanced_features the frontend expects:
+      - industry_benchmarking
+      - competitor_gaps
+      - growth_opportunities
+      - risk_assessment
+      - market_trends
+      - estimated_traffic_rank
+      - mobile_first_index_ready
+      - core_web_vitals_assessment
+      - technology_stack
     """
     try:
         score = int(basic.get("digital_maturity_score", 0))
@@ -1072,7 +1085,7 @@ async def generate_enhanced_features(
         mob_pts = int(breakdown.get("mobile", 0))
         tech_pts = int(breakdown.get("technical", 0))
 
-        # Industry benchmarking
+        # --- Industry benchmarking
         percentile = (
             min(100, int((score / 45) * 50))
             if score <= 45 else
@@ -1092,7 +1105,7 @@ async def generate_enhanced_features(
             }
         }
 
-        # Competitor gaps
+        # --- Competitor gaps
         gaps_items = []
         if mob_pts < int(mob_w * 0.7):
             gaps_items.append("Improve mobile UX and page speed")
@@ -1108,7 +1121,7 @@ async def generate_enhanced_features(
             "items": gaps_items or ["Minor gaps vs. peers"]
         }
 
-        # Growth opportunities
+        # --- Growth opportunities
         growth_delta = max(10, 90 - score)
         growth_items = [
             "Technical SEO quick wins (schema, canonical hygiene)",
@@ -1124,7 +1137,7 @@ async def generate_enhanced_features(
             "potential_score": min(100, score + growth_delta)
         }
 
-        # Risk assessment
+        # --- Risk assessment (only real risks)
         risks = []
         if seo_pts < int(seo_w * 0.5):
             risks.append("Weak SEO fundamentals on key pages")
@@ -1142,7 +1155,7 @@ async def generate_enhanced_features(
             "risk_level": "Medium" if risks else "Low"
         }
 
-        # Market trends
+                # --- Market trends (simple heuristics)
         trends = [
             "EEAT & first-party data importance growing",
             "Core Web Vitals and page experience remain ranking signals",
@@ -1152,12 +1165,16 @@ async def generate_enhanced_features(
             "name": "Market Trends",
             "value": "Trends analyzed",
             "description": "Relevant market trends",
+            # FRONTEND YHTEENSOPIVUUS: käytä 'items'
             "items": trends,
+            # (valinnainen back-compat, jos haluat säilyttää myös 'trends')
             "trends": trends,
             "status": "modern" if score >= 55 else "developing"
         }
+        
+        
 
-        # Estimated traffic rank
+        # --- Estimated traffic rank (heuristic)
         traffic_category = (
             "High Traffic" if score >= 70 else
             "Medium Traffic" if score >= 45 else
@@ -1172,7 +1189,7 @@ async def generate_enhanced_features(
             "factors": ["Content depth", "SEO basics", "Mobile performance"]
         }
 
-        # Mobile-first readiness
+        # --- Mobile-first readiness
         mobile_ready = mob_pts >= int(mob_w * 0.6)
         mobile_first_index_ready = {
             "name": "Mobile-First Readiness",
@@ -1188,7 +1205,7 @@ async def generate_enhanced_features(
             ])
         }
 
-        # Core Web Vitals
+        # --- Core Web Vitals (heuristics → explicit value/score/grade)
         ps = int(technical.get("page_speed_score", 0))
         passed = ps >= 70
         cwv_status = "pass" if passed else "needs_improvement"
@@ -1196,14 +1213,16 @@ async def generate_enhanced_features(
 
         core_web_vitals_assessment = {
             "name": "Core Web Vitals",
+            # FRONTEND YHTEENSOPIVUUS: anna konkreettinen arvo
             "value": "Pass" if passed else "Needs improvement",
             "description": "Website performance metrics",
             "status": cwv_status,
+            # FRONTENDILLE NUMEERINEN SCORE
             "score": ps,
             "grade": cwv_grade,
             "metrics": {
                 "lcp_ms": 2400 if passed else 3500,
-                "tbt_ms": 100 if passed else 180,
+                "tbt_ms": 100 if passed else 180,   # FID/TBT proxy
                 "cls": 0.08 if passed else 0.18
             },
             "recommendations": [
@@ -1213,11 +1232,12 @@ async def generate_enhanced_features(
             ]
         }
 
-        # Technology stack
+        # --- Technology stack
         detected = ["HTML5", "CSS3", "JavaScript"]
         for tname in (content.get("media_types") or []):
             if tname not in detected:
                 detected.append(tname)
+        # Analytics tools from earlier detection, if present in details
         if technical.get("has_analytics"):
             detected.append("Google Analytics")
         technology_stack = {
@@ -1305,7 +1325,6 @@ def generate_english_insights(overall: int, basic: Dict[str, Any], technical: Di
     strengths, weaknesses, opportunities, threats, recommendations = [], [], [], [], []
     breakdown = basic.get('score_breakdown', {})
     wc = content.get('word_count', 0)
-    
     if breakdown.get('security', 0) >= 13:
         strengths.append(f"Strong security posture ({breakdown['security']}/15)")
     if breakdown.get('seo_basics', 0) >= 15:
@@ -1314,7 +1333,6 @@ def generate_english_insights(overall: int, basic: Dict[str, Any], technical: Di
         strengths.append(f"Comprehensive content ({wc} words)")
     if social.get('platforms'):
         strengths.append(f"Multi-platform social presence ({len(social['platforms'])} platforms)")
-    
     if breakdown.get('security', 0) == 0:
         weaknesses.append("CRITICAL: No SSL certificate")
         threats.append("Search engines penalize non-HTTPS sites")
@@ -1325,19 +1343,18 @@ def generate_english_insights(overall: int, basic: Dict[str, Any], technical: Di
     if not technical.get('has_analytics'):
         weaknesses.append("No analytics tracking")
         recommendations.append("Install Google Analytics 4")
-    
     if overall < 30:
         opportunities.extend([f"Massive upside - target {overall + 40} points","Fundamentals can yield +20-30 points quickly"])
     elif overall < 50:
         opportunities.extend([f"Growth potential - target {overall + 30} points","SEO optimization could lift traffic by 50-100%"])
     else:
         opportunities.extend(["Strong foundation for innovation","AI and automation are next leverage points"])
-    
     if overall >= 75: summary = f"Excellent digital maturity ({overall}/100) - you are a digital leader."
     elif overall >= 60: summary = f"Good digital presence ({overall}/100) with solid fundamentals."
     elif overall >= 45: summary = f"Baseline achieved ({overall}/100) with improvement opportunities."
     else: summary = f"Early-stage digital maturity ({overall}/100) - immediate action required."
 
+    # ----- Action priority + key metrics (KORJAUS) -----
     action_priority = [
         {
             'category': 'security',
@@ -1464,7 +1481,9 @@ def generate_smart_actions(ai: AIAnalysis, technical: Dict[str, Any], content: D
 
     priority_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
     actions.sort(key=lambda x: (priority_order.get(x['priority'], 4), -x.get('estimated_score_increase', 0)))
-    return actions[:8]# ============================================================================
+    return actions[:8]
+
+# ============================================================================
 # AUTH ENDPOINTS
 # ============================================================================
 
@@ -1499,9 +1518,7 @@ async def ai_analyze_comprehensive(
     background_tasks: BackgroundTasks,
     user: UserInfo = Depends(require_user)
 ):
-    """Complete AI-powered comprehensive analysis endpoint"""
     try:
-        # Quota check
         if user.role != "admin":
             user_limit = USERS_DB.get(user.username, {}).get("search_limit", DEFAULT_USER_LIMIT)
             current_count = user_search_counts.get(user.username, 0)
@@ -1511,24 +1528,18 @@ async def ai_analyze_comprehensive(
         url = clean_url(request.url)
         _reject_ssrf(url)
 
-        # Check analysis cache
         cache_key = get_cache_key(url, "ai_comprehensive_v6.1.1")
         if cache_key in analysis_cache and is_cache_valid(analysis_cache[cache_key]['timestamp']):
-            logger.info(f"Analysis cache hit for {url} (user: {user.username})")
+            logger.info(f"Cache hit for {url} (user: {user.username})")
             return analysis_cache[cache_key]['data']
 
-        # Get website content
         response = await fetch_url_with_retries(url)
         if not response or response.status_code != 200:
             raise HTTPException(400, f"Cannot access website: {url}")
         html_content = response.text
-        
         if not html_content or len(html_content.strip()) < 100:
             raise HTTPException(400, "Website returned insufficient content")
 
-        # Perform comprehensive analysis
-        logger.info(f"Starting comprehensive analysis for {url}")
-        
         basic_analysis = await analyze_basic_metrics_enhanced(url, html_content, headers=response.headers)
         technical_audit = await analyze_technical_aspects(url, html_content, headers=response.headers)
         content_analysis = await analyze_content_quality(html_content)
@@ -1536,24 +1547,22 @@ async def ai_analyze_comprehensive(
         social_analysis = await analyze_social_media_presence(url, html_content)
         competitive_analysis = await analyze_competitive_positioning(url, basic_analysis)
 
-        # Create score breakdown with aliases
+        # Aliakset score_breakdowniin
         sb_with_aliases = create_score_breakdown_with_aliases(basic_analysis.get('score_breakdown', {}))
 
-        # Generate AI insights
+        # AI
         ai_analysis = await generate_ai_insights(
             url, basic_analysis, technical_audit, content_analysis, ux_analysis, social_analysis
         )
 
-        # Generate enhanced features
+        # Enhanced features
         enhanced_features = await generate_enhanced_features(
             url, basic_analysis, technical_audit, content_analysis, social_analysis
         )
         enhanced_features["admin_features_enabled"] = (user.role == "admin")
 
-        # Generate smart actions
         smart_actions = generate_smart_actions(ai_analysis, technical_audit, content_analysis, basic_analysis)
 
-        # Construct comprehensive result
         result = {
             "success": True,
             "company_name": request.company_name or get_domain_from_url(url),
@@ -1568,7 +1577,7 @@ async def ai_analyze_comprehensive(
                 seo_score=int((basic_analysis.get('score_breakdown', {}).get('seo_basics', 0) / SCORING_CONFIG.weights['seo_basics']) * 100),
                 score_breakdown=ScoreBreakdown(**sb_with_aliases)
             ).dict(),
-            "ai_analysis": ai_analysis.dict(),
+            "ai_analysis": AIAnalysis(**ai_analysis.dict()).dict(),
             "detailed_analysis": DetailedAnalysis(
                 social_media=SocialMediaAnalysis(**social_analysis),
                 technical_audit=TechnicalAudit(**technical_audit),
@@ -1586,32 +1595,22 @@ async def ai_analyze_comprehensive(
                     ux=ux_analysis.get('overall_ux_score', 0),
                     competitive=competitive_analysis.get('competitive_score', 0),
                     trend="stable",
-                    percentile=enhanced_features.get('industry_benchmarking', {}).get('details', {}).get('percentile', 50)
+                    percentile=enhanced_features['industry_benchmarking']['details'].get('percentile', 50)
                 ).dict()
             },
             "enhanced_features": enhanced_features,
             "metadata": {
-                "version": APP_VERSION,
-                "scoring_version": "configurable_v1",
-                "analysis_depth": "comprehensive",
-                "confidence_level": ai_analysis.confidence_score,
-                "analyzed_by": user.username,
-                "user_role": user.role,
-                "rendering_method": "http",
-                "spa_detected": False,
-                "scoring_weights": SCORING_CONFIG.weights,
-                "content_words": content_analysis.get('word_count', 0)
+                "version": APP_VERSION, "scoring_version": "configurable_v1",
+                "analysis_depth": "comprehensive", "confidence_level": ai_analysis.confidence_score,
+                "analyzed_by": user.username, "user_role": user.role,
+                "scoring_weights": SCORING_CONFIG.weights
             }
         }
 
-        # Ensure all scores are integers
         result = ensure_integer_scores(result)
-        
-        # Cache result
         analysis_cache[cache_key] = {'data': result, 'timestamp': datetime.now()}
         background_tasks.add_task(cleanup_cache)
 
-        # Update user count
         if user.role != "admin":
             user_search_counts[user.username] = user_search_counts.get(user.username, 0) + 1
 
@@ -1696,12 +1695,15 @@ async def get_config(user: UserInfo = Depends(require_admin)):
     }
 
 # ============================================================================
-# ADMIN ENDPOINTS
+# ADMIN RESET ENDPOINTS
 # ============================================================================
 
 @app.post("/admin/reset-all")
 async def admin_reset_all(user: UserInfo = Depends(require_admin)):
-    """Reset all user counters and clear analysis cache"""
+    """
+    Nollaa KAIKKIEN käyttäjien laskurit ja tyhjentää analyysicachen.
+    Käyttö: vain admin.
+    """
     user_search_counts.clear()
     analysis_cache.clear()
     logger.info("Admin reset: all counters and cache cleared")
@@ -1709,14 +1711,25 @@ async def admin_reset_all(user: UserInfo = Depends(require_admin)):
 
 @app.post("/admin/reset/{username}")
 async def admin_reset_user(username: str, user: UserInfo = Depends(require_admin)):
-    """Reset single user counter"""
+    """
+    Nollaa yhden käyttäjän laskurin.
+    Käyttö: vain admin.
+    """
     user_search_counts.pop(username, None)
     logger.info(f"Admin reset: counter cleared for {username}")
     return {"ok": True, "message": f"Counter cleared for {username}."}
 
+
+# ============================================================================
+# ADMIN QUOTA MANAGEMENT
+# ============================================================================
+
 @app.get("/admin/users", response_model=List[UserQuotaView])
 async def admin_list_users(user: UserInfo = Depends(require_admin)):
-    """List all users with their quotas and usage"""
+    """
+    Listaa kaikki käyttäjät ja heidän kvotat + käytön.
+    Käyttö: vain admin.
+    """
     return [
         UserQuotaView(
             username=u,
@@ -1733,21 +1746,24 @@ async def admin_update_quota(
     payload: QuotaUpdateRequest,
     user: UserInfo = Depends(require_admin),
 ):
-    """Update user quota: set new limit, grant extra searches, and/or reset counter"""
+    """
+    Päivitä käyttäjän kvotaa: aseta uusi limit, myönnä lisähakuja ja/tai nollaa laskuri.
+    Käyttö: vain admin.
+    """
     if username not in USERS_DB:
         raise HTTPException(404, "User not found")
 
-    # Set new quota
+    # aseta uusi kiintiö
     if payload.search_limit is not None:
         USERS_DB[username]["search_limit"] = int(payload.search_limit)
 
-    # Grant extra searches (only if quota is finite)
+    # myönnä lisähakuja (vain jos kiintiö on rajallinen)
     if payload.grant_extra is not None:
         cur = USERS_DB[username]["search_limit"]
         if cur != -1:
             USERS_DB[username]["search_limit"] = cur + int(payload.grant_extra)
 
-    # Reset used searches counter
+    # nollaa käytettyjen hakujen laskuri
     if payload.reset_count:
         user_search_counts[username] = 0
 
@@ -1756,7 +1772,9 @@ async def admin_update_quota(
         role=USERS_DB[username]["role"],
         search_limit=USERS_DB[username]["search_limit"],
         searches_used=user_search_counts.get(username, 0),
-    )# ============================================================================
+    )
+
+# ============================================================================
 # MAIN APPLICATION ENTRY POINT
 # ============================================================================
 
@@ -1765,19 +1783,16 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     host = os.getenv("HOST", "0.0.0.0")
     reload = os.getenv("RELOAD", "false").lower() == "true"
-    
     logger.info(f"🚀 {APP_NAME} v{APP_VERSION} - Production Ready")
     logger.info(f"📊 Scoring System: Configurable weights {SCORING_CONFIG.weights}")
     logger.info(f"💾 Cache: TTL={CACHE_TTL}s, Max={MAX_CACHE_SIZE} entries")
     logger.info(f"🛡️  Rate limiting: {'enabled' if RATE_LIMIT_ENABLED else 'disabled'}")
     logger.info(f"🤖 OpenAI: {'available' if openai_client else 'not configured'}")
     logger.info(f"🌐 Starting server on {host}:{port}")
-    
     if SECRET_KEY.startswith("brandista-key-"):
         logger.warning("⚠️  Using default SECRET_KEY - set SECRET_KEY environment variable in production!")
     if "*" in ALLOWED_ORIGINS:
         logger.warning("⚠️  CORS allows all origins (*) - credentials disabled; configure ALLOWED_ORIGINS for prod.")
-    
     uvicorn.run(
         app, host=host, port=port, reload=reload,
         log_level=os.getenv("UVICORN_LOG_LEVEL", "info"),
