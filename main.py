@@ -390,9 +390,9 @@ async def fetch_url_with_smart_rendering(url: str, timeout: int = REQUEST_TIMEOU
     }
     
     # If SPA detected and Playwright available, try JS rendering
-    if (spa_info['requires_js_rendering'] and 
-        PLAYWRIGHT_AVAILABLE and 
-        PLAYWRIGHT_ENABLED):
+    force_all_spa = os.getenv("PLAYWRIGHT_FORCE_ALL_SPA", "false").lower() == "true"
+    if ((spa_info['requires_js_rendering'] or (spa_info['spa_detected'] and force_all_spa)) 
+    and PLAYWRIGHT_AVAILABLE and PLAYWRIGHT_ENABLED):
         
         logger.info(f"SPA detected for {url}, trying Playwright rendering")
         
