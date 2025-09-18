@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Brandista Competitive Intelligence API - Complete Unified Version
-Version: 6.1.1 - Production Ready
+Brandista Competitive Intelligence API - Complete Unified Version with Playwright SPA Support
+Version: 6.2.0 - Production Ready with SPA Analysis
 Author: Brandista Team
 Date: 2025
-Description: Complete production-ready website analysis with configurable scoring system
+Description: Complete production-ready website analysis with SPA support and configurable scoring system
 """
 
 # ============================================================================
@@ -48,6 +48,16 @@ try:
 except Exception:
     AsyncOpenAI = None
     OPENAI_AVAILABLE = False
+
+# Playwright for SPA content (optional)
+try:
+    from playwright.async_api import async_playwright, Browser, Page
+    PLAYWRIGHT_AVAILABLE = True
+except Exception:
+    async_playwright = None
+    Browser = None
+    Page = None
+    PLAYWRIGHT_AVAILABLE = False
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -115,9 +125,9 @@ SCORING_CONFIG = load_scoring_config()
 # CONSTANTS
 # ============================================================================
 
-APP_VERSION = "6.1.1"
+APP_VERSION = "6.2.0"
 APP_NAME = "Brandista Competitive Intelligence API"
-APP_DESCRIPTION = """Production-ready website analysis with configurable scoring system."""
+APP_DESCRIPTION = """Production-ready website analysis with SPA support and configurable scoring system."""
 
 # Configuration from environment
 SECRET_KEY = os.getenv("SECRET_KEY", "brandista-key-" + os.urandom(32).hex())
@@ -132,13 +142,16 @@ MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "30"))
 DEFAULT_USER_LIMIT = int(os.getenv("DEFAULT_USER_LIMIT", "3"))
 
+# SPA Settings
+SPA_TIMEOUT = int(os.getenv("SPA_TIMEOUT", "30000"))  # 30 seconds
+SPA_WAIT_FOR_LOAD = int(os.getenv("SPA_WAIT_FOR_LOAD", "5000"))  # 5 seconds additional wait
+
 USER_AGENT = os.getenv("USER_AGENT", 
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 
-# ---- CORS: dev-oletukset sallivat Vite/CRA localhostit ----
-
+# CORS settings
 ALLOWED_ORIGINS = ["*"]
 
 RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "false").lower() == "true"
@@ -156,6 +169,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 logger.info(f"Starting {APP_NAME} v{APP_VERSION}")
+logger.info(f"Playwright available: {PLAYWRIGHT_AVAILABLE}")
 logger.info(f"Scoring weights: {SCORING_CONFIG.weights}")
 
 # ============================================================================
@@ -178,7 +192,7 @@ app.add_middleware(
         "https://www.brandista.eu",
         "https://fastapi-production-51f9.up.railway.app"
     ],
-    allow_credentials=True,  # Tämä PAKOLLINEN JWT:lle
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=[
         "Authorization",
@@ -192,6 +206,7 @@ app.add_middleware(
     expose_headers=["*"],
     max_age=600
 )
+
 @app.options("/{full_path:path}")
 async def options_handler():
     return {}
@@ -228,9 +243,7 @@ USERS_DB = {
         "username": "admin", "hashed_password": pwd_context.hash(ADMIN_PASSWORD),
         "role": "admin", "search_limit": -1
     }
-}
-
-# ============================================================================
+}# ============================================================================
 # MODELS
 # ============================================================================
 
@@ -256,6 +269,7 @@ class CompetitorAnalysisRequest(BaseModel):
     language: str = Field("en", pattern="^(en)$")
     include_ai: bool = Field(True)
     include_social: bool = Field(True)
+    force_spa: bool = Field(False, description="Force SPA rendering with Playwright")
 
 class ScoreBreakdown(BaseModel):
     # Backend (weighted points)
@@ -267,7 +281,7 @@ class ScoreBreakdown(BaseModel):
     social: int = Field(0, ge=0, le=10)
     performance: int = Field(0, ge=0, le=5)
 
-    # Frontend aliases (0–100)
+    # Frontend aliases (0-100)
     seo: Optional[int] = None
     user_experience: Optional[int] = None
     accessibility: Optional[int] = None
@@ -373,26 +387,144 @@ class DetailedAnalysis(BaseModel):
     ux_analysis: UXAnalysis
     competitive_analysis: CompetitiveAnalysis
 
-# --- NEW: admin quota models ---
+# Admin quota models
 class QuotaUpdateRequest(BaseModel):
-    """
-    Admin-käyttöliittymän pyyntömalli kvotojen hallintaan.
-    - search_limit: aseta uusi kiintiö ( -1 = rajaton )
-    - grant_extra:  lisää X hakua nykyiseen kiintiöön (jos kiintiö on rajallinen)
-    - reset_count:  nollaa käytetyt haut
-    """
     search_limit: Optional[int] = None  # -1 = unlimited
     grant_extra: Optional[int] = Field(None, ge=1)  # add N to current limit (if finite)
     reset_count: bool = False  # reset user's used count
 
 class UserQuotaView(BaseModel):
-    """
-    Admin-näkymän listausmalli käyttäjäkohtaisesta kvotasta ja käytöstä.
-    """
     username: str
     role: str
     search_limit: int
     searches_used: int
+
+# ============================================================================
+# SPA AND CONTENT FETCHING FUNCTIONS
+# ============================================================================
+
+def is_spa_site(url: str) -> bool:
+    """
+    Detect if a site is likely to be a SPA (Single Page Application)
+    that requires JavaScript rendering.
+    """
+    domain = get_domain_from_url(url).lower()
+    
+    # Known SPA sites
+    spa_domains = [
+        'brandista.eu',
+        'www.brandista.eu'
+    ]
+    
+    # Check for known SPA domains
+    if any(spa_domain in domain for spa_domain in spa_domains):
+        return True
+    
+    # Additional heuristics could be added here
+    # e.g., checking for common SPA patterns in URL structure
+    
+    return False
+
+async def fetch_spa_content(url: str, timeout: int = SPA_TIMEOUT) -> Optional[str]:
+    """
+    Fetch content from SPA using Playwright browser automation.
+    Returns the rendered HTML after JavaScript execution.
+    """
+    if not PLAYWRIGHT_AVAILABLE:
+        logger.warning("Playwright not available for SPA content fetching")
+        return None
+    
+    try:
+        async with async_playwright() as p:
+            # Launch browser
+            browser = await p.chromium.launch(
+                headless=True,
+                args=[
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-accelerated-2d-canvas',
+                    '--no-first-run',
+                    '--no-zygote',
+                    '--disable-gpu'
+                ]
+            )
+            
+            try:
+                # Create page
+                page = await browser.new_page(
+                    user_agent=USER_AGENT,
+                    viewport={'width': 1280, 'height': 720}
+                )
+                
+                # Set timeout
+                page.set_default_timeout(timeout)
+                
+                # Navigate to page
+                logger.info(f"Loading SPA content for: {url}")
+                await page.goto(url, wait_until='networkidle', timeout=timeout)
+                
+                # Wait for additional content to load
+                await asyncio.sleep(SPA_WAIT_FOR_LOAD / 1000)
+                
+                # Get the rendered HTML
+                content = await page.content()
+                
+                # Basic validation
+                if len(content) < 100:
+                    logger.warning(f"SPA content too short for {url}: {len(content)} chars")
+                    return None
+                
+                logger.info(f"SPA content fetched successfully for {url}: {len(content)} chars")
+                return content
+                
+            finally:
+                await browser.close()
+                
+    except Exception as e:
+        logger.error(f"SPA content fetching failed for {url}: {e}")
+        return None
+
+async def get_website_content(url: str, force_spa: bool = False, timeout: int = REQUEST_TIMEOUT) -> Tuple[Optional[str], bool]:
+    """
+    Get website content using the most appropriate method.
+    Returns (content, used_spa) tuple.
+    
+    Args:
+        url: Website URL
+        force_spa: Force SPA rendering even for non-SPA sites
+        timeout: Request timeout
+    
+    Returns:
+        Tuple of (HTML content, whether SPA was used)
+    """
+    used_spa = False
+    content = None
+    
+    # Determine if we should use SPA rendering
+    should_use_spa = force_spa or (PLAYWRIGHT_AVAILABLE and is_spa_site(url))
+    
+    if should_use_spa:
+        logger.info(f"Attempting SPA rendering for {url}")
+        content = await fetch_spa_content(url, timeout=SPA_TIMEOUT)
+        if content:
+            used_spa = True
+            logger.info(f"SPA rendering successful for {url}: {len(content)} chars")
+        else:
+            logger.warning(f"SPA rendering failed for {url}, falling back to HTTP")
+    
+    # Fallback to regular HTTP request if SPA failed or wasn't attempted
+    if not content:
+        logger.info(f"Using regular HTTP fetch for {url}")
+        response = await fetch_url_with_retries(url, timeout=timeout)
+        if response and response.status_code == 200:
+            content = response.text
+            logger.info(f"HTTP fetch successful for {url}: {len(content)} chars")
+        else:
+            logger.error(f"Both SPA and HTTP fetch failed for {url}")
+            return None, False
+    
+    return content, used_spa
 
 # ============================================================================
 # AUTH FUNCTIONS
@@ -447,9 +579,7 @@ async def require_user(user: Optional[UserInfo] = Depends(get_current_user)) -> 
 async def require_admin(user: UserInfo = Depends(require_user)) -> UserInfo:
     if user.role != "admin":
         raise HTTPException(403, "Admin access required")
-    return user
-
-# ============================================================================
+    return user# ============================================================================
 # UTILITIES
 # ============================================================================
 
@@ -467,9 +597,10 @@ def ensure_integer_scores(data: Any) -> Any:
                         ensure_integer_scores(item)
     return data
 
-def get_cache_key(url: str, analysis_type: str = "basic") -> str:
+def get_cache_key(url: str, analysis_type: str = "basic", force_spa: bool = False) -> str:
     config_hash = hashlib.md5(str(SCORING_CONFIG.weights).encode()).hexdigest()[:8]
-    return hashlib.md5(f"{url}_{analysis_type}_{APP_VERSION}_{config_hash}".encode()).hexdigest()
+    spa_suffix = "_spa" if force_spa else ""
+    return hashlib.md5(f"{url}_{analysis_type}_{APP_VERSION}_{config_hash}{spa_suffix}".encode()).hexdigest()
 
 def is_cache_valid(timestamp: datetime) -> bool:
     return (datetime.now() - timestamp).total_seconds() < CACHE_TTL
@@ -558,7 +689,6 @@ def get_domain_from_url(url: str) -> str:
     parsed = urlparse(url)
     return parsed.netloc or parsed.path.split('/')[0]
 
-# ---- ScoreBreakdown aliases helper ----
 def create_score_breakdown_with_aliases(breakdown_raw: Dict[str, int]) -> Dict[str, int]:
     """Create score breakdown with both backend and frontend fields (aliases 0-100)."""
     weights = SCORING_CONFIG.weights
@@ -570,43 +700,6 @@ def create_score_breakdown_with_aliases(breakdown_raw: Dict[str, int]) -> Dict[s
         (result.get('technical', 0) / weights['technical'] * 0.4)
     ) * 100))
     return result
-
-# ============================================================================
-# OPENAI SETUP
-# ============================================================================
-
-openai_client = None
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-
-if OPENAI_AVAILABLE and os.getenv("OPENAI_API_KEY"):
-    try:
-        openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        logger.info(f"OpenAI client initialized (model={OPENAI_MODEL})")
-    except Exception as e:
-        logger.warning(f"OpenAI init failed: {e}")
-        openai_client = None
-else:
-    logger.info("OpenAI not configured")
-
-# ============================================================================
-# GLOBAL VARIABLES
-# ============================================================================
-
-analysis_cache: Dict[str, Dict[str, Any]] = {}
-user_search_counts: Dict[str, int] = {}
-
-# ============================================================================
-# CACHE MANAGEMENT
-# ============================================================================
-
-async def cleanup_cache():
-    if len(analysis_cache) <= MAX_CACHE_SIZE:
-        return
-    items_to_remove = len(analysis_cache) - MAX_CACHE_SIZE
-    sorted_items = sorted(analysis_cache.items(), key=lambda x: x[1]['timestamp'])
-    for key, _ in sorted_items[:items_to_remove]:
-        del analysis_cache[key]
-    logger.info(f"Cache cleanup: removed {items_to_remove} entries")
 
 # ============================================================================
 # ANALYSIS HELPERS
@@ -736,9 +829,7 @@ def get_freshness_label(score: int) -> str:
     elif score >= 3: return "fresh"
     elif score >= 2: return "moderate"
     elif score >= 1: return "dated"
-    return "unknown"
-
-# ============================================================================
+    return "unknown"# ============================================================================
 # CONFIGURABLE SCORING FUNCTIONS
 # ============================================================================
 
@@ -790,7 +881,7 @@ def calculate_seo_score_configurable(soup: BeautifulSoup, url: str) -> Tuple[int
     return min(total_score, SCORING_CONFIG.weights['seo_basics']), details
 
 # ============================================================================
-# MAIN ANALYSIS FUNCTIONS
+# MAIN ANALYSIS FUNCTIONS (UPDATED FOR SPA)
 # ============================================================================
 
 async def analyze_basic_metrics_enhanced(url: str, html: str, headers: Optional[httpx.Headers] = None) -> Dict[str, Any]:
@@ -1049,12 +1140,10 @@ async def analyze_competitive_positioning(url: str, basic: Dict[str, Any]) -> Di
         'competitive_threats': threats, 'market_share_estimate': "Data not available",
         'competitive_score': comp_score,
         'industry_comparison': {'your_score': score, 'industry_average': 45, 'top_quartile': 70, 'bottom_quartile': 30}
-    }
-
+    }# ============================================================================
+# ENHANCED FEATURES GENERATION
 # ============================================================================
-# ---------------------------------------------------------------------------
-# Enhanced features (full) - drop this below analyze_competitive_positioning()
-# ---------------------------------------------------------------------------
+
 async def generate_enhanced_features(
     url: str,
     basic: Dict[str, Any],
@@ -1085,7 +1174,7 @@ async def generate_enhanced_features(
         mob_pts = int(breakdown.get("mobile", 0))
         tech_pts = int(breakdown.get("technical", 0))
 
-        # --- Industry benchmarking
+        # Industry benchmarking
         percentile = (
             min(100, int((score / 45) * 50))
             if score <= 45 else
@@ -1105,7 +1194,7 @@ async def generate_enhanced_features(
             }
         }
 
-        # --- Competitor gaps
+        # Competitor gaps
         gaps_items = []
         if mob_pts < int(mob_w * 0.7):
             gaps_items.append("Improve mobile UX and page speed")
@@ -1121,7 +1210,7 @@ async def generate_enhanced_features(
             "items": gaps_items or ["Minor gaps vs. peers"]
         }
 
-        # --- Growth opportunities
+        # Growth opportunities
         growth_delta = max(10, 90 - score)
         growth_items = [
             "Technical SEO quick wins (schema, canonical hygiene)",
@@ -1137,7 +1226,7 @@ async def generate_enhanced_features(
             "potential_score": min(100, score + growth_delta)
         }
 
-        # --- Risk assessment (only real risks)
+        # Risk assessment
         risks = []
         if seo_pts < int(seo_w * 0.5):
             risks.append("Weak SEO fundamentals on key pages")
@@ -1155,7 +1244,7 @@ async def generate_enhanced_features(
             "risk_level": "Medium" if risks else "Low"
         }
 
-                # --- Market trends (simple heuristics)
+        # Market trends
         trends = [
             "EEAT & first-party data importance growing",
             "Core Web Vitals and page experience remain ranking signals",
@@ -1165,16 +1254,12 @@ async def generate_enhanced_features(
             "name": "Market Trends",
             "value": "Trends analyzed",
             "description": "Relevant market trends",
-            # FRONTEND YHTEENSOPIVUUS: käytä 'items'
             "items": trends,
-            # (valinnainen back-compat, jos haluat säilyttää myös 'trends')
             "trends": trends,
             "status": "modern" if score >= 55 else "developing"
         }
-        
-        
 
-        # --- Estimated traffic rank (heuristic)
+        # Estimated traffic rank
         traffic_category = (
             "High Traffic" if score >= 70 else
             "Medium Traffic" if score >= 45 else
@@ -1189,7 +1274,7 @@ async def generate_enhanced_features(
             "factors": ["Content depth", "SEO basics", "Mobile performance"]
         }
 
-        # --- Mobile-first readiness
+        # Mobile-first readiness
         mobile_ready = mob_pts >= int(mob_w * 0.6)
         mobile_first_index_ready = {
             "name": "Mobile-First Readiness",
@@ -1197,15 +1282,14 @@ async def generate_enhanced_features(
             "description": "Google Mobile-First indexing readiness",
             "status": "ready" if mobile_ready else "not_ready",
             "mobile_score": technical.get("page_speed_score", 0),
-            "issues": [] if mobile_ready else ["Viewport / responsiveness improvements required"],
-            "recommendations": ([] if mobile_ready else [
+            "issues": [] if mobile_ready else ["Viewport / responsiveness improvements"recommendations": ([] if mobile_ready else [
                 "Add viewport meta",
                 "Increase responsive coverage (media queries)",
                 "Optimize mobile LCP elements"
             ])
         }
 
-        # --- Core Web Vitals (heuristics → explicit value/score/grade)
+        # Core Web Vitals
         ps = int(technical.get("page_speed_score", 0))
         passed = ps >= 70
         cwv_status = "pass" if passed else "needs_improvement"
@@ -1213,16 +1297,14 @@ async def generate_enhanced_features(
 
         core_web_vitals_assessment = {
             "name": "Core Web Vitals",
-            # FRONTEND YHTEENSOPIVUUS: anna konkreettinen arvo
             "value": "Pass" if passed else "Needs improvement",
             "description": "Website performance metrics",
             "status": cwv_status,
-            # FRONTENDILLE NUMEERINEN SCORE
             "score": ps,
             "grade": cwv_grade,
             "metrics": {
                 "lcp_ms": 2400 if passed else 3500,
-                "tbt_ms": 100 if passed else 180,   # FID/TBT proxy
+                "tbt_ms": 100 if passed else 180,
                 "cls": 0.08 if passed else 0.18
             },
             "recommendations": [
@@ -1232,12 +1314,11 @@ async def generate_enhanced_features(
             ]
         }
 
-        # --- Technology stack
+        # Technology stack
         detected = ["HTML5", "CSS3", "JavaScript"]
         for tname in (content.get("media_types") or []):
             if tname not in detected:
                 detected.append(tname)
-        # Analytics tools from earlier detection, if present in details
         if technical.get("has_analytics"):
             detected.append("Google Analytics")
         technology_stack = {
@@ -1282,6 +1363,41 @@ async def generate_enhanced_features(
         }
 
 # ============================================================================
+# OPENAI SETUP
+# ============================================================================
+
+openai_client = None
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+if OPENAI_AVAILABLE and os.getenv("OPENAI_API_KEY"):
+    try:
+        openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        logger.info(f"OpenAI client initialized (model={OPENAI_MODEL})")
+    except Exception as e:
+        logger.warning(f"OpenAI init failed: {e}")
+        openai_client = None
+else:
+    logger.info("OpenAI not configured")
+
+# ============================================================================
+# GLOBAL VARIABLES
+# ============================================================================
+
+analysis_cache: Dict[str, Dict[str, Any]] = {}
+user_search_counts: Dict[str, int] = {}
+
+# ============================================================================
+# CACHE MANAGEMENT
+# ============================================================================
+
+async def cleanup_cache():
+    if len(analysis_cache) <= MAX_CACHE_SIZE:
+        return
+    items_to_remove = len(analysis_cache) - MAX_CACHE_SIZE
+    sorted_items = sorted(analysis_cache.items(), key=lambda x: x[1]['timestamp'])
+    for key, _ in sorted_items[:items_to_remove]:
+        del analysis_cache[key]
+    logger.info(f"Cache cleanup: removed {items_to_remove} entries")# ============================================================================
 # AI INSIGHTS
 # ============================================================================
 
@@ -1354,7 +1470,7 @@ def generate_english_insights(overall: int, basic: Dict[str, Any], technical: Di
     elif overall >= 45: summary = f"Baseline achieved ({overall}/100) with improvement opportunities."
     else: summary = f"Early-stage digital maturity ({overall}/100) - immediate action required."
 
-    # ----- Action priority + key metrics (KORJAUS) -----
+    # Action priority + key metrics
     action_priority = [
         {
             'category': 'security',
@@ -1481,9 +1597,7 @@ def generate_smart_actions(ai: AIAnalysis, technical: Dict[str, Any], content: D
 
     priority_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
     actions.sort(key=lambda x: (priority_order.get(x['priority'], 4), -x.get('estimated_score_increase', 0)))
-    return actions[:8]
-
-# ============================================================================
+    return actions[:8]# ============================================================================
 # AUTH ENDPOINTS
 # ============================================================================
 
@@ -1509,7 +1623,7 @@ async def logout():
     return {"message": "Logged out successfully"}
 
 # ============================================================================
-# MAIN ANALYSIS ENDPOINTS
+# MAIN ANALYSIS ENDPOINTS (UPDATED WITH SPA SUPPORT)
 # ============================================================================
 
 @app.post("/api/v1/ai-analyze")
@@ -1519,6 +1633,7 @@ async def ai_analyze_comprehensive(
     user: UserInfo = Depends(require_user)
 ):
     try:
+        # Check user limits
         if user.role != "admin":
             user_limit = USERS_DB.get(user.username, {}).get("search_limit", DEFAULT_USER_LIMIT)
             current_count = user_search_counts.get(user.username, 0)
@@ -1528,41 +1643,50 @@ async def ai_analyze_comprehensive(
         url = clean_url(request.url)
         _reject_ssrf(url)
 
-        cache_key = get_cache_key(url, "ai_comprehensive_v6.1.1")
+        # Updated cache key to include SPA flag
+        cache_key = get_cache_key(url, "ai_comprehensive_v6.2.0", force_spa=request.force_spa)
         if cache_key in analysis_cache and is_cache_valid(analysis_cache[cache_key]['timestamp']):
-            logger.info(f"Cache hit for {url} (user: {user.username})")
+            logger.info(f"Cache hit for {url} (user: {user.username}, SPA: {request.force_spa})")
             return analysis_cache[cache_key]['data']
 
-        response = await fetch_url_with_retries(url)
-        if not response or response.status_code != 200:
-            raise HTTPException(400, f"Cannot access website: {url}")
-        html_content = response.text
+        # Get website content using SPA-aware fetching
+        html_content, used_spa = await get_website_content(
+            url, 
+            force_spa=request.force_spa, 
+            timeout=REQUEST_TIMEOUT
+        )
+        
         if not html_content or len(html_content.strip()) < 100:
-            raise HTTPException(400, "Website returned insufficient content")
+            raise HTTPException(400, f"Website returned insufficient content: {url}")
 
-        basic_analysis = await analyze_basic_metrics_enhanced(url, html_content, headers=response.headers)
-        technical_audit = await analyze_technical_aspects(url, html_content, headers=response.headers)
+        logger.info(f"Content fetched for {url}: {len(html_content)} chars, SPA: {used_spa}")
+
+        # Perform analysis with the fetched content
+        basic_analysis = await analyze_basic_metrics_enhanced(url, html_content, headers=None)
+        technical_audit = await analyze_technical_aspects(url, html_content, headers=None)
         content_analysis = await analyze_content_quality(html_content)
         ux_analysis = await analyze_ux_elements(html_content)
         social_analysis = await analyze_social_media_presence(url, html_content)
         competitive_analysis = await analyze_competitive_positioning(url, basic_analysis)
 
-        # Aliakset score_breakdowniin
+        # Create score breakdown with aliases
         sb_with_aliases = create_score_breakdown_with_aliases(basic_analysis.get('score_breakdown', {}))
 
-        # AI
+        # Generate AI insights
         ai_analysis = await generate_ai_insights(
             url, basic_analysis, technical_audit, content_analysis, ux_analysis, social_analysis
         )
 
-        # Enhanced features
+        # Generate enhanced features
         enhanced_features = await generate_enhanced_features(
             url, basic_analysis, technical_audit, content_analysis, social_analysis
         )
         enhanced_features["admin_features_enabled"] = (user.role == "admin")
 
+        # Generate smart actions
         smart_actions = generate_smart_actions(ai_analysis, technical_audit, content_analysis, basic_analysis)
 
+        # Build final result
         result = {
             "success": True,
             "company_name": request.company_name or get_domain_from_url(url),
@@ -1600,10 +1724,16 @@ async def ai_analyze_comprehensive(
             },
             "enhanced_features": enhanced_features,
             "metadata": {
-                "version": APP_VERSION, "scoring_version": "configurable_v1",
-                "analysis_depth": "comprehensive", "confidence_level": ai_analysis.confidence_score,
-                "analyzed_by": user.username, "user_role": user.role,
-                "scoring_weights": SCORING_CONFIG.weights
+                "version": APP_VERSION, 
+                "scoring_version": "configurable_v1",
+                "analysis_depth": "comprehensive", 
+                "confidence_level": ai_analysis.confidence_score,
+                "analyzed_by": user.username, 
+                "user_role": user.role,
+                "scoring_weights": SCORING_CONFIG.weights,
+                "used_spa_rendering": used_spa,
+                "content_words": content_analysis.get('word_count', 0),
+                "playwright_available": PLAYWRIGHT_AVAILABLE
             }
         }
 
@@ -1611,10 +1741,11 @@ async def ai_analyze_comprehensive(
         analysis_cache[cache_key] = {'data': result, 'timestamp': datetime.now()}
         background_tasks.add_task(cleanup_cache)
 
+        # Update user search count
         if user.role != "admin":
             user_search_counts[user.username] = user_search_counts.get(user.username, 0) + 1
 
-        logger.info(f"Analysis complete for {url}: score={basic_analysis['digital_maturity_score']} (user: {user.username})")
+        logger.info(f"Analysis complete for {url}: score={basic_analysis['digital_maturity_score']} (user: {user.username}, SPA: {used_spa})")
         return result
 
     except HTTPException:
@@ -1628,11 +1759,20 @@ async def basic_analyze(request: CompetitorAnalysisRequest, user: UserInfo = Dep
     try:
         url = clean_url(request.url)
         _reject_ssrf(url)
-        response = await fetch_url_with_retries(url)
-        if not response or response.status_code != 200:
-            raise HTTPException(400, f"Cannot access website: {url}")
-        basic_analysis = await analyze_basic_metrics_enhanced(url, response.text, headers=response.headers)
+        
+        # Get website content using SPA-aware fetching
+        html_content, used_spa = await get_website_content(
+            url, 
+            force_spa=request.force_spa, 
+            timeout=REQUEST_TIMEOUT
+        )
+        
+        if not html_content or len(html_content.strip()) < 100:
+            raise HTTPException(400, f"Website returned insufficient content: {url}")
+        
+        basic_analysis = await analyze_basic_metrics_enhanced(url, html_content, headers=None)
         sb_with_aliases = create_score_breakdown_with_aliases(basic_analysis.get('score_breakdown', {}))
+        
         return {
             "success": True,
             "company": request.company_name or get_domain_from_url(url),
@@ -1642,15 +1782,15 @@ async def basic_analyze(request: CompetitorAnalysisRequest, user: UserInfo = Dep
             "score_breakdown": sb_with_aliases,
             "analysis_date": datetime.now().isoformat(),
             "analyzed_by": user.username,
-            "scoring_weights": SCORING_CONFIG.weights
+            "scoring_weights": SCORING_CONFIG.weights,
+            "used_spa_rendering": used_spa,
+            "playwright_available": PLAYWRIGHT_AVAILABLE
         }
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Basic analysis error: {e}")
-        raise HTTPException(500, "Analysis failed")
-
-# ============================================================================
+        raise HTTPException(500, "Analysis failed")# ============================================================================
 # SYSTEM ENDPOINTS
 # ============================================================================
 
@@ -1665,11 +1805,17 @@ async def root():
         "features": [
             "JWT authentication with role-based access",
             "Configurable scoring system",
-            "Fair 0–100 scoring across all metrics",
+            "Fair 0-100 scoring across all metrics",
             "Production-ready architecture",
-            "AI-powered insights"
+            "AI-powered insights",
+            "SPA support with Playwright"
         ],
         "scoring_system": {"version": "configurable_v1", "weights": SCORING_CONFIG.weights},
+        "spa_support": {
+            "playwright_available": PLAYWRIGHT_AVAILABLE,
+            "auto_detection": True,
+            "force_spa_option": True
+        },
         "cors": {"allow_origins": ALLOWED_ORIGINS}
     }
 
@@ -1678,10 +1824,18 @@ async def health_check():
     return {
         "status": "healthy", "version": APP_VERSION, "timestamp": datetime.now().isoformat(),
         "system": {
-            "openai_available": bool(openai_client), "cache_size": len(analysis_cache),
-            "cache_limit": MAX_CACHE_SIZE, "rate_limiting": RATE_LIMIT_ENABLED
+            "openai_available": bool(openai_client), 
+            "playwright_available": PLAYWRIGHT_AVAILABLE,
+            "cache_size": len(analysis_cache),
+            "cache_limit": MAX_CACHE_SIZE, 
+            "rate_limiting": RATE_LIMIT_ENABLED
         },
-        "scoring": {"weights": SCORING_CONFIG.weights, "configurable": True}
+        "scoring": {"weights": SCORING_CONFIG.weights, "configurable": True},
+        "spa": {
+            "timeout": SPA_TIMEOUT,
+            "wait_for_load": SPA_WAIT_FOR_LOAD,
+            "auto_detection": True
+        }
     }
 
 @app.get("/api/v1/config")
@@ -1691,7 +1845,12 @@ async def get_config(user: UserInfo = Depends(require_admin)):
         "content_thresholds": SCORING_CONFIG.content_thresholds,
         "technical_thresholds": SCORING_CONFIG.technical_thresholds,
         "seo_thresholds": SCORING_CONFIG.seo_thresholds,
-        "version": APP_VERSION
+        "version": APP_VERSION,
+        "spa_config": {
+            "playwright_available": PLAYWRIGHT_AVAILABLE,
+            "timeout": SPA_TIMEOUT,
+            "wait_for_load": SPA_WAIT_FOR_LOAD
+        }
     }
 
 # ============================================================================
@@ -1701,8 +1860,8 @@ async def get_config(user: UserInfo = Depends(require_admin)):
 @app.post("/admin/reset-all")
 async def admin_reset_all(user: UserInfo = Depends(require_admin)):
     """
-    Nollaa KAIKKIEN käyttäjien laskurit ja tyhjentää analyysicachen.
-    Käyttö: vain admin.
+    Reset all user counters and clear analysis cache.
+    Admin only.
     """
     user_search_counts.clear()
     analysis_cache.clear()
@@ -1712,13 +1871,12 @@ async def admin_reset_all(user: UserInfo = Depends(require_admin)):
 @app.post("/admin/reset/{username}")
 async def admin_reset_user(username: str, user: UserInfo = Depends(require_admin)):
     """
-    Nollaa yhden käyttäjän laskurin.
-    Käyttö: vain admin.
+    Reset one user's counter.
+    Admin only.
     """
     user_search_counts.pop(username, None)
     logger.info(f"Admin reset: counter cleared for {username}")
     return {"ok": True, "message": f"Counter cleared for {username}."}
-
 
 # ============================================================================
 # ADMIN QUOTA MANAGEMENT
@@ -1727,8 +1885,8 @@ async def admin_reset_user(username: str, user: UserInfo = Depends(require_admin
 @app.get("/admin/users", response_model=List[UserQuotaView])
 async def admin_list_users(user: UserInfo = Depends(require_admin)):
     """
-    Listaa kaikki käyttäjät ja heidän kvotat + käytön.
-    Käyttö: vain admin.
+    List all users with their quotas and usage.
+    Admin only.
     """
     return [
         UserQuotaView(
@@ -1747,23 +1905,23 @@ async def admin_update_quota(
     user: UserInfo = Depends(require_admin),
 ):
     """
-    Päivitä käyttäjän kvotaa: aseta uusi limit, myönnä lisähakuja ja/tai nollaa laskuri.
-    Käyttö: vain admin.
+    Update user quota: set new limit, grant extra searches and/or reset counter.
+    Admin only.
     """
     if username not in USERS_DB:
         raise HTTPException(404, "User not found")
 
-    # aseta uusi kiintiö
+    # Set new quota
     if payload.search_limit is not None:
         USERS_DB[username]["search_limit"] = int(payload.search_limit)
 
-    # myönnä lisähakuja (vain jos kiintiö on rajallinen)
+    # Grant extra searches (only if quota is finite)
     if payload.grant_extra is not None:
         cur = USERS_DB[username]["search_limit"]
         if cur != -1:
             USERS_DB[username]["search_limit"] = cur + int(payload.grant_extra)
 
-    # nollaa käytettyjen hakujen laskuri
+    # Reset used searches counter
     if payload.reset_count:
         user_search_counts[username] = 0
 
@@ -1775,6 +1933,56 @@ async def admin_update_quota(
     )
 
 # ============================================================================
+# SPA TESTING ENDPOINT
+# ============================================================================
+
+@app.post("/api/v1/test-spa")
+async def test_spa_content(
+    request: dict,
+    user: UserInfo = Depends(require_user)
+):
+    """
+    Test endpoint for SPA content fetching.
+    Allows testing both regular HTTP and SPA rendering for comparison.
+    """
+    if not PLAYWRIGHT_AVAILABLE:
+        raise HTTPException(400, "Playwright not available for SPA testing")
+    
+    url = request.get("url")
+    if not url:
+        raise HTTPException(400, "URL required")
+    
+    url = clean_url(url)
+    _reject_ssrf(url)
+    
+    try:
+        # Test regular HTTP fetch
+        response = await fetch_url_with_retries(url)
+        http_content = response.text if response and response.status_code == 200 else None
+        
+        # Test SPA fetch
+        spa_content = await fetch_spa_content(url)
+        
+        return {
+            "url": url,
+            "http_fetch": {
+                "success": bool(http_content),
+                "content_length": len(http_content) if http_content else 0,
+                "content_preview": (http_content[:500] + "...") if http_content and len(http_content) > 500 else http_content
+            },
+            "spa_fetch": {
+                "success": bool(spa_content),
+                "content_length": len(spa_content) if spa_content else 0,
+                "content_preview": (spa_content[:500] + "...") if spa_content and len(spa_content) > 500 else spa_content
+            },
+            "spa_detected": is_spa_site(url),
+            "playwright_available": PLAYWRIGHT_AVAILABLE
+        }
+    except Exception as e:
+        logger.error(f"SPA test error for {url}: {e}")
+        raise HTTPException(500, f"SPA test failed: {str(e)}")
+
+# ============================================================================
 # MAIN APPLICATION ENTRY POINT
 # ============================================================================
 
@@ -1783,16 +1991,28 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     host = os.getenv("HOST", "0.0.0.0")
     reload = os.getenv("RELOAD", "false").lower() == "true"
-    logger.info(f"🚀 {APP_NAME} v{APP_VERSION} - Production Ready")
+    
+    logger.info(f"🚀 {APP_NAME} v{APP_VERSION} - Production Ready with SPA Support")
     logger.info(f"📊 Scoring System: Configurable weights {SCORING_CONFIG.weights}")
     logger.info(f"💾 Cache: TTL={CACHE_TTL}s, Max={MAX_CACHE_SIZE} entries")
-    logger.info(f"🛡️  Rate limiting: {'enabled' if RATE_LIMIT_ENABLED else 'disabled'}")
+    logger.info(f"🛡️ Rate limiting: {'enabled' if RATE_LIMIT_ENABLED else 'disabled'}")
     logger.info(f"🤖 OpenAI: {'available' if openai_client else 'not configured'}")
+    logger.info(f"🎭 Playwright: {'available' if PLAYWRIGHT_AVAILABLE else 'not available'}")
     logger.info(f"🌐 Starting server on {host}:{port}")
+    
+    # Security warnings
     if SECRET_KEY.startswith("brandista-key-"):
-        logger.warning("⚠️  Using default SECRET_KEY - set SECRET_KEY environment variable in production!")
+        logger.warning("⚠️ Using default SECRET_KEY - set SECRET_KEY environment variable in production!")
     if "*" in ALLOWED_ORIGINS:
-        logger.warning("⚠️  CORS allows all origins (*) - credentials disabled; configure ALLOWED_ORIGINS for prod.")
+        logger.warning("⚠️ CORS allows all origins (*) - credentials disabled; configure ALLOWED_ORIGINS for prod.")
+    
+    # SPA configuration info
+    if PLAYWRIGHT_AVAILABLE:
+        logger.info(f"✅ SPA Support enabled - timeout: {SPA_TIMEOUT}ms, wait: {SPA_WAIT_FOR_LOAD}ms")
+    else:
+        logger.warning("⚠️ SPA Support disabled - install playwright for React/Vue analysis")
+        logger.info("📦 To enable SPA: pip install playwright && playwright install chromium")
+    
     uvicorn.run(
         app, host=host, port=port, reload=reload,
         log_level=os.getenv("UVICORN_LOG_LEVEL", "info"),
