@@ -4,7 +4,7 @@
     "builder": "nixpacks"
   },
   "deploy": {
-    "startCommand": "python main2.py",
+    "startCommand": "python main.py",
     "restartPolicyType": "ON_FAILURE"
   }
 }
