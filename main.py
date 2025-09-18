@@ -179,6 +179,20 @@ logger.info(f"Playwright support: {'enabled' if PLAYWRIGHT_AVAILABLE and PLAYWRI
 analysis_cache: Dict[str, Dict[str, Any]] = {}
 user_search_counts: Dict[str, int] = {}
 
+# Redis setup
+REDIS_URL = os.getenv("REDIS_URL")
+redis_client = None
+
+if REDIS_URL:
+    try:
+        redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+        redis_client.ping()
+        logger.info("Redis connected successfully")
+    except Exception as e:
+        logger.warning(f"Redis connection failed: {e}")
+        redis_client = None
+else:
+    logger.info("No REDIS_URL provided, using memory cache")
 # ============================================================================
 # OPENAI SETUP
 # ============================================================================
@@ -872,7 +886,32 @@ async def cleanup_cache():
     for key, _ in sorted_items[:items_to_remove]:
         del analysis_cache[key]
     logger.info(f"Cache cleanup: removed {items_to_remove} entries")
+async def get_from_cache(key: str) -> Optional[Dict[str, Any]]:
+    if not redis_client:
+        return analysis_cache.get(key, {}).get('data') if key in analysis_cache and is_cache_valid(analysis_cache[key]['timestamp']) else None
+    
+    try:
+        cached_data = redis_client.get(key)
+        if cached_data:
+            data = json.loads(cached_data)
+            if is_cache_valid(datetime.fromisoformat(data['timestamp'])):
+                return data['data']
+            else:
+                redis_client.delete(key)
+    except Exception as e:
+        logger.error(f"Redis get error: {e}")
+    
+    return None
 
+async def set_cache(key: str, data: Dict[str, Any]):
+    analysis_cache[key] = {'data': data, 'timestamp': datetime.now()}
+    
+    if redis_client:
+        try:
+            cache_data = {'data': data, 'timestamp': datetime.now().isoformat()}
+            redis_client.setex(key, CACHE_TTL, json.dumps(cache_data))
+        except Exception as e:
+            logger.error(f"Redis set error: {e}")
 # ============================================================================
 # ANALYSIS HELPERS
 # ============================================================================
@@ -2067,9 +2106,10 @@ async def ai_analyze_comprehensive(
 
         # Check analysis cache
         cache_key = get_cache_key(url, "ai_comprehensive_v6.1.1_complete")
-        if cache_key in analysis_cache and is_cache_valid(analysis_cache[cache_key]['timestamp']):
-            logger.info(f"Analysis cache hit for {url} (user: {user.username})")
-            return analysis_cache[cache_key]['data']
+        cached_result = await get_from_cache(cache_key)
+        if cached_result:
+            logger.info(f"Cache hit for {url} (user: {user.username})")
+            return cached_result
 
         # Smart website content fetching
         logger.info(f"Starting complete comprehensive analysis for {url}")
@@ -2174,7 +2214,7 @@ async def ai_analyze_comprehensive(
         result = ensure_integer_scores(result)
         
         # Cache result
-        analysis_cache[cache_key] = {'data': result, 'timestamp': datetime.now()}
+        await set_cache(cache_key, result)
         background_tasks.add_task(cleanup_cache)
 
         # Update user count
