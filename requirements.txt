@@ -37,3 +37,4 @@ validators
 spacy
 textstat
 sqlalchemy
+redis==5.0.1
