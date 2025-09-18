@@ -180,7 +180,7 @@ analysis_cache: Dict[str, Dict[str, Any]] = {}
 user_search_counts: Dict[str, int] = {}
 
 # Redis setup
-REDIS_URL = os.getenv("REDIS_URL")
+REDIS_URL = os.getenv("https://brandista-api.onrender.com")
 redis_client = None
 
 if REDIS_URL:
