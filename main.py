@@ -1870,13 +1870,15 @@ async def generate_enhanced_features(
         }
 
         # 7. Mobile-first readiness
-        mobile_ready = mob_pts >= int(mob_w * 0.6)
+        # Korvaa koko mobile_first_index_ready osio:
+        mobile_score_out_of_100 = 0 if not mobile_ready else 100
+
         mobile_first_index_ready = {
-            "name": "Mobile-First Readiness",
+            "name": "Mobile-First Readiness", 
             "value": "Yes" if mobile_ready else "No",
             "description": "Google Mobile-First indexing readiness",
-            "status": "ready" if mobile_ready else "not_ready",
-            "mobile_score": technical.get("page_speed_score", 0),
+            "status": "ready" if mobile_ready else "not_ready", 
+            "mobile_score": mobile_score_out_of_100,  # KORJATTU
             "issues": [] if mobile_ready else ["Viewport / responsiveness improvements required"],
             "recommendations": ([] if mobile_ready else [
                 "Add viewport meta",
