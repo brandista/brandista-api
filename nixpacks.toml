@@ -1,9 +1,12 @@
-[build]
+[phases.setup]
+nixPkgs = ["python310", "nodejs", "chromium"]
+
+[phases.install]
 cmds = [
-  "pip install -r requirements.txt", 
-  "playwright install chromium --with-deps",
-  "playwright install-deps"
+    "pip install -r requirements.txt",
+    "playwright install chromium",
+    "playwright install-deps chromium"
 ]
 
 [start]
-cmd = "uvicorn main:app --host 0.0.0.0 --port $PORT"
+cmd = "python main.py"
