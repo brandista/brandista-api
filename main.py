@@ -329,6 +329,9 @@ async def fetch_url_with_retries(url: str, timeout: int = REQUEST_TIMEOUT, retri
     
     for attempt in range(retries):
         try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
+            }
             async with httpx.AsyncClient(
                 timeout=timeout, follow_redirects=True, verify=True,
                 limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
