@@ -1163,22 +1163,22 @@ async def generate_enhanced_features(
         }
 
         # --- Mobile-first readiness
-            mobile_ready = mob_pts >= int(mob_w * 0.6)
-            mobile_score = int((mob_pts / mob_w) * 100) if mob_pts > 0 else 0
+        mobile_ready = mob_pts >= int(mob_w * 0.6)  # <- TÄMÄ EI SAA OLLA LIIKAA SISENNETTY
+        mobile_score = int((mob_pts / mob_w) * 100) if mob_pts > 0 else 0
 
-            mobile_first_index_ready = {
-                "name": "Mobile-First Readiness",
-                "value": "Yes" if mobile_ready else "No",
-                "description": "Google Mobile-First indexing readiness",
-                "status": "ready" if mobile_ready else "not_ready",
-                "mobile_score": mobile_score,  # <- TÄHÄN mobile_score arvo
-                "issues": [] if mobile_ready else ["Viewport / responsiveness improvements required"],
-                "recommendations": ([] if mobile_ready else [
-                    "Add viewport meta",
-                    "Increase responsive coverage (media queries)",
-                    "Optimize mobile LCP elements"
-                ])
-            }
+        mobile_first_index_ready = {
+            "name": "Mobile-First Readiness",
+            "value": "Yes" if mobile_ready else "No",
+            "description": "Google Mobile-First indexing readiness",
+            "status": "ready" if mobile_ready else "not_ready",
+            "mobile_score": mobile_score,
+            "issues": [] if mobile_ready else ["Viewport / responsiveness improvements required"],
+            "recommendations": ([] if mobile_ready else [
+                "Add viewport meta",
+                "Increase responsive coverage (media queries)",
+                "Optimize mobile LCP elements"
+            ])
+        }
 
         # --- Core Web Vitals (heuristics → explicit value/score/grade)
         ps = int(technical.get("page_speed_score", 0))
