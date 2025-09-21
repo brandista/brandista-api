@@ -902,10 +902,12 @@ def ensure_integer_scores(data: Any) -> Any:
                         ensure_integer_scores(item)
     return data
 
-def get_cache_key(url: str, analysis_type: str = "basic") -> str:
+def get_cache_key(url: str, analysis_type: str = "basic", force_playwright: bool = False) -> str:
     config_hash = hashlib.md5(str(SCORING_CONFIG.weights).encode()).hexdigest()[:8]
     playwright_suffix = "_pw" if PLAYWRIGHT_ENABLED else ""
-    return hashlib.md5(f"{url}_{analysis_type}_{APP_VERSION}_{config_hash}{playwright_suffix}".encode()).hexdigest()
+    force_suffix = "_forcepw" if force_playwright else ""
+    raw = f"{url}_{analysis_type}_{APP_VERSION}_{config_hash}{playwright_suffix}{force_suffix}"
+    return hashlib.md5(raw.encode()).hexdigest()
 
 def is_cache_valid(timestamp: datetime) -> bool:
     return (datetime.now() - timestamp).total_seconds() < CACHE_TTL
@@ -2374,7 +2376,11 @@ async def ai_analyze_comprehensive(
         _reject_ssrf(url)
 
         # Check analysis cache
-        cache_key = get_cache_key(url, "ai_comprehensive_v6.1.1_complete")
+        cache_key = get_cache_key(
+    url,
+    "ai_comprehensive_v6.1.1_complete",
+    getattr(request, "force_playwright", False)
+)
         cached_result = await get_from_cache(cache_key)
         if cached_result:
             logger.info(f"Cache hit for {url} (user: {user.username})")
