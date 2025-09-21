@@ -394,19 +394,40 @@ async def fetch_url_with_retries(url: str, timeout: int = REQUEST_TIMEOUT, retri
     logger.error(f"All retry attempts failed for {url}: {last_error}")
     return None
 
-async def fetch_url_with_smart_rendering(url: str, timeout: int = REQUEST_TIMEOUT, retries: int = MAX_RETRIES) -> Optional[Dict[str, Any]]:
-    """Smart URL fetching that automatically detects SPAs and uses appropriate rendering method"""
-    
-    # First try simple HTTP fetch
+async def fetch_url_with_smart_rendering(
+    url: str,
+    timeout: int = REQUEST_TIMEOUT,
+    retries: int = MAX_RETRIES,
+    force_playwright: bool = False
+) -> Optional[Dict[str, Any]]:
+    """Smart URL fetching that auto-detektoi SPAt ja tukee pakotettua Playwrightia."""
+
+    # 1) Pakota Playwright heti, jos pyydetty ja käytettävissä
+    if force_playwright and PLAYWRIGHT_AVAILABLE and PLAYWRIGHT_ENABLED:
+        pw = await fetch_with_playwright(url, timeout * 1000)  # ms
+        if pw and pw.get('html'):
+            spa_info = await detect_spa_framework(pw['html'])
+            return {
+                'html': pw['html'],
+                'status': pw.get('status', 200),
+                'headers': {},  # Playwrightilta ei tule HTTP-otsikoita suoraan
+                'rendering_method': 'playwright',
+                'spa_detected': True,
+                'spa_info': spa_info,
+                'final_url': pw.get('final_url', url),
+                'playwright_title': pw.get('title', ''),
+                'console_errors': pw.get('console_errors', [])
+            }
+        # jos pakotettu Playwright epäonnistuu, pudotaan HTTP:hen
+
+    # 2) Yritä ensin tavallinen HTTP-haku
     http_response = await fetch_url_with_retries(url, timeout, retries)
     if not http_response or http_response.status_code != 200:
         return None
-    
+
     initial_html = http_response.text
-    
-    # Detect if this might be a SPA
     spa_info = await detect_spa_framework(initial_html)
-    
+
     result = {
         'html': initial_html,
         'status': http_response.status_code,
@@ -416,29 +437,71 @@ async def fetch_url_with_smart_rendering(url: str, timeout: int = REQUEST_TIMEOU
         'spa_info': spa_info,
         'final_url': str(http_response.url)
     }
-    
-    # If SPA detected and Playwright available, try JS rendering
+
+    # 3) Jos havaitaan SPA ja Playwright käytössä, kokeile rikastaa sisältöä
     force_all_spa = os.getenv("PLAYWRIGHT_FORCE_ALL_SPA", "false").lower() == "true"
-    if ((spa_info['requires_js_rendering'] or (spa_info['spa_detected'] and force_all_spa)) 
-    and PLAYWRIGHT_AVAILABLE and PLAYWRIGHT_ENABLED):
-        
+    if ((spa_info['requires_js_rendering'] or (spa_info['spa_detected'] and force_all_spa))
+        and PLAYWRIGHT_AVAILABLE and PLAYWRIGHT_ENABLED):
         logger.info(f"SPA detected for {url}, trying Playwright rendering")
-        
-        playwright_result = await fetch_with_playwright(url, timeout * 1000)  # Convert to ms
-        
-        if playwright_result and len(playwright_result['html']) > len(initial_html) * 1.2:
-            # Playwright gave us significantly more content
+
+        pw = await fetch_with_playwright(url, timeout * 1000)  # ms
+        if pw and pw.get('html') and len(pw['html']) > len(initial_html) * 1.2:
             logger.info(f"Playwright rendering successful for {url}")
             result.update({
-                'html': playwright_result['html'],
+                'html': pw['html'],
                 'rendering_method': 'playwright',
-                'playwright_title': playwright_result.get('title', ''),
-                'console_errors': playwright_result.get('console_errors', [])
+                'playwright_title': pw.get('title', ''),
+                'console_errors': pw.get('console_errors', []),
+                'final_url': pw.get('final_url', result['final_url']),
+                'spa_detected': True,
+                'spa_info': await detect_spa_framework(pw['html'])
             })
         else:
             logger.info(f"Playwright rendering didn't improve content for {url}, using HTTP")
-    
+
     return result
+    
+    # Detect if this might be a SPA
+spa_info = await detect_spa_framework(initial_html)
+
+result = {
+    'html': initial_html,
+    'status': http_response.status_code,
+    'headers': dict(http_response.headers),
+    'rendering_method': 'http',
+    'spa_detected': spa_info['spa_detected'],
+    'spa_info': spa_info,
+    'final_url': str(http_response.url)
+}
+
+# If SPA detected and Playwright available, try JS rendering
+force_all_spa = os.getenv("PLAYWRIGHT_FORCE_ALL_SPA", "false").lower() == "true"
+if ((spa_info['requires_js_rendering'] or (spa_info['spa_detected'] and force_all_spa))
+    and PLAYWRIGHT_AVAILABLE and PLAYWRIGHT_ENABLED):
+
+    logger.info(f"SPA detected for {url}, trying Playwright rendering")
+
+    playwright_result = await fetch_with_playwright(url, timeout * 1000)  # ms
+
+    if playwright_result and playwright_result.get('html') and len(playwright_result['html']) > len(initial_html) * 1.2:
+        logger.info(f"Playwright rendering successful for {url}")
+        # Recalculate SPA info from rendered HTML
+        pw_spa_info = await detect_spa_framework(playwright_result['html'])
+
+        result.update({
+            'html': playwright_result['html'],
+            'rendering_method': 'playwright',
+            'playwright_title': playwright_result.get('title', ''),
+            'console_errors': playwright_result.get('console_errors', []),
+            'final_url': playwright_result.get('final_url', result['final_url']),
+            'headers': result.get('headers', {}) or {},  # keep key present
+            'spa_detected': True,
+            'spa_info': pw_spa_info,
+        })
+    else:
+        logger.info("Playwright rendering didn't improve content, using HTTP")
+
+return result
 
 # ============================================================================
 # MODERN WEB ANALYSIS
@@ -2390,9 +2453,14 @@ async def ai_analyze_comprehensive(
         logger.info(f"Starting complete comprehensive analysis for {url}")
         
         # Use smart rendering that detects SPAs automatically
-        fetch_result = await fetch_url_with_smart_rendering(url)
-        if not fetch_result or fetch_result['status'] != 200:
-            raise HTTPException(400, f"Cannot access website: {url}")
+fetch_result = await fetch_url_with_smart_rendering(
+    url,
+    timeout=REQUEST_TIMEOUT,
+    retries=MAX_RETRIES,
+    force_playwright=request.force_playwright,  # 👈 tärkeä
+)
+if not fetch_result or fetch_result['status'] != 200:
+    raise HTTPException(400, f"Cannot access website: {url}")
         
         html_content = fetch_result['html']
         if not html_content or len(html_content.strip()) < 100:
@@ -3029,7 +3097,14 @@ async def fetch_url_with_retries(url: str, timeout: int = REQUEST_TIMEOUT, retri
     logger.error(f"All retry attempts failed for {url}: {last_error}")
     return None
 
-async def fetch_url_with_smart_rendering(url: str, timeout: int = REQUEST_TIMEOUT, retries: int = MAX_RETRIES) -> Optional[Dict[str, Any]]:
+async def fetch_url_with_smart_rendering(
+    url: str,
+    timeout: int = REQUEST_TIMEOUT,
+    retries: int = MAX_RETRIES,
+    force_playwright: bool = False,
+) -> Optional[Dict[str, Any]]:
+    ...
+    return result  # yksi dict
     """Smart URL fetching that automatically detects SPAs and uses appropriate rendering method"""
     
     # First try simple HTTP fetch
@@ -4768,7 +4843,8 @@ async def ai_analyze_comprehensive(
         _reject_ssrf(url)
 
         # Check analysis cache
-        cache_key = get_cache_key(url, "ai_comprehensive_v6.1.1_complete")
+        cache_key = get_cache_key(url, "ai_comprehensive_v6.1.1_complete" + ("_fpw" if request.force_playwright else ""))
+# tai ohita cache kun force_playwright=True
         cached_result = await get_from_cache(cache_key)
         if cached_result:
             logger.info(f"Cache hit for {url} (user: {user.username})")
@@ -4778,9 +4854,12 @@ async def ai_analyze_comprehensive(
         logger.info(f"Starting complete comprehensive analysis for {url}")
         
         # Use smart rendering that detects SPAs automatically
-        fetch_result = await fetch_url_with_smart_rendering(url)
-        if not fetch_result or fetch_result['status'] != 200:
-            raise HTTPException(400, f"Cannot access website: {url}")
+        fetch_result = await fetch_url_with_smart_rendering(
+    url,
+    timeout=REQUEST_TIMEOUT,
+    retries=MAX_RETRIES,
+    force_playwright=request.force_playwright,
+)
         
         html_content = fetch_result['html']
         if not html_content or len(html_content.strip()) < 100:
