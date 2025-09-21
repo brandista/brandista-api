@@ -792,13 +792,43 @@ class UserQuotaView(BaseModel):
 # AUTH FUNCTIONS
 # ============================================================================
 
+# --- AUTH HELPERS (drop-in replacement) ---
+from typing import Optional
+from datetime import datetime, timedelta
+import hmac
+
+from jose import jwt
+from jose.exceptions import ExpiredSignatureError, JWTError
+from passlib.context import CryptContext
+
+# Passlibin konteksti (bcrypt); jos backend puuttuu, käytetään fallbackia verifyssä
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
+ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+SECRET_KEY = os.getenv("SECRET_KEY", "brandista-key-dev")
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    """
+    Yritä ensin passlib/bcrypt-verifyä. Jos ympäristö ei tue sitä,
+    käytä constant-time fallbackia, ettei kaaduta loginissa.
+    """
+    try:
+        return pwd_context.verify(plain_password, hashed_password)
+    except Exception as e:
+        logger.warning("verify_password: passlib/bcrypt failed (%s) — using constant-time fallback", e)
+        try:
+            # HUOM: tämä palauttaa True vain jos tallennettu 'hashed_password' on oikeasti plain-teksti.
+            # Prodissa pitäisi aina käyttää oikeaa bcryptiä.
+            return hmac.compare_digest(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
+        except Exception:
+            return False
 
 def create_access_token(data: dict) -> str:
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire, "iat": datetime.utcnow()})
+    now = datetime.utcnow()
+    expire = now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire, "iat": now})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 def verify_token(token: str) -> Optional[dict]:
@@ -807,27 +837,33 @@ def verify_token(token: str) -> Optional[dict]:
     except ExpiredSignatureError:
         logger.warning("Token expired")
         return None
-    except InvalidTokenError as e:
+    except JWTError as e:
         logger.warning(f"JWT error: {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"Unexpected JWT error: {e}")
         return None
 
 async def get_current_user(authorization: Optional[str] = Header(None)) -> Optional[UserInfo]:
     if not authorization or not authorization.startswith("Bearer "):
         return None
     try:
-        token = authorization.split(" ")[1]
+        token = authorization.split(" ", 1)[1]
         payload = verify_token(token)
         if not payload:
             return None
+
         username = payload.get("sub")
         role = payload.get("role", "user")
         if not username or username not in USERS_DB:
             return None
+
         user_data = USERS_DB[username]
         return UserInfo(
-            username=username, role=role,
-            search_limit=user_data["search_limit"],
-            searches_used=user_search_counts.get(username, 0)
+            username=username,
+            role=role,
+            search_limit=user_data.get("search_limit", -1),
+            searches_used=user_search_counts.get(username, 0),
         )
     except Exception as e:
         logger.warning(f"Error getting current user: {e}")
