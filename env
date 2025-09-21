@@ -11,4 +11,4 @@ JWT_SECRET=aklsjdfölaksjfdklj
 SESSION_COOKIE=session
 COOKIE_SECURE=true
 OPENAI_MODEL=gpt-4o-mini
-ENABLE_PLAYWRIGHT=true 
+PLAYWRIGHT_ENABLED = true 
