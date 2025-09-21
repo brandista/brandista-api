@@ -399,52 +399,61 @@ async def fetch_url_with_smart_rendering(
     timeout: int = REQUEST_TIMEOUT,
     retries: int = MAX_RETRIES,
     force_playwright: bool = False,
-) -> Optional[Dict[str, Any]]:
-    ...
-    return result  # yksi dict
-    """Smart URL fetching that automatically detects SPAs and uses appropriate rendering method"""
-    
-    # First try simple HTTP fetch
+) -> Dict[str, Any]:
+    """
+    Hakee sivun ensin HTTP:llä. Jos pyydetään pakottamaan Playwright tai havaitaan SPA,
+    yritetään Playwright-renderöintiä. Palauttaa yhtenäisen result-diktin.
+    """
+    # 1) Pakotettu Playwright
+    if force_playwright and PLAYWRIGHT_ENABLED and PLAYWRIGHT_AVAILABLE:
+        pw = await fetch_with_playwright(url, timeout * 1000)  # ms
+        if pw:
+            return {
+                'html': pw.get('html', '') or '',
+                'status': 200,
+                'headers': {},
+                'rendering_method': 'playwright',
+                'spa_detected': True,
+                'spa_info': {'forced': True},
+                'final_url': pw.get('final_url', url),
+            }
+        # jos Playwright epäonnistuu, tiputaan HTTP:hen jatkamaan
+
+    # 2) HTTP-haku
     http_response = await fetch_url_with_retries(url, timeout, retries)
     if not http_response or http_response.status_code != 200:
-        return None
-    
-    initial_html = http_response.text
-    
-    # Detect if this might be a SPA
+        return {'status': http_response.status_code if http_response else 0}
+
+    initial_html = http_response.text or ''
     spa_info = await detect_spa_framework(initial_html)
-    
+
     result = {
         'html': initial_html,
         'status': http_response.status_code,
         'headers': dict(http_response.headers),
         'rendering_method': 'http',
-        'spa_detected': spa_info['spa_detected'],
+        'spa_detected': spa_info.get('spa_detected', False),
         'spa_info': spa_info,
-        'final_url': str(http_response.url)
+        'final_url': str(getattr(http_response, 'url', url)) if getattr(http_response, 'url', None) else url,
     }
-    
-    # If SPA detected and Playwright available, try JS rendering
+
+    # 3) Jos SPA → koita Playwrightia
     force_all_spa = os.getenv("PLAYWRIGHT_FORCE_ALL_SPA", "false").lower() == "true"
-    if ((spa_info['requires_js_rendering'] or (spa_info['spa_detected'] and force_all_spa)) 
-    and PLAYWRIGHT_AVAILABLE and PLAYWRIGHT_ENABLED):
-        
+    needs_js = spa_info.get('requires_js_rendering', False) or (spa_info.get('spa_detected') and force_all_spa)
+
+    if needs_js and PLAYWRIGHT_AVAILABLE and PLAYWRIGHT_ENABLED:
         logger.info(f"SPA detected for {url}, trying Playwright rendering")
-        
-        playwright_result = await fetch_with_playwright(url, timeout * 1000)  # Convert to ms
-        
-        if playwright_result and len(playwright_result['html']) > len(initial_html) * 1.2:
-            # Playwright gave us significantly more content
-            logger.info(f"Playwright rendering successful for {url}")
+        pw = await fetch_with_playwright(url, timeout * 1000)  # ms
+        if pw and len(pw.get('html', '')) > max(200, int(len(initial_html) * 1.2)):
             result.update({
-                'html': playwright_result['html'],
+                'html': pw.get('html', '') or '',
                 'rendering_method': 'playwright',
-                'playwright_title': playwright_result.get('title', ''),
-                'console_errors': playwright_result.get('console_errors', [])
+                'playwright_title': pw.get('title', ''),
+                'console_errors': pw.get('console_errors', []),
+                'final_url': pw.get('final_url', result['final_url']),
+                'spa_detected': True,
             })
-        else:
-            logger.info(f"Playwright rendering didn't improve content for {url}, using HTTP")
-    
+
     return result
 
 # ============================================================================
@@ -2158,9 +2167,15 @@ async def ai_analyze_comprehensive(
         except Exception as e:
             print(f"Error occurred: {e}")
         
-        html_content = fetch_result['html']
-        if not html_content or len(html_content.strip()) < 100:
-            raise HTTPException(400, "Website returned insufficient content")
+        if not fetch_result or "status" not in fetch_result:
+            raise HTTPException(400, f"Invalid fetch result for website: {url}")
+
+        html_content = fetch_result.get("html")
+        if not html_content:
+            raise HTTPException(400, "HTML content missing in fetch result")
+        basic_analysis = await analyze_basic_metrics_enhanced(
+            url, html_content, headers=httpx.Headers(fetch_result.get("headers", {})), rendering_info=rendering_info
+        )
 
         # Create rendering info for enhanced analysis
         rendering_info = {
@@ -2187,10 +2202,27 @@ async def ai_analyze_comprehensive(
         sb_with_aliases = create_score_breakdown_with_aliases(basic_analysis.get('score_breakdown', {}))
 
         # Generate AI insights and features
-        ai_analysis = await generate_ai_insights(url, basic_analysis, technical_audit, content_analysis, ux_analysis, social_analysis)
-        enhanced_features = await generate_enhanced_features(url, basic_analysis, technical_audit, content_analysis, social_analysis)
-        enhanced_features["admin_features_enabled"] = (user.role == "admin")
-        smart_actions = generate_smart_actions(ai_analysis, technical_audit, content_analysis, basic_analysis)
+        ai_analysis_obj = await generate_ai_insights(
+        url, basic_analysis, technical_audit, content_analysis, ux_analysis, social_analysis
+        )
+        enhanced_features_obj = await generate_enhanced_features(
+        url, basic_analysis, technical_audit, content_analysis, social_analysis
+        )
+
+        ai_analysis = to_dict(ai_analysis_obj)
+        enhanced_features = to_dict(enhanced_features_obj)
+
+        result = {
+        ...
+            "ai_analysis": ai_analysis,                # ← ei .dict()
+            "enhanced_features": enhanced_features,    # ← ei .dict()
+            "metadata": {
+                ...
+                "confidence_level": ai_analysis.get("confidence_score", 0),  # ← dict-turvallinen
+            }
+        }
+        
+        
 
         # Construct complete result
         result = {
@@ -2249,70 +2281,109 @@ async def ai_analyze_comprehensive(
             }
         }
 
-        # Ensure all scores are integers
-        result = ensure_integer_scores(result)
-        
-        # Cache result
-        await set_cache(cache_key, result)
-        background_tasks.add_task(cleanup_cache)
+        # Ensure all scores are integers – älä kaadu, jos joku kenttä on outo
+try:
+    result = ensure_integer_scores(result)
+except Exception as conv_err:
+    logger.warning("ensure_integer_scores failed: %s", conv_err, exc_info=True)
 
-        # Update user count
-        if user.role != "admin":
-            user_search_counts[user.username] = user_search_counts.get(user.username, 0) + 1
+# Cache result
+try:
+    await set_cache(cache_key, result)
+    background_tasks.add_task(cleanup_cache)
+except Exception as cache_err:
+    logger.warning("Caching failed: %s", cache_err, exc_info=True)
 
-        logger.info(f"Complete analysis finished for {url}: score={basic_analysis['digital_maturity_score']}, SPA={rendering_info['spa_detected']}, method={rendering_info['rendering_method']} (user: {user.username})")
-        return result
+# Update user count
+if user.role != "admin":
+    user_search_counts[user.username] = user_search_counts.get(user.username, 0) + 1
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Complete analysis error for {request.url}: {e}", exc_info=True)
-        raise HTTPException(500, "Analysis failed due to internal error")
+logger.info(
+    "Complete analysis finished for %s: score=%s, SPA=%s, method=%s (user: %s)",
+    url,
+    basic_analysis.get("digital_maturity_score"),
+    rendering_info.get("spa_detected"),
+    rendering_info.get("rendering_method"),
+    user.username,
+)
+
+return result
+
+except HTTPException:
+    pass
+    raise
+except Exception as e:
+    logger.error("Complete analysis error for %s: %s", request.url, e, exc_info=True)
+    raise HTTPException(500, "Analysis failed due to internal error")
+
+
+# ============================================================================
+# BASIC ENDPOINT
+# ============================================================================
 
 @app.post("/api/v1/analyze")
-async def basic_analyze(request: CompetitorAnalysisRequest, user: UserInfo = Depends(require_user)):
+async def basic_analyze(
+    request: CompetitorAnalysisRequest,
+    user: UserInfo = Depends(require_user),
+):
     """Basic analysis endpoint"""
     try:
         url = clean_url(request.url)
         _reject_ssrf(url)
-        
-        fetch_result = await fetch_url_with_smart_rendering(url)
-        if not fetch_result or fetch_result['status'] != 200:
-            raise HTTPException(400, f"Cannot access website: {url}")
-            
-        rendering_info = {
-            'spa_detected': fetch_result.get('spa_detected', False),
-            'spa_info': fetch_result.get('spa_info', {}),
-            'rendering_method': fetch_result.get('rendering_method', 'http'),
-            'final_url': fetch_result.get('final_url', url)
-        }
-        
-        basic_analysis = await analyze_basic_metrics_enhanced(
-            url, fetch_result['html'], 
-            headers=httpx.Headers(fetch_result.get('headers', {})),
-            rendering_info=rendering_info
+
+        fetch_result = await fetch_url_with_smart_rendering(
+            url,
+            timeout=REQUEST_TIMEOUT,
+            retries=MAX_RETRIES,
+            force_playwright=getattr(request, "force_playwright", False),
         )
-        
-        sb_with_aliases = create_score_breakdown_with_aliases(basic_analysis.get('score_breakdown', {}))
-        
-        return {
+        if not fetch_result or fetch_result.get("status") != 200:
+            raise HTTPException(400, f"Cannot access website: {url}")
+
+        rendering_info = {
+            "spa_detected": fetch_result.get("spa_detected", False),
+            "spa_info": fetch_result.get("spa_info", {}),
+            "rendering_method": fetch_result.get("rendering_method", "http"),
+            "final_url": fetch_result.get("final_url", url),
+        }
+
+        basic_analysis = await analyze_basic_metrics_enhanced(
+            url,
+            fetch_result["html"],
+            headers=httpx.Headers(fetch_result.get("headers", {})),
+            rendering_info=rendering_info,
+        )
+
+        sb_with_aliases = create_score_breakdown_with_aliases(
+            basic_analysis.get("score_breakdown", {})
+        )
+
+        resp = {
             "success": True,
             "company": request.company_name or get_domain_from_url(url),
             "website": url,
-            "digital_maturity_score": basic_analysis['digital_maturity_score'],
-            "social_platforms": basic_analysis.get('social_platforms', 0),
+            "digital_maturity_score": int(basic_analysis.get("digital_maturity_score", 0) or 0),
+            "social_platforms": int(basic_analysis.get("social_platforms", 0) or 0),
             "score_breakdown": sb_with_aliases,
             "analysis_date": datetime.now().isoformat(),
             "analyzed_by": user.username,
-            "spa_detected": basic_analysis.get('spa_detected', False),
-            "rendering_method": basic_analysis.get('rendering_method', 'http'),
-            "modernity_score": basic_analysis.get('modernity_score', 0),
-            "scoring_weights": SCORING_CONFIG.weights
+            "spa_detected": bool(basic_analysis.get("spa_detected", False)),
+            "rendering_method": basic_analysis.get("rendering_method", "http"),
+            "modernity_score": int(basic_analysis.get("modernity_score", 0) or 0),
+            "scoring_weights": SCORING_CONFIG.weights,
         }
+
+        try:
+            resp = ensure_integer_scores(resp)
+        except Exception as conv_err:
+            logger.warning("ensure_integer_scores (basic) failed: %s", conv_err, exc_info=True)
+
+        return resp
+
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Basic analysis error: {e}")
+        logger.error("Basic analysis error: %s", e, exc_info=True)
         raise HTTPException(500, "Analysis failed")
 
 # ============================================================================
