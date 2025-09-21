@@ -2115,77 +2115,68 @@ def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], c
     return actions[:8]
 
 # ============================================================================
-# MAIN ENDPOINTS
+# MAIN ENDPOINT: Comprehensive AI analysis (SPA-aware, Playwright support)
 # ============================================================================
 
-@app.post("/auth/login", response_model=TokenResponse)
-async def login(request: LoginRequest):
-    user = USERS_DB.get(request.username)
-    if not user or not verify_password(request.password, user["hashed_password"]):
-        raise HTTPException(401, "Invalid credentials")
-    access_token = create_access_token(data={"sub": request.username, "role": user["role"]})
-    return TokenResponse(access_token=access_token, role=user["role"])
-
-@app.get("/auth/me", response_model=UserInfo)
-async def get_me(user: UserInfo = Depends(require_user)):
-    return user
+def to_dict_safe(x):
+    """Convert pydantic/dataclass/obj to plain dict safely."""
+    try:
+        if x is None:
+            return {}
+        if isinstance(x, dict):
+            return x
+        if hasattr(x, "model_dump"):
+            return x.model_dump()
+        if hasattr(x, "dict"):
+            return x.dict()
+        return dict(x)  # may fail for non-mapping; caught below
+    except Exception:
+        return {}
 
 @app.post("/api/v1/ai-analyze")
 async def ai_analyze_comprehensive(
     request: CompetitorAnalysisRequest,
     background_tasks: BackgroundTasks,
-    user: UserInfo = Depends(require_user)
-):
-   @app.post("/api/v1/ai-analyze")
-async def ai_analyze_comprehensive(
-    request: CompetitorAnalysisRequest,
-    background_tasks: BackgroundTasks,
     user: UserInfo = Depends(require_user),
 ):
-    """Complete comprehensive analysis with full SPA support"""
+    """Complete comprehensive analysis with full SPA support."""
     try:
-        # Quota check
+        # --- Quota check (non-admin users) ---
         if user.role != "admin":
             user_limit = USERS_DB.get(user.username, {}).get("search_limit", DEFAULT_USER_LIMIT)
-            current_count = user_search_counts.get(user.username, 0)
-            if user_limit > 0 and current_count >= user_limit:
+            used = user_search_counts.get(user.username, 0)
+            if user_limit > 0 and used >= user_limit:
                 raise HTTPException(403, f"Search limit reached ({user_limit} searches)")
 
+        # --- Input clean + SSRF guard ---
         url = clean_url(request.url)
         _reject_ssrf(url)
 
-        # Cache key — erota Playwright-pakotus omaksi variantiksi
+        # --- Cache (key includes force_playwright flag) ---
         fpw = bool(getattr(request, "force_playwright", False))
-        cache_key = get_cache_key(
-            url,
-            "ai_comprehensive_v6.1.1_complete" + ("_fpw" if fpw else "")
-        )
+        cache_key = get_cache_key(url, "ai_comprehensive_v6.1.1_complete", fpw)
+        cached = await get_from_cache(cache_key)
+        if cached:
+            logger.info("Cache hit for %s (user: %s, fpw=%s)", url, user.username, fpw)
+            return cached
 
-        # Cache - HUOM: kun force_playwright=True, käytämme omaa keytä,
-        # joten normaali cache ei sotke “HTTP”-versiota
-        cached_result = await get_from_cache(cache_key)
-        if cached_result:
-            logger.info("Cache hit for %s (user: %s)", url, user.username)
-            return cached_result
+        logger.info("Starting comprehensive analysis for %s (fpw=%s)", url, fpw)
 
-        logger.info("Starting complete comprehensive analysis for %s", url)
-
-        # --- Nouto älykkäällä renderöinnillä (SPA/Playwright) ---
+        # --- Smart fetch (SPA detection + optional Playwright) ---
         fetch_result = await fetch_url_with_smart_rendering(
             url,
             timeout=REQUEST_TIMEOUT,
             retries=MAX_RETRIES,
             force_playwright=fpw,
         )
-
         if not fetch_result or fetch_result.get("status") != 200:
             raise HTTPException(400, f"Cannot access website: {url}")
 
-        html_content = fetch_result.get("html")
-        if not html_content or not html_content.strip():
+        html_content = fetch_result.get("html") or ""
+        if len(html_content.strip()) < 100:
             raise HTTPException(400, "Website returned insufficient content")
 
-        # Rendering-meta analyysiä varten
+        # --- Rendering info propagated into analyzers ---
         rendering_info = {
             "spa_detected": fetch_result.get("spa_detected", False),
             "spa_info": fetch_result.get("spa_info", {}),
@@ -2193,15 +2184,13 @@ async def ai_analyze_comprehensive(
             "final_url": fetch_result.get("final_url", url),
         }
 
-        # --- Perusanalyysi (laajennettu) ---
+        # --- Analyses ---
         basic_analysis = await analyze_basic_metrics_enhanced(
             url,
             html_content,
             headers=httpx.Headers(fetch_result.get("headers", {})),
             rendering_info=rendering_info,
         )
-
-        # --- Muut analyysit ---
         technical_audit = await analyze_technical_aspects(
             url, html_content, headers=httpx.Headers(fetch_result.get("headers", {}))
         )
@@ -2210,43 +2199,27 @@ async def ai_analyze_comprehensive(
         social_analysis = await analyze_social_media_presence(url, html_content)
         competitive_analysis = await analyze_competitive_positioning(url, basic_analysis)
 
-        # Score breakdown aliasit
         sb_with_aliases = create_score_breakdown_with_aliases(
             basic_analysis.get("score_breakdown", {})
         )
 
-        # --- AI-insights & featuret ---
+        # --- AI insights & enhanced features (normalize to dicts) ---
         ai_analysis_obj = await generate_ai_insights(
             url, basic_analysis, technical_audit, content_analysis, ux_analysis, social_analysis
         )
         enhanced_features_obj = await generate_enhanced_features(
             url, basic_analysis, technical_audit, content_analysis, social_analysis
         )
-
-        # Turvallinen muunnos dictiksi (toimii Pydantic v1/v2, dictit, None)
-        def to_dict_safe(x):
-            try:
-                if x is None:
-                    return {}
-                if hasattr(x, "model_dump"):   # Pydantic v2
-                    return x.model_dump()
-                if hasattr(x, "dict"):         # Pydantic v1
-                    return x.dict()
-                if isinstance(x, dict):
-                    return x
-                return dict(x)                 # fallback, voi epäonnistua
-            except Exception:
-                return {}
-
         ai_analysis = to_dict_safe(ai_analysis_obj)
         enhanced_features = to_dict_safe(enhanced_features_obj)
+        enhanced_features["admin_features_enabled"] = (user.role == "admin")
 
-        # Smart-actions voidaan tehdä aiemmin tai tässä
+        # --- Smart actions (expects dict for ai_analysis) ---
         smart_actions = generate_smart_actions(
             ai_analysis, technical_audit, content_analysis, basic_analysis
         )
 
-        # --- Lopullinen tulos ---
+        # --- Build response ---
         result = {
             "success": True,
             "company_name": request.company_name or get_domain_from_url(url),
@@ -2254,21 +2227,24 @@ async def ai_analyze_comprehensive(
             "basic_analysis": {
                 "company": request.company_name or get_domain_from_url(url),
                 "website": url,
-                "digital_maturity_score": int(basic_analysis.get("digital_maturity_score", 0) or 0),
-                "social_platforms": int(basic_analysis.get("social_platforms", 0) or 0),
-                "technical_score": int(technical_audit.get("overall_technical_score", 0) or 0),
-                "content_score": int(content_analysis.get("content_quality_score", 0) or 0),
+                "digital_maturity_score": basic_analysis.get("digital_maturity_score", 0),
+                "social_platforms": basic_analysis.get("social_platforms", 0),
+                "technical_score": technical_audit.get("overall_technical_score", 0),
+                "content_score": content_analysis.get("content_quality_score", 0),
                 "seo_score": int(
-                    (basic_analysis.get("score_breakdown", {}).get("seo_basics", 0)
-                     / max(1, SCORING_CONFIG.weights["seo_basics"])) * 100
+                    (
+                        basic_analysis.get("score_breakdown", {}).get("seo_basics", 0)
+                        / max(1, SCORING_CONFIG.weights["seo_basics"])
+                    )
+                    * 100
                 ),
                 "score_breakdown": sb_with_aliases,
                 "analysis_timestamp": datetime.now().isoformat(),
-                "spa_detected": bool(basic_analysis.get("spa_detected", False)),
+                "spa_detected": basic_analysis.get("spa_detected", False),
                 "rendering_method": basic_analysis.get("rendering_method", "http"),
-                "modernity_score": int(basic_analysis.get("modernity_score", 0) or 0),
+                "modernity_score": basic_analysis.get("modernity_score", 0),
             },
-            "ai_analysis": ai_analysis,  # EI .dict()
+            "ai_analysis": ai_analysis,  # already a plain dict
             "detailed_analysis": {
                 "social_media": social_analysis,
                 "technical_audit": technical_audit,
@@ -2279,53 +2255,54 @@ async def ai_analyze_comprehensive(
             "smart": {
                 "actions": smart_actions,
                 "scores": {
-                    "overall": int(basic_analysis.get("digital_maturity_score", 0) or 0),
-                    "technical": int(technical_audit.get("overall_technical_score", 0) or 0),
-                    "content": int(content_analysis.get("content_quality_score", 0) or 0),
-                    "social": int(social_analysis.get("social_score", 0) or 0),
-                    "ux": int(ux_analysis.get("overall_ux_score", 0) or 0),
-                    "competitive": int(competitive_analysis.get("competitive_score", 0) or 0),
+                    "overall": basic_analysis.get("digital_maturity_score", 0),
+                    "technical": technical_audit.get("overall_technical_score", 0),
+                    "content": content_analysis.get("content_quality_score", 0),
+                    "social": social_analysis.get("social_score", 0),
+                    "ux": ux_analysis.get("overall_ux_score", 0),
+                    "competitive": competitive_analysis.get("competitive_score", 0),
                     "trend": "stable",
-                    "percentile": enhanced_features.get("industry_benchmarking", {}) \
-                        .get("details", {}).get("percentile", 50),
+                    "percentile": enhanced_features.get("industry_benchmarking", {})
+                    .get("details", {})
+                    .get("percentile", 50),
                 },
             },
-            "enhanced_features": enhanced_features,  # EI .dict()
+            "enhanced_features": enhanced_features,
             "metadata": {
                 "version": APP_VERSION,
                 "scoring_version": "configurable_v1_complete",
                 "analysis_depth": "comprehensive_spa_aware_complete",
-                "confidence_level": int(ai_analysis.get("confidence_score", 0) or 0),
+                "confidence_level": ai_analysis.get("confidence_score", 0),
                 "analyzed_by": user.username,
                 "user_role": user.role,
                 "rendering_method": rendering_info.get("rendering_method", "http"),
-                "spa_detected": bool(rendering_info.get("spa_detected", False)),
+                "spa_detected": rendering_info.get("spa_detected", False),
                 "playwright_available": PLAYWRIGHT_AVAILABLE,
                 "scoring_weights": SCORING_CONFIG.weights,
-                "content_words": int(content_analysis.get("word_count", 0) or 0),
-                "modernity_score": int(basic_analysis.get("modernity_score", 0) or 0),
+                "content_words": content_analysis.get("word_count", 0),
+                "modernity_score": basic_analysis.get("modernity_score", 0),
             },
         }
 
-        # Varmista kokonaisluvut — älä kaadu
+        # --- Normalize numeric fields; don't crash if something odd ---
         try:
             result = ensure_integer_scores(result)
         except Exception as conv_err:
             logger.warning("ensure_integer_scores failed: %s", conv_err, exc_info=True)
 
-        # Cache talteen — ei kriittinen
+        # --- Cache & housekeeping (best-effort) ---
         try:
             await set_cache(cache_key, result)
             background_tasks.add_task(cleanup_cache)
         except Exception as cache_err:
             logger.warning("Caching failed: %s", cache_err, exc_info=True)
 
-        # Päivitä käyttäjän laskuri
+        # --- Usage counter (non-admin) ---
         if user.role != "admin":
             user_search_counts[user.username] = user_search_counts.get(user.username, 0) + 1
 
         logger.info(
-            "Complete analysis finished for %s: score=%s, SPA=%s, method=%s (user: %s)",
+            "Comprehensive analysis finished for %s: score=%s, SPA=%s, method=%s (user: %s)",
             url,
             basic_analysis.get("digital_maturity_score"),
             rendering_info.get("spa_detected"),
