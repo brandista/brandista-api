@@ -2,11 +2,17 @@
 # -*- coding: utf-8 -*-
 """
 Brandista Competitive Intelligence API - Complete Unified Version
-Version: 6.1.1 - Production Ready with Full SPA Support
+Version: 6.2.0 - Merged Baseline (analysis + robustness)
 Author: Brandista Team
 Date: 2025
 Description: Complete production-ready website analysis with configurable scoring system and comprehensive SPA support
 """
+
+# MERGE NOTE:
+# This file is a merged baseline built from main.py (analysis-rich)
+# and main_fixed.py (usability/error tolerance). Version bumped to 6.2.0-merged.
+# Subsequent passes can selectively port retry logic or other utilities.
+
 
 # ============================================================================
 # IMPORTS
@@ -20,6 +26,8 @@ import asyncio
 import json
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple
+SPA_CACHE_TTL = int(os.getenv("SPA_CACHE_TTL", "3600"))  # seconds
+content_cache: Dict[str, Dict[str, Any]] = {}
 from urllib.parse import urlparse
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,7 +37,28 @@ import socket
 import ipaddress
 import redis
 import json
+
+# ===== Content Fetch Config (Aggressive defaults) =====
+CONTENT_FETCH_MODE = os.getenv("CONTENT_FETCH_MODE", "aggressive")  # "aggressive" | "balanced" | "light"
+
+# ===== Content Fetch Advanced Toggles =====
+CAPTURE_XHR = os.getenv("CAPTURE_XHR", "1") == "1"
+MAX_XHR_BYTES = int(os.getenv("MAX_XHR_BYTES", "1048576"))  # 1 MB cap per response
+BLOCK_HEAVY_RESOURCES = os.getenv("BLOCK_HEAVY_RESOURCES", "1") == "1"
+COOKIE_AUTO_DISMISS = os.getenv("COOKIE_AUTO_DISMISS", "1") == "1"
+COOKIE_SELECTORS = os.getenv(
+    "COOKIE_SELECTORS",
+    "button[aria-label*='accept'],button:has-text('Accept'),button:has-text('Hyväksy')"
+)
+
+SPA_MAX_SCROLL_STEPS = int(os.getenv("SPA_MAX_SCROLL_STEPS", "12"))
+SPA_SCROLL_PAUSE_MS = int(os.getenv("SPA_SCROLL_PAUSE_MS", "350"))
+SPA_EXTRA_WAIT_MS = int(os.getenv("SPA_EXTRA_WAIT_MS", "1200"))
+SPA_WAIT_FOR_SELECTOR = os.getenv("SPA_WAIT_FOR_SELECTOR", "")  # e.g. "#app" or ".root" if known
+
 # Third-party imports
+
+
 import httpx
 from bs4 import BeautifulSoup
 import jwt
@@ -124,7 +153,7 @@ SCORING_CONFIG = load_scoring_config()
 # CONSTANTS
 # ============================================================================
 
-APP_VERSION = "6.1.1"
+APP_VERSION = "6.2.0-merged"
 APP_NAME = "Brandista Competitive Intelligence API"
 APP_DESCRIPTION = """Production-ready website analysis with configurable scoring system and comprehensive SPA support."""
 
@@ -180,7 +209,7 @@ analysis_cache: Dict[str, Dict[str, Any]] = {}
 user_search_counts: Dict[str, int] = {}
 
 # Redis setup
-REDIS_URL = None 
+REDIS_URL = os.getenv("REDIS_URL")
 redis_client = None
 
 if REDIS_URL:
@@ -369,42 +398,19 @@ async def fetch_url_with_retries(url: str, timeout: int = REQUEST_TIMEOUT, retri
     logger.error(f"All retry attempts failed for {url}: {last_error}")
     return None
 
-async def fetch_url_with_smart_rendering(
-    url: str,
-    timeout: int = REQUEST_TIMEOUT,
-    retries: int = MAX_RETRIES,
-    *,
-    force_playwright: bool = False
-) -> Optional[Dict[str, Any]]:
+async def fetch_url_with_smart_rendering(url: str, timeout: int = REQUEST_TIMEOUT, retries: int = MAX_RETRIES) -> Optional[Dict[str, Any]]:
     """Smart URL fetching that automatically detects SPAs and uses appropriate rendering method"""
-
-    # Forced Playwright path (bypasses HTTP fetch if explicitly requested)
-    if force_playwright and PLAYWRIGHT_AVAILABLE and PLAYWRIGHT_ENABLED:
-        logger.info(f"Force Playwright rendering for {url}")
-        pr = await fetch_with_playwright(url, timeout * 1000)  # timeout in ms
-        if pr and pr.get("html"):
-            return {
-                'html': pr['html'],
-                'status': pr.get('status', 200),
-                'headers': {},  # Playwright ei palauta raw headereita
-                'rendering_method': 'playwright',
-                'spa_detected': True,
-                'spa_info': {'forced': True},
-                'final_url': pr.get('final_url', url),
-                'console_errors': pr.get('console_errors', [])
-            }
-        logger.warning(f"Forced Playwright rendering failed for {url}, falling back to HTTP")
-
+    
     # First try simple HTTP fetch
     http_response = await fetch_url_with_retries(url, timeout, retries)
     if not http_response or http_response.status_code != 200:
         return None
-
+    
     initial_html = http_response.text
-
+    
     # Detect if this might be a SPA
     spa_info = await detect_spa_framework(initial_html)
-
+    
     result = {
         'html': initial_html,
         'status': http_response.status_code,
@@ -414,16 +420,16 @@ async def fetch_url_with_smart_rendering(
         'spa_info': spa_info,
         'final_url': str(http_response.url)
     }
-
+    
     # If SPA detected and Playwright available, try JS rendering
     force_all_spa = os.getenv("PLAYWRIGHT_FORCE_ALL_SPA", "false").lower() == "true"
-    if ((spa_info['requires_js_rendering'] or (spa_info['spa_detected'] and force_all_spa))
-        and PLAYWRIGHT_AVAILABLE and PLAYWRIGHT_ENABLED):
-
+    if ((spa_info['requires_js_rendering'] or (spa_info['spa_detected'] and force_all_spa)) 
+    and PLAYWRIGHT_AVAILABLE and PLAYWRIGHT_ENABLED):
+        
         logger.info(f"SPA detected for {url}, trying Playwright rendering")
-
+        
         playwright_result = await fetch_with_playwright(url, timeout * 1000)  # Convert to ms
-
+        
         if playwright_result and len(playwright_result['html']) > len(initial_html) * 1.2:
             # Playwright gave us significantly more content
             logger.info(f"Playwright rendering successful for {url}")
@@ -435,7 +441,7 @@ async def fetch_url_with_smart_rendering(
             })
         else:
             logger.info(f"Playwright rendering didn't improve content for {url}, using HTTP")
-
+    
     return result
 
 # ============================================================================
@@ -720,6 +726,38 @@ class CompetitiveAnalysis(BaseModel):
     competitive_score: int = Field(0, ge=0, le=100)
     industry_comparison: Dict[str, Any] = {}
 
+# --- NEW: humanized analysis models ---
+
+class BusinessImpact(BaseModel):
+    lead_gain_estimate: Optional[str] = None         # e.g. "12–20 leads/mo"
+    revenue_uplift_range: Optional[str] = None       # e.g. "+3–6% revenue"
+    confidence: Optional[str] = "M"                  # L | M | H
+    customer_trust_effect: Optional[str] = None      # short human note
+
+class RoleSummaries(BaseModel):
+    CEO: Optional[str] = None
+    CMO: Optional[str] = None
+    CTO: Optional[str] = None
+
+class Plan90D(BaseModel):
+    wave_1: List[str] = []            # days 0–30
+    wave_2: List[str] = []            # days 31–60
+    wave_3: List[str] = []            # days 61–90
+    one_thing_this_week: Optional[str] = None
+
+class RiskItem(BaseModel):
+    risk: str
+    likelihood: int = Field(1, ge=1, le=5)
+    impact: int = Field(1, ge=1, le=5)
+    mitigation: Optional[str] = None
+    risk_score: Optional[int] = None   # computed later as L*I
+
+class SnippetExamples(BaseModel):
+    seo_title: List[str] = []
+    meta_desc: List[str] = []
+    h1_intro: List[str] = []
+    product_copy: List[str] = []
+
 class AIAnalysis(BaseModel):
     summary: str = ""
     strengths: List[str] = []
@@ -732,6 +770,15 @@ class AIAnalysis(BaseModel):
     key_metrics: Dict[str, Any] = {}
     action_priority: List[Dict[str, Any]] = []
 
+    # NEW humanized layers
+    business_impact: Optional[BusinessImpact] = None
+    role_summaries: Optional[RoleSummaries] = None
+    plan_90d: Optional[Plan90D] = None
+    risk_register: Optional[List[RiskItem]] = None
+    snippet_examples: Optional[SnippetExamples] = None
+
+
+
 class SmartAction(BaseModel):
     title: str
     description: str
@@ -741,6 +788,22 @@ class SmartAction(BaseModel):
     estimated_score_increase: int = Field(0, ge=0, le=100)
     category: str = ""
     estimated_time: str = ""
+
+    # NEW humanized fields (optional → backward compatible)
+    so_what: Optional[str] = None
+    why_now: Optional[str] = None
+    what_to_do: Optional[str] = None
+    owner: Optional[str] = None
+    eta_days: Optional[int] = None
+
+    # Lightweight prioritization
+    reach: Optional[int] = None        # 0–100
+    confidence: Optional[int] = None   # 1–10
+    rice_score: Optional[int] = None   # computed
+
+    # Evidence & confidence
+    signals: Optional[List[str]] = None
+    evidence_confidence: Optional[str] = None  # "L|M|H"
 
 class SmartScores(BaseModel):
     overall: int = Field(0, ge=0, le=100)
@@ -1311,8 +1374,8 @@ async def analyze_technical_aspects(url: str, html: str, headers: Optional[httpx
             tech_score += 5
 
     # Analytics
-    analytics = detect_analytics_tools(html)
-    if analytics['has_analytics']: tech_score += 10
+    analytics = detect_analytics_tools(html) if 'detect_analytics_tools' in globals() else {'has_analytics': ('gtag(' in html or 'analytics.js' in html)}
+    if analytics.get('has_analytics'): tech_score += 10
 
     # Meta tags scoring
     meta_points = 0
@@ -1333,48 +1396,362 @@ async def analyze_technical_aspects(url: str, html: str, headers: Optional[httpx
     meta_tags_score = int(min(15, meta_points) / 15 * 100)
     tech_score += min(15, meta_points)
 
-    # Page speed estimation based on size
-    size = len(html)
+    # Page size / speed proxy
+    size = len(html or '')
     if size < 50_000: ps_points = 15
     elif size < 100_000: ps_points = 12
     elif size < 200_000: ps_points = 8
     elif size < 500_000: ps_points = 5
     else: ps_points = 2
-    
     page_speed_score = int(ps_points / 15 * 100)
     tech_score += ps_points
 
     # Security headers
-    if headers is not None:
+    if headers is not None and 'check_security_headers_from_headers' in globals():
         sh = check_security_headers_from_headers(headers)
     else:
-        sh = check_security_headers_in_html(html)
+        sh = check_security_headers_in_html(html) if 'check_security_headers_in_html' in globals() else {}
     
-    sec_cfg = SCORING_CONFIG.technical_thresholds.get('security_headers', {'csp':4,'x_frame_options':3,'strict_transport':3})
+    sec_cfg = getattr(SCORING_CONFIG, 'technical_thresholds', {}).get('security_headers', {'csp':4,'x_frame_options':3,'strict_transport':3}) if 'SCORING_CONFIG' in globals() else {'csp':4,'x_frame_options':3,'strict_transport':3}
     if sh.get('csp'): tech_score += sec_cfg.get('csp', 4)
     if sh.get('x_frame_options'): tech_score += sec_cfg.get('x_frame_options', 3)
     if sh.get('strict_transport'): tech_score += sec_cfg.get('strict_transport', 3)
 
     # Performance indicators
     performance_indicators = []
-    if 'loading="lazy"' in html: performance_indicators.append('Lazy loading')
-    if '.webp' in html.lower(): performance_indicators.append('WebP images')
-    if 'rel="preload"' in html.lower(): performance_indicators.append('Preloading')
+    if 'loading="lazy"' in html: 
+        performance_indicators.append('Lazy loading')
+    if '.webp' in (html or '').lower():
+        performance_indicators.append('WebP images')
+    if 'rel="preload"' in (html or '').lower():
+        performance_indicators.append('Preloading')
 
     final = max(0, min(100, tech_score))
     
+    # Return dict
     return {
         'has_ssl': has_ssl,
         'has_mobile_optimization': has_mobile,
         'page_speed_score': page_speed_score,
-        'has_analytics': analytics['has_analytics'],
-        'has_sitemap': check_sitemap_indicators(soup),
-        'has_robots_txt': check_robots_indicators(html),
+        'has_analytics': analytics.get('has_analytics', False),
+        'has_sitemap': check_sitemap_indicators(soup) if 'check_sitemap_indicators' in globals() else False,
+        'has_robots_txt': check_robots_indicators(html) if 'check_robots_indicators' in globals() else False,
         'meta_tags_score': meta_tags_score,
         'overall_technical_score': final,
         'security_headers': sh,
         'performance_indicators': performance_indicators
     }
+
+def is_spa_domain(url: str) -> bool:
+    """Check if domain suggests SPA usage"""
+    domain = get_domain_from_url(url).lower()
+    spa_domains = [
+        'brandista.eu', 'www.brandista.eu',
+        'app.', 'dashboard.', 'admin.', 'portal.'
+    ]
+    return any(hint in domain for hint in spa_domains)
+
+def detect_spa_markers(html: str) -> bool:
+    """Enhanced SPA detection with more markers"""
+    if not html or len(html.strip()) < 100:
+        return False
+        
+    html_lower = html.lower()
+    
+    # Strong SPA indicators
+    strong_markers = [
+        'id="root"', 'id="app"', 'id="__next"', 'id="nuxt"',
+        'data-reactroot', 'data-react-helmet', 'ng-version=',
+        '"__webpack_require__"', '"webpackChunkName"',
+        'window.__INITIAL_STATE__', 'window.__PRELOADED_STATE__'
+    ]
+    
+    # Framework markers
+    framework_markers = [
+        'react', 'vue.js', 'angular', 'svelte', 'next.js',
+        'nuxt', 'gatsby', 'vite', 'webpack', 'parcel'
+    ]
+    
+    # Build tool markers  
+    build_markers = [
+        'built with vite', 'created-by-webpack', 'generated-by',
+        'build-time:', 'chunk-', 'runtime-', 'vendor-'
+    ]
+    
+    strong_count = sum(1 for marker in strong_markers if marker in html_lower)
+    framework_count = sum(1 for marker in framework_markers if marker in html_lower)
+    build_count = sum(1 for marker in build_markers if marker in html_lower)
+    
+    # SPA if strong indicators OR significant framework+build presence
+    return strong_count >= 1 or (framework_count >= 2 and build_count >= 1)
+
+def validate_rendered_content(html: str) -> bool:
+    """Validate that rendered content is meaningful"""
+    if not html or len(html.strip()) < 200:
+        return False
+        
+    soup = BeautifulSoup(html, 'html.parser')
+    
+    # Remove scripts and styles for text analysis
+    for element in soup(['script', 'style', 'noscript']):
+        element.decompose()
+    
+    text = soup.get_text().strip()
+    words = text.split()
+    
+    # Content validation criteria
+    has_sufficient_text = len(words) >= 50
+    has_meaningful_elements = bool(soup.find_all(['h1', 'h2', 'h3', 'p', 'div']))
+    not_just_loading = not ('loading' in text.lower() and len(words) < 20)
+    
+    return has_sufficient_text and has_meaningful_elements and not_just_loading
+
+# ============================================================================
+# UNIFIED CONTENT FETCHING WITH CACHING
+# ============================================================================
+
+def get_content_cache_key(url: str) -> str:
+    """Generate cache key for content"""
+    return f"content_{hashlib.md5(url.encode()).hexdigest()}"
+
+def is_content_cache_valid(timestamp: datetime) -> bool:
+    """Check if content cache entry is valid"""
+    return (datetime.now() - timestamp).total_seconds() < SPA_CACHE_TTL
+
+async def get_website_content(
+    url: str,
+    force_spa: bool = False,
+    timeout: int = REQUEST_TIMEOUT,
+    mode: str = CONTENT_FETCH_MODE
+) -> Tuple[Optional[str], bool]:
+    """
+    Unified content fetching with caching (AGGRESSIVE by default).
+    Returns: (html_content, used_spa)
+    Strategy:
+      - If mode == "aggressive": always attempt Playwright rendering first (if available).
+      - Else: do HTTP fetch; if SPA markers or force_spa, then Playwright.
+      - Auto-scroll & extra waits to maximize rendered DOM content.
+      - Collect JSON-LD scripts and inline data to enrich content.
+    """
+    cache_key = get_content_cache_key(url)
+    if cache_key in content_cache and is_content_cache_valid(content_cache[cache_key]['timestamp']):
+        cached = content_cache[cache_key]
+        logger.info(f"[content] cache hit: %s", url)
+        return cached['content'], cached['used_spa']
+
+    used_spa = False
+    html_content: Optional[str] = None
+
+    # Helper: HTTP fetch
+    async def _fetch_http(u: str) -> Optional[httpx.Response]:
+        try:
+            async with httpx.AsyncClient(
+                timeout=timeout,
+                follow_redirects=True,
+                verify=True,
+                limits=httpx.Limits(max_keepalive_connections=8, max_connections=16)
+            ) as client:
+                res = await client.get(u, headers={"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9"})
+                if res.status_code == 200:
+                    return res
+                if res.status_code in (301,302,303,307,308,404):
+                    logger.warning("[http] status %s for %s", res.status_code, u)
+                    return res
+                logger.warning("[http] non-200 status %s for %s", res.status_code, u)
+                return None
+        except Exception as e:
+            logger.warning("[http] fetch error for %s: %s", u, e)
+            return None
+
+    # Helper: Playwright render (aggressive)
+    async def _render_spa(u: str) -> Optional[str]:
+        nonlocal used_spa
+        if not PLAYWRIGHT_AVAILABLE:
+            logger.warning("[spa] Playwright not available; falling back to HTTP")
+            return None
+        try:
+            from playwright.async_api import async_playwright
+        except Exception as e:
+            logger.warning("[spa] import failed: %s", e)
+            return None
+
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                context = await browser.new_context(
+                    user_agent=USER_AGENT,
+                    viewport={"width": 1440, "height": 900},
+                    locale="en-US"
+                )
+                page = await context.new_page()
+
+                xhr_store = []
+
+                async def route_handler(route):
+                    try:
+                        req = route.request
+                        # Block heavy resource types to speed up but keep CSS/JS/Doc/XHR
+                        if BLOCK_HEAVY_RESOURCES and req.resource_type in {"image","media","font","stylesheet"}:
+                            # allow stylesheet because CSS is needed; override to not block it
+                            if req.resource_type != "stylesheet":
+                                await route.abort()
+                                return
+                        await route.continue_()
+                    except Exception:
+                        try:
+                            await route.continue_()
+                        except Exception:
+                            pass
+
+                async def response_listener(response):
+                    try:
+                        req = response.request
+                        ct = (response.headers.get("content-type") or "").lower()
+                        # Capture only JSON/XHR-ish responses
+                        if CAPTURE_XHR and (req.resource_type in {"xhr","fetch"} or "application/json" in ct or "text/json" in ct):
+                            body = await response.body()
+                            if body and len(body) <= MAX_XHR_BYTES:
+                                # Store as UTF-8 text when possible, else skip
+                                try:
+                                    text = body.decode("utf-8", errors="ignore")
+                                except Exception:
+                                    text = ""
+                                if text.strip():
+                                    xhr_store.append({
+                                        "url": req.url,
+                                        "status": response.status,
+                                        "content_type": ct,
+                                        "length": len(body),
+                                        "body": text
+                                    })
+                    except Exception:
+                        pass
+
+                await page.route("**/*", route_handler)
+                page.on("response", response_listener)
+
+                # Go and wait for network to be (nearly) idle
+                
+                # Try cookie banner auto-dismiss (best-effort)
+                # Try cookie banner auto-dismiss (best-effort)
+                if COOKIE_AUTO_DISMISS:
+                    try:
+                        # Click by common buttons/texts
+                        # 1) Try querySelector with aria-label/text
+                        await page.evaluate("""(selList) => {
+                            const tryClick = (el) => { try { el.click(); return true; } catch(e) { return false; } };
+                            const sels = selList.split(',').map(s => s.trim()).filter(Boolean);
+                            for (const s of sels) {
+                                const el = document.querySelector(s);
+                                if (el && tryClick(el)) return true;
+                            }
+                            const labels = ['Accept all','Accept','I agree','OK','Hyväksy kaikki','Hyväksy'];
+                            const buttons = Array.from(document.querySelectorAll('button, [role="button"], a'));
+                            for (const b of buttons) {
+                                const t = (b.textContent||'').trim();
+                                if (labels.some(l => t.toLowerCase().includes(l.toLowerCase()))) {
+                                    if (tryClick(b)) return true;
+                                }
+                            }
+                            return false;
+                        }""", COOKIE_SELECTORS)
+                    except Exception:
+                        pass
+
+                resp = await page.goto(u, wait_until="networkidle", timeout=timeout*1000)
+                # Optional selector wait if configured
+                if SPA_WAIT_FOR_SELECTOR:
+                    try:
+                        await page.wait_for_selector(SPA_WAIT_FOR_SELECTOR, timeout=SPA_EXTRA_WAIT_MS*2)
+                    except Exception:
+                        pass
+
+                # Auto-scroll to load lazy content
+                try:
+                    await page.evaluate("""async (steps, pause) => {
+                        const sleep = (ms) => new Promise(r=>setTimeout(r, ms));
+                        let last = 0;
+                        for (let i=0; i<steps; i++) {
+                            window.scrollBy(0, Math.floor(window.innerHeight*0.9));
+                            await sleep(pause);
+                            const h = document.body.scrollHeight;
+                            if (h === last) break;
+                            last = h;
+                        }
+                        window.scrollTo(0, 0);
+                    }""", SPA_MAX_SCROLL_STEPS, SPA_SCROLL_PAUSE_MS)
+                except Exception:
+                    pass
+
+                # Wait a bit extra for content hydration
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=SPA_EXTRA_WAIT_MS)
+                except Exception:
+                    pass
+
+                # Harvest JSON-LD scripts to enrich analysis
+                try:
+                    jsonld_list = await page.evaluate("""() => {
+                        const nodes = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
+                        return nodes.map(n => n.textContent || '').filter(Boolean);
+                    }""")
+                    jsonld_blob = "\\n<!--JSONLD-->" + "\\n".join(jsonld_list) + "\\n<!--/JSONLD-->" if jsonld_list else ""
+                except Exception:
+                    jsonld_blob = ""
+
+                # Capture final HTML
+                
+                # Append captured XHR JSON as HTML comment block (for analyzer ingestion)
+                try:
+                    xhr_blob = ""
+                    if xhr_store:
+                        import json as _json
+                        xhr_blob = "\n<!--XHR-->" + _json.dumps(xhr_store) + "\n<!--/XHR-->"
+
+                except Exception:
+                    xhr_blob = ""
+
+                html = await page.content()
+                await context.close()
+                await browser.close()
+
+                used_spa = True
+                return html + jsonld_blob + xhr_blob
+
+        except Exception as e:
+            logger.warning("[spa] render failed for %s: %s", u, e)
+            return None
+
+    # Aggressive path: try SPA first to maximize richness
+    if mode == "aggressive" or force_spa:
+        html = await _render_spa(url)
+        if not html:
+            # fallback to HTTP
+            res = await _fetch_http(url)
+            html = res.text if (res and res.status_code == 200 and res.text) else None
+            used_spa = False
+    else:
+        # Balanced/light: HTTP first, then SPA if clearly needed
+        res = await _fetch_http(url)
+        text = res.text if (res and res.status_code == 200 and res.text) else ""
+        needs_spa = force_spa or detect_spa_markers(text) or is_spa_domain(url)
+        if needs_spa:
+            html = await _render_spa(url) or text
+            used_spa = html is not None and html != text
+        else:
+            html = text
+            used_spa = False
+
+    if not html or len(html.strip()) < 100:
+        raise HTTPException(400, "Website returned insufficient content")
+
+    # Cache and return
+    content_cache[cache_key] = {
+        'content': html,
+        'used_spa': used_spa,
+        'timestamp': datetime.now()
+    }
+    return html, used_spa
 
 async def analyze_content_quality(html: str) -> Dict[str, Any]:
     """Complete content analysis"""
@@ -1585,6 +1962,107 @@ async def analyze_competitive_positioning(url: str, basic: Dict[str, Any]) -> Di
         }
     }
 
+# --- HUMANIZED HELPERS ---
+
+def _fmt_range(low: int, high: int, suffix: str) -> str:
+    return f"{low}–{high} {suffix}"
+
+def _confidence_label(val: int) -> str:
+    return "H" if val >= 75 else "M" if val >= 50 else "L"
+
+def compute_business_impact(basic: Dict[str, Any], content: Dict[str, Any], ux: Dict[str, Any]) -> BusinessImpact:
+    score = basic.get('digital_maturity_score', 0)
+    seo_pts = basic.get('score_breakdown', {}).get('seo_basics', 0)
+    mob_pts = basic.get('score_breakdown', {}).get('mobile', 0)
+
+    seo_w = SCORING_CONFIG.weights.get('seo_basics', 20) or 1
+    mob_w = SCORING_CONFIG.weights.get('mobile', 15) or 1
+
+    seo_pct = int(seo_pts / seo_w * 100)
+    mobile_pct = int(mob_pts / mob_w * 100)
+
+    content_score = content.get('content_quality_score', 0)
+    ux_score = ux.get('overall_ux_score', 0)
+
+    # Maltillinen heuristiikka
+    lead_low = max(3, (seo_pct + content_score) // 40)     # esim. 3–15 liidiä/kk
+    lead_high = max(lead_low + 2, (seo_pct + content_score) // 25)
+    rev_low = max(1, (mobile_pct + ux_score) // 60)        # +1–12%
+    rev_high = min(12, (mobile_pct + ux_score) // 35)
+
+    return BusinessImpact(
+        lead_gain_estimate=_fmt_range(lead_low, lead_high, "leads/mo"),
+        revenue_uplift_range=f"+{_fmt_range(rev_low, rev_high, '% revenue')}",
+        confidence=_confidence_label(score),
+        customer_trust_effect="Improves perceived quality (NPS +2–4)" if basic.get('modernity_score', 0) >= 50 else "Small positive trust signal"
+    )
+
+def build_role_summaries(url: str, basic: Dict[str, Any], impact: BusinessImpact) -> RoleSummaries:
+    s = basic.get('digital_maturity_score', 0)
+    state = ("leader" if s >= 75 else "strong" if s >= 60 else "baseline" if s >= 45 else "early")
+    return RoleSummaries(
+        CEO=f"We are at {s}/100 ({state}). If we ship the top fixes, we can unlock {impact.revenue_uplift_range} and {impact.lead_gain_estimate}. Focus: one change per week.",
+        CMO=f"Growth levers: SEO fundamentals + content depth → {impact.lead_gain_estimate}. Conversion: mobile & UX to target {impact.revenue_uplift_range}.",
+        CTO=f"Prioritize CWV/LCP, defer non-critical JS, analytics hygiene. If SPA, add SSR/prerender for critical routes."
+    )
+
+def build_plan_90d(basic: Dict[str, Any], content: Dict[str, Any], technical: Dict[str, Any]) -> Plan90D:
+    return Plan90D(
+        wave_1=[
+            "Fix titles & meta on top 10 pages",
+            "Add viewport & responsive gaps (media queries)",
+            "Compress hero images; enable lazy-loading"
+        ],
+        wave_2=[
+            "Publish 6 pillar+cluster articles",
+            "Add schema (FAQ/Product/Article) & internal linking",
+            "Set up GA4 + conversion events"
+        ],
+        wave_3=[
+            "SSR/prerender for SPA or critical routes",
+            "CRO tests on top 3 landing pages",
+            "CWV monitoring & regression alerts"
+        ],
+        one_thing_this_week="Fix top 10 page titles & meta."
+    )
+
+def build_risk_register(basic: Dict[str, Any], technical: Dict[str, Any], content: Dict[str, Any]) -> List[RiskItem]:
+    items: List[RiskItem] = []
+    if technical.get('page_speed_score', 100) < 70:
+        items.append(RiskItem(risk="Mobile performance degrades conversions", likelihood=4, impact=4, mitigation="Compress images, defer JS, optimize LCP"))
+    if not technical.get('has_analytics', True):
+        items.append(RiskItem(risk="No analytics → decisions blind", likelihood=3, impact=4, mitigation="Install GA4 & events"))
+    if content.get('content_quality_score', 100) < 50:
+        items.append(RiskItem(risk="Thin content → weak rankings", likelihood=3, impact=3, mitigation="Pillar/cluster content plan"))
+    if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
+        items.append(RiskItem(risk="SPA client-only rendering → low visibility", likelihood=3, impact=4, mitigation="SSR/prerender critical routes"))
+    for it in items:
+        it.risk_score = it.likelihood * it.impact
+    return items
+
+def build_snippet_examples(url: str, basic: Dict[str, Any]) -> SnippetExamples:
+    brand = basic.get('company', get_domain_from_url(url)).capitalize()
+    return SnippetExamples(
+        seo_title=[
+            f"{brand} — fast, modern & reliable",
+            f"{brand}: solutions that drive results",
+            f"{brand} | Everything you need to grow"
+        ],
+        meta_desc=[
+            f"{brand} helps you get measurable results. Explore features, stories and pricing — start today.",
+            f"Modern {brand} with impact. See how teams ship better experiences. Try now."
+        ],
+        h1_intro=[
+            f"{brand} that gets the job done.",
+            f"Build, ship and grow with {brand}."
+        ],
+        product_copy=[
+            "Value prop in 1–2 lines → 2–3 benefits with proof → single CTA.",
+            "Problem → outcome → proof → CTA. Keep it scannable (40–80 words)."
+        ]
+    )
+
+
 # ============================================================================
 # COMPLETE AI INSIGHTS AND ENHANCED FEATURES
 # ============================================================================
@@ -1631,7 +2109,24 @@ async def generate_ai_insights(url: str, basic: Dict[str, Any], technical: Dict[
                 insights['recommendations'] = base + cleaned[:5]
         except Exception as e:
             logger.warning(f"OpenAI enhancement failed: {e}")
-    
+    # --- NEW: humanized layer fusion ---
+    try:
+        impact = compute_business_impact(basic, content, ux)
+        role = build_role_summaries(url, basic, impact)
+        plan = build_plan_90d(basic, content, technical)
+        risks = build_risk_register(basic, technical, content)
+        snippets = build_snippet_examples(url, basic)
+
+        insights.update({
+            "business_impact": impact.dict(),
+            "role_summaries": role.dict(),
+            "plan_90d": plan.dict(),
+            "risk_register": [r.dict() for r in risks],
+            "snippet_examples": snippets.dict(),
+        })
+    except Exception as e:
+        logger.warning(f"Humanized layer build failed: {e}")
+
     return AIAnalysis(**insights)
 
 def generate_english_insights(overall: int, basic: Dict[str, Any], technical: Dict[str, Any], content: Dict[str, Any], ux: Dict[str, Any], social: Dict[str, Any]) -> Dict[str, Any]:
@@ -1899,7 +2394,7 @@ async def generate_enhanced_features(
             "value": "Yes" if mobile_ready else "No",
             "description": "Google Mobile-First indexing readiness",
             "status": "ready" if mobile_ready else "not_ready",
-            "mobile_score": technical.get("page_speed_score", 0),
+            "mobile_score": int((mob_pts / mob_w) * 100) if mob_pts > 0 else 0,
             "issues": [] if mobile_ready else ["Viewport / responsiveness improvements required"],
             "recommendations": ([] if mobile_ready else [
                 "Add viewport meta",
@@ -2000,11 +2495,10 @@ async def generate_enhanced_features(
         }
 
 def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], content: Dict[str, Any], basic: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Generate comprehensive smart actions"""
-    actions = []
+    actions: List[Dict[str, Any]] = []
     breakdown = basic.get('score_breakdown', {})
 
-    # Critical actions
+    # --- existing rules, kept but concise ---
     if breakdown.get('security', 0) <= 5:
         actions.append({
             "title": "Enable HTTPS and security headers",
@@ -2012,7 +2506,7 @@ def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], c
             "priority": "critical", "effort": "medium", "impact": "critical",
             "estimated_score_increase": 12, "category": "security", "estimated_time": "1-3 days"
         })
-    
+
     if breakdown.get('content', 0) <= 8:
         actions.append({
             "title": "Develop comprehensive content",
@@ -2021,7 +2515,6 @@ def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], c
             "estimated_score_increase": 15, "category": "content", "estimated_time": "2-4 weeks"
         })
 
-    # High priority actions
     if breakdown.get('seo_basics', 0) < 12:
         actions.append({
             "title": "Optimize SEO fundamentals",
@@ -2029,7 +2522,7 @@ def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], c
             "priority": "high", "effort": "medium", "impact": "high",
             "estimated_score_increase": 10, "category": "seo", "estimated_time": "1-2 weeks"
         })
-    
+
     if breakdown.get('mobile', 0) < 10:
         actions.append({
             "title": "Implement responsive design",
@@ -2037,7 +2530,7 @@ def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], c
             "priority": "high", "effort": "medium", "impact": "high",
             "estimated_score_increase": 8, "category": "mobile", "estimated_time": "1-2 weeks"
         })
-    
+
     if not technical.get('has_analytics', False):
         actions.append({
             "title": "Install Google Analytics 4",
@@ -2046,7 +2539,6 @@ def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], c
             "estimated_score_increase": 5, "category": "analytics", "estimated_time": "1-2 days"
         })
 
-    # SPA-specific actions
     if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
         actions.append({
             "title": "Implement SPA SEO optimization",
@@ -2055,7 +2547,6 @@ def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], c
             "estimated_score_increase": 12, "category": "spa", "estimated_time": "2-3 weeks"
         })
 
-    # Medium priority actions
     if breakdown.get('social', 0) < 6:
         actions.append({
             "title": "Build social media presence",
@@ -2063,7 +2554,7 @@ def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], c
             "priority": "medium", "effort": "medium", "impact": "medium",
             "estimated_score_increase": 6, "category": "social", "estimated_time": "1-2 weeks"
         })
-    
+
     if breakdown.get('performance', 0) < 3:
         actions.append({
             "title": "Optimize website performance",
@@ -2072,7 +2563,6 @@ def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], c
             "estimated_score_increase": 4, "category": "performance", "estimated_time": "3-5 days"
         })
 
-    # Low priority actions
     if breakdown.get('technical', 0) < 10:
         actions.append({
             "title": "Improve technical SEO",
@@ -2081,8 +2571,7 @@ def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], c
             "estimated_score_increase": 3, "category": "technical", "estimated_time": "2-3 days"
         })
 
-    # Ensure minimum actions
-    while len(actions) < 3:
+    if not actions:
         actions.append({
             "title": "Content optimization",
             "description": "Update existing pages for UX & engagement; add internal links.",
@@ -2090,10 +2579,82 @@ def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], c
             "estimated_score_increase": 2, "category": "content", "estimated_time": "1 week"
         })
 
-    # Sort by priority and impact
+    # --- enrichment: So what / Why now / What to do + RICE + signals ---
+    def _confidence_label(val: int) -> str:
+        return "H" if val >= 75 else "M" if val >= 50 else "L"
+
+    def enrich(a: Dict[str, Any]) -> Dict[str, Any]:
+        cat = a.get("category","")
+        so_what = {
+            "security": "Protects users and prevents SEO/trust penalties.",
+            "content": "Drives qualified traffic and improves conversion.",
+            "seo": "Improves discoverability and click-through.",
+            "mobile": "Mobile users get faster UX → better CR.",
+            "analytics": "Enables learning loops and ROI tracking.",
+            "spa": "Ensures bots can index content → visibility.",
+            "social": "Adds social proof and new discovery channels.",
+            "performance": "Faster pages reduce bounce and lift revenue.",
+            "technical": "Prevents crawl/canonicalization issues."
+        }.get(cat, "Improves user outcomes and revenue.")
+
+        why_now = {
+            "security": "HTTP/weak headers can hurt rankings and flags in browsers.",
+            "content": "Competitors publish weekly; gap widens every month.",
+            "seo": "Meta & structure are fast compounding wins.",
+            "mobile": "Core Web Vitals remain a ranking/UX signal.",
+            "analytics": "Every day without data is lost learning.",
+            "spa": "Client-only rendering risks invisibility in search.",
+            "social": "UGC/short-form channels compound reach now."
+        }.get(cat, "Opportunity cost grows each week.")
+
+        what_to_do = {
+            "security": "Issue TLS cert; enable HSTS; add CSP & X-Frame-Options.",
+            "content": "Ship 6 pillar pages + clusters; FAQs; internal links.",
+            "seo": "Fix top 10 titles/meta; add canonicals; H1/H2 structure.",
+            "mobile": "Add viewport; fix CLS; compress hero images.",
+            "analytics": "Install GA4; define 3–5 conversion events; verify.",
+            "spa": "Add SSR/prerender for critical routes or static export.",
+            "social": "Add OG/Twitter tags; sitewide share; refresh profiles.",
+            "performance": "Defer non-critical JS; preload critical; lazy-load.",
+            "technical": "Publish sitemap.xml/robots.txt; add schema markup."
+        }.get(cat, "Ship the smallest change that moves the metric.")
+
+        # RICE (karkea) + owner/ETA
+        reach = max(50, int(basic.get('digital_maturity_score',0)/2) + content.get('content_quality_score',0)//2)
+        conf = min(10, max(3, basic.get('digital_maturity_score',0)//12))
+        eff_map = {"low": 1, "medium": 2, "high": 3}
+        effort_n = eff_map.get(a.get("effort","medium"), 2)
+        impact_w = {"low":2,"medium":3,"high":4,"critical":5}.get(a.get("impact","medium"),3)
+        rice = int((reach * impact_w * conf) / max(1, effort_n))
+
+        sig: List[str] = []
+        if cat == "mobile":
+            if not basic.get('has_mobile_viewport'): sig.append("No viewport meta")
+            if technical.get('page_speed_score', 100) < 70: sig.append("Low page speed score")
+        if cat == "seo":
+            if not basic.get('meta_description'): sig.append("Missing/short meta description")
+            if not basic.get('title'): sig.append("Missing/short <title>")
+        if cat == "spa" and basic.get('rendering_method') == 'http':
+            sig.append("SPA client-rendered only")
+
+        a.update({
+            "so_what": so_what,
+            "why_now": why_now,
+            "what_to_do": what_to_do,
+            "owner": "CMO" if cat in ["seo","content","social","performance"] else "CTO",
+            "eta_days": 5 if a.get("effort")=="low" else 10 if a.get("effort")=="medium" else 20,
+            "reach": reach,
+            "confidence": conf,
+            "rice_score": rice,
+            "signals": sig or None,
+            "evidence_confidence": _confidence_label(basic.get('digital_maturity_score',0))
+        })
+        return a
+
+    actions = [enrich(a) for a in actions]
+
     priority_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
-    actions.sort(key=lambda x: (priority_order.get(x['priority'], 4), -x.get('estimated_score_increase', 0)))
-    
+    actions.sort(key=lambda x: (priority_order.get(x['priority'], 4), -x.get('rice_score', 0), -x.get('estimated_score_increase', 0)))
     return actions[:8]
 
 # ============================================================================
@@ -2141,31 +2702,26 @@ async def ai_analyze_comprehensive(
         logger.info(f"Starting complete comprehensive analysis for {url}")
         
         # Use smart rendering that detects SPAs automatically
-        fetch_result = await fetch_url_with_smart_rendering (url,force_playwright=request.force_playwright)
-        
-        if not fetch_result or fetch_result['status'] != 200:
-            raise HTTPException(400, f"Cannot access website: {url}")
-        
-        html_content = fetch_result['html']
+        html_content, used_spa = await get_website_content(url, force_spa=getattr(request, 'force_spa', False))
         if not html_content or len(html_content.strip()) < 100:
             raise HTTPException(400, "Website returned insufficient content")
 
         # Create rendering info for enhanced analysis
         rendering_info = {
-            'spa_detected': fetch_result.get('spa_detected', False),
-            'spa_info': fetch_result.get('spa_info', {}),
-            'rendering_method': fetch_result.get('rendering_method', 'http'),
-            'final_url': fetch_result.get('final_url', url)
+            'spa_detected': bool(used_spa),
+            'spa_info': {'spa_detected': bool(used_spa)},
+            'rendering_method': 'playwright' if used_spa else 'http',
+            'final_url': url
         }
 
         # Perform complete comprehensive analysis
         basic_analysis = await analyze_basic_metrics_enhanced(
-            url, html_content, 
-            headers=httpx.Headers(fetch_result.get('headers', {})), 
+            url, html_content,
+            headers=httpx.Headers({}),
             rendering_info=rendering_info
         )
         
-        technical_audit = await analyze_technical_aspects(url, html_content, headers=httpx.Headers(fetch_result.get('headers', {})))
+        technical_audit = await analyze_technical_aspects(url, html_content, headers=httpx.Headers({}))
         content_analysis = await analyze_content_quality(html_content)
         ux_analysis = await analyze_ux_elements(html_content)
         social_analysis = await analyze_social_media_presence(url, html_content)
@@ -2263,48 +2819,44 @@ async def basic_analyze(request: CompetitorAnalysisRequest, user: UserInfo = Dep
     try:
         url = clean_url(request.url)
         _reject_ssrf(url)
-        
-        fetch_result = await fetch_url_with_smart_rendering(
-            url,
-            force_playwright=request.force_playwright
-        )
-        if not fetch_result or fetch_result['status'] != 200:
-            raise HTTPException(400, f"Cannot access website: {url}")
-            
+
+        # Fetch content (balanced: HTTP first, SPA if needed)
+        html_content, used_spa = await get_website_content(url, force_spa=False)
+
         rendering_info = {
-            'spa_detected': fetch_result.get('spa_detected', False),
-            'spa_info': fetch_result.get('spa_info', {}),
-            'rendering_method': fetch_result.get('rendering_method', 'http'),
-            'final_url': fetch_result.get('final_url', url)
+            'spa_detected': bool(used_spa),
+            'spa_info': {'spa_detected': bool(used_spa)},
+            'rendering_method': 'playwright' if used_spa else 'http',
+            'final_url': url
         }
-        
+
         basic_analysis = await analyze_basic_metrics_enhanced(
-            url, fetch_result['html'], 
-            headers=httpx.Headers(fetch_result.get('headers', {})),
+            url, html_content,
+            headers=httpx.Headers({}),
             rendering_info=rendering_info
         )
-        
+
         sb_with_aliases = create_score_breakdown_with_aliases(basic_analysis.get('score_breakdown', {}))
-        
+
         return {
             "success": True,
-            "company": request.company_name or get_domain_from_url(url),
+            "company": request.company_name or "",
             "website": url,
-            "digital_maturity_score": basic_analysis['digital_maturity_score'],
+            "digital_maturity_score": basic_analysis.get('digital_maturity_score', 0),
             "social_platforms": basic_analysis.get('social_platforms', 0),
             "score_breakdown": sb_with_aliases,
             "analysis_date": datetime.now().isoformat(),
             "analyzed_by": user.username,
-            "spa_detected": basic_analysis.get('spa_detected', False),
-            "rendering_method": basic_analysis.get('rendering_method', 'http'),
+            "spa_detected": bool(used_spa),
+            "rendering_method": 'playwright' if used_spa else 'http',
             "modernity_score": basic_analysis.get('modernity_score', 0),
             "scoring_weights": SCORING_CONFIG.weights
         }
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Basic analysis error: {e}")
-        raise HTTPException(500, "Analysis failed")
+        logger.error(f"Basic analysis error: {e}", exc_info=True)
+        raise HTTPException(500, "Analysis failed due to internal error")
 
 # ============================================================================
 # SYSTEM AND ADMIN ENDPOINTS
