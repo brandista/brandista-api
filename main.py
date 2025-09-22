@@ -61,6 +61,72 @@ SPA_WAIT_FOR_SELECTOR = os.getenv("SPA_WAIT_FOR_SELECTOR", "")  # e.g. "#app" or
 
 import httpx
 from bs4 import BeautifulSoup
+
+
+def summarize_mobile_readiness(technical: Dict[str, Any]) -> Tuple[str, list]:
+    """
+    Build a simple 'mobile_readiness' and 'mobile_reasons' from technical audit.
+    Rules (heuristic):
+      - If no mobile optimization => Not Ready.
+      - Else if page_speed_score < 50 => Needs Improvement.
+      - Else => Ready.
+    """
+    reasons = []
+    has_mobile = bool(technical.get('has_mobile_optimization'))
+    speed = int(technical.get('page_speed_score') or 0)
+
+    if not has_mobile:
+        reasons.append("Missing/weak mobile optimization (viewport or responsive signals not detected)")
+        status = "Not Ready"
+    else:
+        if speed < 50:
+            reasons.append("Slow mobile loading proxy (page size / signals)")
+            status = "Needs Improvement"
+        else:
+            status = "Ready"
+
+    # Optional: pass through hints
+    if technical.get('performance_indicators'):
+        reasons.append("Performance hints: " + ", ".join(technical['performance_indicators'][:5]))
+
+    return status, reasons
+
+def has_viewport_meta(html: str, soup: Optional[BeautifulSoup] = None) -> Tuple[bool, str]:
+    """
+    Robust, case-insensitive detection of viewport meta.
+    Returns (present, content).
+    """
+    try:
+        _soup = soup or BeautifulSoup(html or "", "html.parser")
+        for m in _soup.find_all('meta'):
+            name = (m.get('name') or m.get('property') or '').strip().lower()
+            if name == 'viewport':
+                return True, (m.get('content') or '')
+        # Fallback regex in case of dynamic insertion
+        if re.search(r'<meta[^>]+name=["\']viewport["\']', html or '', re.I):
+            m = re.search(r'content=["\']([^"\']*)["\']', html or '', re.I)
+            return True, (m.group(1) if m else '')
+        return False, ''
+    except Exception:
+        return False, ''
+
+def detect_responsive_signals(html: str) -> bool:
+    """
+    Heuristics for responsive/mobile-first indicators beyond viewport:
+    - CSS media queries for max-width
+    - Utility/grid classnames (Bootstrap/Tailwind/MUI/etc.)
+    """
+    h = (html or '').lower()
+    patterns = [
+        r'@media\s*\(max-width',      # media queries
+        r'class="[^"]*(container|row|col-\d|grid|flex|sm:|md:|lg:)[^"]*"',  # bootstrap/tailwind/grid
+        r'mui-grid-root',             # MUI
+        r'uk-grid',                   # UIKit
+        r'chakra-',                   # Chakra UI
+        r'ion-content',               # Ionic
+    ]
+    return any(re.search(pat, h) for pat in patterns)
+
 import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
 from passlib.context import CryptContext
@@ -1313,7 +1379,21 @@ async def analyze_basic_metrics_enhanced(
         final_score = max(0, min(100, total_score))
         
         logger.info(f"Enhanced analysis for {url}: Score={final_score}, SPA={spa_detected}, Method={rendering_method}")
-        
+
+        # SPA framework detection (fallback injection)
+        try:
+            extra_txt = ''
+            if '<!--XHR-->' in html:
+                try:
+                    extra_txt = html.split('<!--XHR-->')[1].split('<!--/XHR-->')[0]
+                except Exception:
+                    extra_txt = ''
+            spa_stack = detect_spa_framework(html, extra_txt)
+            if spa_stack and 'technology_stack' in locals():
+                technology_stack.extend([t for t in spa_stack if t not in technology_stack])
+        except Exception:
+            pass
+
         return {
             'digital_maturity_score': final_score,
             'score_breakdown': score_components,
@@ -1363,17 +1443,21 @@ async def analyze_technical_aspects(url: str, html: str, headers: Optional[httpx
     if has_ssl: tech_score += 20
 
     # Mobile optimization
-    viewport = soup.find('meta', attrs={'name': 'viewport'})
     has_mobile = False
-    if viewport:
-        vc = viewport.get('content', '')
-        if 'width=device-width' in vc: 
-            has_mobile = True
-            tech_score += 15
-        if 'initial-scale=1' in vc: 
+    present, vp_content = has_viewport_meta(html, soup)
+    if present:
+        has_mobile = True
+        tech_score += 15
+        if 'initial-scale=1' in (vp_content or '').lower():
             tech_score += 5
+    else:
+        if detect_responsive_signals(html):
+            # If clear responsive signals exist, don't punish as harshly
+            has_mobile = True
+            tech_score += 10
 
     # Analytics
+
     analytics = detect_analytics_tools(html) if 'detect_analytics_tools' in globals() else {'has_analytics': ('gtag(' in html or 'analytics.js' in html)}
     if analytics.get('has_analytics'): tech_score += 10
 
@@ -2722,6 +2806,7 @@ async def ai_analyze_comprehensive(
         )
         
         technical_audit = await analyze_technical_aspects(url, html_content, headers=httpx.Headers({}))
+        mobile_readiness, mobile_reasons = summarize_mobile_readiness(technical_audit)
         content_analysis = await analyze_content_quality(html_content)
         ux_analysis = await analyze_ux_elements(html_content)
         social_analysis = await analyze_social_media_presence(url, html_content)
@@ -2837,8 +2922,21 @@ async def basic_analyze(request: CompetitorAnalysisRequest, user: UserInfo = Dep
         )
 
         sb_with_aliases = create_score_breakdown_with_aliases(basic_analysis.get('score_breakdown', {}))
+        # Compute mobile readiness (best effort)
+        try:
+            technical_proxy = {
+                'has_mobile_optimization': basic_analysis.get('has_mobile_optimization'),
+                'page_speed_score': basic_analysis.get('page_speed_score', 0),
+                'performance_indicators': basic_analysis.get('performance_indicators', [])
+            }
+            mobile_readiness, mobile_reasons = summarize_mobile_readiness(technical_proxy)
+        except Exception:
+            mobile_readiness, mobile_reasons = 'Unknown', []
+
 
         return {
+            'mobile_readiness': mobile_readiness,
+            'mobile_reasons': mobile_reasons,
             "success": True,
             "company": request.company_name or "",
             "website": url,
