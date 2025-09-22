@@ -62,6 +62,115 @@ SPA_WAIT_FOR_SELECTOR = os.getenv("SPA_WAIT_FOR_SELECTOR", "")  # e.g. "#app" or
 import httpx
 from bs4 import BeautifulSoup
 
+# ---------------- Enhanced Cards Validation Helpers ----------------
+def _coerce_str(v, default=""):
+    try:
+        if v is None: return default
+        s = str(v).strip()
+        return s if s else default
+    except Exception:
+        return default
+
+def _coerce_int_range(v, lo=0, hi=100, default=0):
+    try:
+        n = int(float(v))
+        if n < lo: n = lo
+        if n > hi: n = hi
+        return n
+    except Exception:
+        return default
+
+def _coerce_list_str(v):
+    if v is None:
+        return []
+    if isinstance(v, (list, tuple)):
+        return [str(x) for x in v if x is not None]
+    # single value → list
+    return [str(v)]
+
+_STATUS_MAP = {
+    "ok": "ok",
+    "ready": "ready",
+    "not_ready": "not_ready",
+    "needs_improvement": "needs_improvement",
+    "needs improvement": "needs_improvement",
+    "warning": "warning",
+    "info": "info",
+    "error": "error",
+    "critical": "error"
+}
+
+def _normalize_status(v, fallback="info"):
+    s = _coerce_str(v, "").lower()
+    if s in _STATUS_MAP:
+        return _STATUS_MAP[s]
+    # common synonyms
+    if s in ("good","pass"): return "ok"
+    if s in ("bad","fail"): return "error"
+    if s in ("poor","weak"): return "needs_improvement"
+    return fallback
+
+def _titleize_key(k: str) -> str:
+    return " ".join([w.capitalize() for w in re.split(r"[_\-\s]+", str(k)) if w])
+
+def validate_enhanced_cards(enhanced: Dict[str, Any]) -> Tuple[Dict[str, Any], list]:
+    """
+    Validates & normalizes the 9 enhanced insight 'cards'.
+    Ensures each card dict has at least: name, value (string), status, issues[], recommendations[].
+    Coerces common numeric fields into valid ranges and adds defaults where missing.
+    Returns (normalized_enhanced, warnings_list).
+    """
+    warnings = []
+    if not isinstance(enhanced, dict):
+        return {}, ["enhanced_features invalid type; expected dict"]
+
+    normalized = {}
+    for key, card in enhanced.items():
+        if not isinstance(card, dict):
+            warnings.append(f"{key}: not a dict, replaced with default")
+            card = {}
+
+        card_name = _coerce_str(card.get("name"), _titleize_key(key))
+        status = _normalize_status(card.get("status"), fallback="info")
+        issues = _coerce_list_str(card.get("issues"))
+        recs = _coerce_list_str(card.get("recommendations"))
+
+        # value: prefer string; if numeric 'score' present, map to 'value' like "56 / 100"
+        value = card.get("value")
+        score = card.get("score", card.get("mobile_score", card.get("grade_score")))
+        if value is None and score is not None:
+            value = f"{_coerce_int_range(score)}/100"
+        value = _coerce_str(value, "")
+
+        # Coerce common numeric fields to valid ranges when present
+        for num_key in ("score", "grade_score", "mobile_score", "page_speed_score", "overall_technical_score"):
+            if num_key in card:
+                card[num_key] = _coerce_int_range(card[num_key])
+
+        # Grades: ensure single uppercase letter A–F where applicable
+        if "grade" in card:
+            g = _coerce_str(card.get("grade")).upper()[:1]
+            if g not in ("A","B","C","D","E","F"):
+                # derive grade from score if available
+                sc = card.get("score", card.get("mobile_score", 0))
+                sc = _coerce_int_range(sc)
+                g = ("A" if sc>=90 else "B" if sc>=80 else "C" if sc>=70 else
+                     "D" if sc>=60 else "E" if sc>=50 else "F")
+            card["grade"] = g
+
+        # Write normalized essentials
+        card["name"] = card_name
+        card["value"] = value
+        card["status"] = status
+        card["issues"] = issues
+        card["recommendations"] = recs
+
+        normalized[key] = card
+
+    return normalized, warnings
+# -------------------------------------------------------------------
+
+
 
 def summarize_mobile_readiness(technical: Dict[str, Any]) -> Tuple[str, list]:
     """
@@ -2344,7 +2453,7 @@ async def generate_enhanced_features(
     technical: Dict[str, Any],
     content: Dict[str, Any],
     social: Dict[str, Any]
-) -> Dict[str, Any]:
+, ux: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Generate all 9 enhanced features for complete frontend compatibility"""
     try:
         score = int(basic.get("digital_maturity_score", 0))
@@ -2472,13 +2581,14 @@ async def generate_enhanced_features(
         }
 
         # 7. Mobile-first readiness
-        mobile_ready = mob_pts >= int(mob_w * 0.6)
+        real_mobile_score = (ux.get('mobile_ux_score', 0) if ux else int((mob_pts / mob_w) * 100))
+        real_mobile_score = (ux.get('mobile_ux_score', 0) if ux else int((mob_pts / mob_w) * 100))
+        mobile_ready = real_mobile_score >= 60
         mobile_first_index_ready = {
-            "name": "Mobile-First Readiness",
             "value": "Yes" if mobile_ready else "No",
             "description": "Google Mobile-First indexing readiness",
             "status": "ready" if mobile_ready else "not_ready",
-            "mobile_score": int((mob_pts / mob_w) * 100) if mob_pts > 0 else 0,
+            'mobile_score': real_mobile_score,
             "issues": [] if mobile_ready else ["Viewport / responsiveness improvements required"],
             "recommendations": ([] if mobile_ready else [
                 "Add viewport meta",
@@ -2515,10 +2625,24 @@ async def generate_enhanced_features(
 
         # 9. Technology stack
         detected = ["HTML5", "CSS3", "JavaScript"]
-        
-        # Add SPA frameworks
-        spa_frameworks = basic.get('detailed_findings', {}).get('modern_features', {}).get('features', {}).get('spa_framework', [])
-        detected.extend(spa_frameworks)
+
+        # Try to get SPA frameworks from basic.detailed_findings.modern_features.features.spa_framework
+        spa_frameworks = (basic.get('detailed_findings', {})
+                          .get('modern_features', {})
+                          .get('features', {})
+                          .get('spa_framework', []))
+        if not spa_frameworks:
+            # Fallback: infer from basic flags
+            if basic.get('spa_detected'):
+                mod_score = int(basic.get('modernity_score') or 0)
+                detected.append('Modern JavaScript Framework' if mod_score > 60 else 'Single Page Application')
+        # Merge frameworks (capitalize common names)
+        _map = {'react':'React','nextjs':'Next.js','vue':'Vue.js','angular':'Angular','svelte':'Svelte','nuxt':'Nuxt.js','gatsby':'Gatsby','preact':'Preact','ember':'Ember','alpine':'Alpine.js','astro':'Astro','sveltekit':'SvelteKit'}
+        for fw in spa_frameworks or []:
+            fw_n = _map.get(str(fw).strip().lower(), str(fw))
+            if fw_n not in detected:
+                detected.append(fw_n)
+
         
         # Add detected media types
         for tname in (content.get("media_types") or []):
@@ -2787,16 +2911,27 @@ async def ai_analyze_comprehensive(
         
         # Use smart rendering that detects SPAs automatically
         html_content, used_spa = await get_website_content(url, force_spa=getattr(request, 'force_spa', False))
+        # Detect SPA frameworks from HTML (plus optional XHR block)
+        _extra_txt = ''
+        try:
+            if '<!--XHR-->' in html_content:
+                _extra_txt = html_content.split('<!--XHR-->')[1].split('<!--/XHR-->')[0]
+        except Exception:
+            _extra_txt = ''
+        spa_detection = await detect_spa_framework(html_content)
         if not html_content or len(html_content.strip()) < 100:
             raise HTTPException(400, "Website returned insufficient content")
 
         # Create rendering info for enhanced analysis
         rendering_info = {
-            'spa_detected': bool(used_spa),
-            'spa_info': {'spa_detected': bool(used_spa)},
+            'spa_detected': bool(used_spa) or bool(spa_detection.get('spa_detected')),
+            'spa_info': spa_detection,
             'rendering_method': 'playwright' if used_spa else 'http',
             'final_url': url
         }
+
+
+
 
         # Perform complete comprehensive analysis
         basic_analysis = await analyze_basic_metrics_enhanced(
@@ -2817,7 +2952,8 @@ async def ai_analyze_comprehensive(
 
         # Generate AI insights and features
         ai_analysis = await generate_ai_insights(url, basic_analysis, technical_audit, content_analysis, ux_analysis, social_analysis)
-        enhanced_features = await generate_enhanced_features(url, basic_analysis, technical_audit, content_analysis, social_analysis)
+        enhanced_features = await generate_enhanced_features(url, basic_analysis, technical_audit, content_analysis, social_analysis, ux_analysis)
+        enhanced_features, card_warnings = validate_enhanced_cards(enhanced_features)
         enhanced_features["admin_features_enabled"] = (user.role == "admin")
         smart_actions = generate_smart_actions(ai_analysis, technical_audit, content_analysis, basic_analysis)
 
@@ -2890,6 +3026,11 @@ async def ai_analyze_comprehensive(
             user_search_counts[user.username] = user_search_counts.get(user.username, 0) + 1
 
         logger.info(f"Complete analysis finished for {url}: score={basic_analysis['digital_maturity_score']}, SPA={rendering_info['spa_detected']}, method={rendering_info['rendering_method']} (user: {user.username})")
+        # cards validation info
+        result.setdefault('cards_validation', {})
+        result['cards_validation']['ok'] = (len(card_warnings) == 0)
+        result['cards_validation']['warnings'] = card_warnings
+
         return result
 
     except HTTPException:
@@ -2934,7 +3075,7 @@ async def basic_analyze(request: CompetitorAnalysisRequest, user: UserInfo = Dep
             mobile_readiness, mobile_reasons = 'Unknown', []
 
 
-        return {
+        result = {
             'mobile_readiness': mobile_readiness,
             'mobile_reasons': mobile_reasons,
             "success": True,
@@ -2950,6 +3091,20 @@ async def basic_analyze(request: CompetitorAnalysisRequest, user: UserInfo = Dep
             "modernity_score": basic_analysis.get('modernity_score', 0),
             "scoring_weights": SCORING_CONFIG.weights
         }
+        # ---- promote critical fields to root ----
+        result["app_version"] = APP_VERSION
+        try:
+            if isinstance(result.get("analysis"), dict):
+                if "mobile_readiness" not in result and isinstance(result["analysis"].get("mobile"), dict):
+                    result["mobile_readiness"] = result["analysis"]["mobile"].get("mobile_readiness")
+                    result["mobile_reasons"] = result["analysis"]["mobile"].get("mobile_reasons", [])
+                if "technology_stack" not in result and isinstance(result["analysis"].get("technical"), dict):
+                    ts = result["analysis"]["technical"].get("technology_stack")
+                    if ts is not None:
+                        result["technology_stack"] = ts
+        except Exception:
+            pass
+        return result
     except HTTPException:
         raise
     except Exception as e:
