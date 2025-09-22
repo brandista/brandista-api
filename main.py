@@ -2513,42 +2513,51 @@ async def generate_enhanced_features(
             ]
         }
 
+        
         # 9. Technology stack
         detected = ["HTML5", "CSS3", "JavaScript"]
+
+        # Hae SPA frameworks basic_analysis datasta
+        spa_frameworks = []
         
-        # Add SPA frameworks
-        spa_frameworks = basic.get('detailed_findings', {}).get('modern_features', {}).get('features', {}).get('spa_framework', [])
-        detected.extend(spa_frameworks)
-        
-        # Add detected media types
-        for tname in (content.get("media_types") or []):
-            if tname not in detected:
-                detected.append(tname)
-        
-        # Analytics tools
-        if technical.get("has_analytics"):
-            detected.append("Google Analytics")
-        
-        # Determine modernity
-        modernity_score = basic.get('modernity_score', 0)
-        modernity = (
-            "cutting_edge" if modernity_score > 80 else
-            "modern" if modernity_score > 50 else
-            "standard"
-        )
-        
-        technology_stack = {
-            "name": "Technology Stack",
-            "value": "Modern analysis complete" if basic.get('spa_detected') else "Traditional web technologies",
-            "description": "Technology stack analysis with SPA detection",
-            "detected": detected,
-            "categories": {
-                "frontend": spa_frameworks + ["HTML5", "CSS3"] if spa_frameworks else ["HTML5", "CSS3"],
-                "analytics": ["Google Analytics"] if technical.get("has_analytics") else []
-            },
-            "modernity": modernity
+        # Yritä useista paikoista
+        modern_features = basic.get('detailed_findings', {}).get('modern_features', {})
+        spa_frameworks = modern_features.get('features', {}).get('spa_framework', [])
+
+        # Normalisoi framework-nimet
+        framework_map = {
+            'react': 'React',
+            'nextjs': 'Next.js', 
+            'vue': 'Vue.js',
+            'angular': 'Angular',
+            'svelte': 'Svelte',
+            'nuxt': 'Nuxt.js'
         }
 
+        for fw in spa_frameworks:
+            fw_normalized = framework_map.get(str(fw).strip().lower(), str(fw))
+            if fw_normalized not in detected:
+                detected.append(fw_normalized)
+
+        # Lisää media types (mutta ei "images")
+        for media in (content.get("media_types") or []):
+            if media and media.lower() not in ['images', 'image']:
+                if media not in detected:
+                    detected.append(media)
+
+        # Lisää analytics
+        if technical.get("has_analytics") and "Google Analytics" not in detected:
+            detected.append("Google Analytics")
+
+        technology_stack = {
+            "name": "Technology Stack",
+            "value": f"{len(detected)} technologies detected",
+            "description": "Website technology stack analysis with SPA detection",
+            "detected": detected,
+            "modernity": "modern" if basic.get('modernity_score', 0) > 60 else "standard"
+        }
+
+        # PALAUTA KAIKKI ENHANCED FEATURES
         return {
             "industry_benchmarking": industry_benchmarking,
             "competitor_gaps": competitor_gaps,
@@ -2558,24 +2567,22 @@ async def generate_enhanced_features(
             "estimated_traffic_rank": estimated_traffic_rank,
             "mobile_first_index_ready": mobile_first_index_ready,
             "core_web_vitals_assessment": core_web_vitals_assessment,
-            "technology_stack": technology_stack,
+            "technology_stack": technology_stack
         }
 
     except Exception as e:
         logger.error(f"Enhanced features generation failed: {e}")
-        # Safe fallback
+        # Palauta tyhjät featured jos virhe
         return {
-            "industry_benchmarking": {
-                "value": f"{basic.get('digital_maturity_score', 0)}/100",
-                "description": "Basic scoring",
-                "status": "analyzed"
-            },
-            "technology_stack": {
-                "value": "Basic analysis",
-                "description": "Technology detected",
-                "detected": ["HTML5", "CSS3"],
-                "modernity": "unknown"
-            }
+            "industry_benchmarking": {"name": "Industry Benchmarking", "value": "N/A"},
+            "competitor_gaps": {"name": "Competitor Gaps", "value": "N/A"},
+            "growth_opportunities": {"name": "Growth Opportunities", "value": "N/A"},
+            "risk_assessment": {"name": "Risk Assessment", "value": "N/A"},
+            "market_trends": {"name": "Market Trends", "value": "N/A"},
+            "estimated_traffic_rank": {"name": "Traffic Estimate", "value": "N/A"},
+            "mobile_first_index_ready": {"name": "Mobile-First Readiness", "value": "N/A"},
+            "core_web_vitals_assessment": {"name": "Core Web Vitals", "value": "N/A"},
+            "technology_stack": {"name": "Technology Stack", "value": "N/A", "detected": []}
         }
 
 def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], content: Dict[str, Any], basic: Dict[str, Any]) -> List[Dict[str, Any]]:
