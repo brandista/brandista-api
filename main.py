@@ -2514,17 +2514,14 @@ async def generate_enhanced_features(
         }
 
         
-        # 9. Technology stack
+                # 9. Technology stack - Improved version combining both approaches
         detected = ["HTML5", "CSS3", "JavaScript"]
 
-        # Hae SPA frameworks basic_analysis datasta
-        spa_frameworks = []
-        
-        # Yritä useista paikoista
+        # Get SPA frameworks from modern features (6.2.0 approach)
         modern_features = basic.get('detailed_findings', {}).get('modern_features', {})
         spa_frameworks = modern_features.get('features', {}).get('spa_framework', [])
 
-        # Normalisoi framework-nimet
+        # Normalize framework names
         framework_map = {
             'react': 'React',
             'nextjs': 'Next.js', 
@@ -2534,26 +2531,39 @@ async def generate_enhanced_features(
             'nuxt': 'Nuxt.js'
         }
 
+        frameworks_detected = []
         for fw in spa_frameworks:
             fw_normalized = framework_map.get(str(fw).strip().lower(), str(fw))
             if fw_normalized not in detected:
                 detected.append(fw_normalized)
+                frameworks_detected.append(fw_normalized)
 
-        # Lisää media types (mutta ei "images")
+        # Add media types (but exclude "images")
+        media_technologies = []
         for media in (content.get("media_types") or []):
             if media and media.lower() not in ['images', 'image']:
                 if media not in detected:
                     detected.append(media)
+                    media_technologies.append(media)
 
-        # Lisää analytics
-        if technical.get("has_analytics") and "Google Analytics" not in detected:
-            detected.append("Google Analytics")
+        # Add analytics tools
+        analytics_tools = []
+        if technical.get("has_analytics"):
+            if "Google Analytics" not in detected:
+                detected.append("Google Analytics")
+                analytics_tools.append("Google Analytics")
 
+        # Build technology stack with categorization (6.1.1 structure + 6.2.0 detection)
         technology_stack = {
             "name": "Technology Stack",
             "value": f"{len(detected)} technologies detected",
             "description": "Website technology stack analysis with SPA detection",
             "detected": detected,
+            "categories": {
+                "frontend": ["HTML5", "CSS3", "JavaScript"] + frameworks_detected,
+                "media": media_technologies,
+                "analytics": analytics_tools
+            },
             "modernity": "modern" if basic.get('modernity_score', 0) > 60 else "standard"
         }
 
