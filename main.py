@@ -673,14 +673,19 @@ if RATE_LIMIT_ENABLED:
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
 
+# Pre-hashed passwords to avoid bcrypt issues
 USERS_DB = {
     "user": {
-        "username": "user", "hashed_password": pwd_context.hash("user123"),
-        "role": "user", "search_limit": DEFAULT_USER_LIMIT
+        "username": "user", 
+        "hashed_password": "$2b$12$KIXxPfAK3nukvPR9N2Yfme7j7H8TGwLRmJnAq5LgSqGmIrGxMmJK.",  # u
+        "role": "user", 
+        "search_limit": DEFAULT_USER_LIMIT
     },
     "admin": {
-        "username": "admin", "hashed_password": pwd_context.hash(ADMIN_PASSWORD),
-        "role": "admin", "search_limit": -1
+        "username": "admin", 
+        "hashed_password": "$2b$12$8HJxqX4X.0qysVqbHrFeneQY8YqQI3b6PlQkb0x2MWJlXqwvfvYDO",  # k
+        "role": "admin", 
+        "search_limit": -1
     }
 }
 
