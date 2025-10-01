@@ -2302,7 +2302,8 @@ def build_plan_90d(basic: Dict[str, Any], content: Dict[str, Any], technical: Di
 # COMPLETE AI INSIGHTS AND ENHANCED FEATURES
 # ============================================================================
 
-async def generate_ai_insights(url: str, basic: Dict[str, Any], technical: Dict[str, Any], content: Dict[str, Any], ux: Dict[str, Any], social: Dict[str, Any]) -> AIAnalysis:
+async def generate_ai_insights(url: str, basic: Dict[str, Any], technical: Dict[str, Any], content: Dict[str, Any], ux: Dict[str, Any], social: Dict[str, Any], language: str = 'en') -> AIAnalysis:
+    """Generate comprehensive AI-powered insights"""
     """Generate comprehensive AI-powered insights"""
     overall = basic.get('digital_maturity_score', 0)
     spa_detected = basic.get('spa_detected', False)
@@ -2348,7 +2349,7 @@ async def generate_ai_insights(url: str, basic: Dict[str, Any], technical: Dict[
     try:
         impact = compute_business_impact(basic, content, ux)
         role = build_role_summaries(url, basic, impact)
-        plan = build_plan_90d(basic, content, technical)
+        plan = build_plan_90d(basic, content, technical, language=language)  
         risks = build_risk_register(basic, technical, content)
         snippets = build_snippet_examples(url, basic)
 
@@ -2984,7 +2985,7 @@ async def ai_analyze_comprehensive(
         sb_with_aliases = create_score_breakdown_with_aliases(basic_analysis.get('score_breakdown', {}))
 
         # Generate AI insights and features
-        ai_analysis = await generate_ai_insights(url, basic_analysis, technical_audit, content_analysis, ux_analysis, social_analysis)
+        ai_analysis = await generate_ai_insights(url, basic_analysis, technical_audit, content_analysis, ux_analysis, social_analysis, language=request.language)
         enhanced_features = await generate_enhanced_features(url, basic_analysis, technical_audit, content_analysis, social_analysis)
         enhanced_features["admin_features_enabled"] = (user.role == "admin")
         smart_actions = generate_smart_actions(ai_analysis, technical_audit, content_analysis, basic_analysis)
