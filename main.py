@@ -1411,7 +1411,7 @@ async def analyze_basic_metrics_enhanced(
                     extra_txt = html.split('<!--XHR-->')[1].split('<!--/XHR-->')[0]
                 except Exception:
                     extra_txt = ''
-            spa_stack = detect_spa_framework(html, extra_txt)
+            spa_stack = await detect_spa_framework(html + extra_txt)
             if spa_stack and 'technology_stack' in locals():
                 technology_stack.extend([t for t in spa_stack if t not in technology_stack])
         except Exception:
@@ -2296,7 +2296,78 @@ def build_plan_90d(basic: Dict[str, Any], content: Dict[str, Any], technical: Di
         wave_3=wave_3[:5],
         one_thing_this_week=one_thing
     )
+def build_risk_register(basic: Dict[str, Any], technical: Dict[str, Any], content: Dict[str, Any]) -> List[RiskItem]:
+    """Build risk register with likelihood, impact, mitigation"""
+    risks = []
+    breakdown = basic.get('score_breakdown', {})
+    
+    # Content risk
+    if content.get('content_quality_score', 0) < 50:
+        risks.append(RiskItem(
+            risk="Thin content → weak rankings",
+            likelihood=3,
+            impact=3,
+            mitigation="Pillar/cluster content plan",
+            risk_score=9
+        ))
+    
+    # SPA risk
+    if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
+        risks.append(RiskItem(
+            risk="SPA client-only rendering → low visibility",
+            likelihood=3,
+            impact=4,
+            mitigation="SSR/prerender critical routes",
+            risk_score=12
+        ))
+    
+    # Security risk
+    if breakdown.get('security', 0) < 10:
+        risks.append(RiskItem(
+            risk="Weak security → trust/SEO penalty",
+            likelihood=2,
+            impact=4,
+            mitigation="Install SSL + security headers",
+            risk_score=8
+        ))
+    
+    # Mobile risk
+    if breakdown.get('mobile', 0) < 10:
+        risks.append(RiskItem(
+            risk="Poor mobile UX → high bounce rate",
+            likelihood=4,
+            impact=3,
+            mitigation="Responsive design + CWV optimization",
+            risk_score=12
+        ))
+    
+    return risks
 
+
+def build_snippet_examples(url: str, basic: Dict[str, Any]) -> SnippetExamples:
+    """Build SEO snippet examples"""
+    domain = get_domain_from_url(url).capitalize()
+    
+    return SnippetExamples(
+        seo_title=[
+            f"{domain} — fast, modern & reliable",
+            f"{domain}: solutions that drive results",
+            f"{domain} | Everything you need to grow"
+        ],
+        meta_desc=[
+            f"{domain} helps you get measurable results. Explore features, stories and pricing — start today.",
+            f"Modern {domain} with impact. See how teams ship better experiences. Try now."
+        ],
+        h1_intro=[
+            f"{domain} that gets the job done.",
+            f"Build, ship and grow with {domain}."
+        ],
+        product_copy=[
+            "Value prop in 1–2 lines → 2–3 benefits with proof → single CTA.",
+            "Problem → outcome → proof → CTA. Keep it scannable (40–80 words)."
+        ]
+    )
+    
 
 # ============================================================================
 # COMPLETE AI INSIGHTS AND ENHANCED FEATURES
