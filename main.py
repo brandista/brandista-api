@@ -1411,7 +1411,7 @@ async def analyze_basic_metrics_enhanced(
                     extra_txt = html.split('<!--XHR-->')[1].split('<!--/XHR-->')[0]
                 except Exception:
                     extra_txt = ''
-            spa_stack = await detect_spa_framework(html + extra_txt)
+            spa_stack = await detect_spa_framework(html + extra_txt if extra_txt else html)
             if spa_stack and 'technology_stack' in locals():
                 technology_stack.extend([t for t in spa_stack if t not in technology_stack])
         except Exception:
