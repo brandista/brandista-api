@@ -2114,23 +2114,105 @@ def build_role_summaries(url: str, basic: Dict[str, Any], impact: BusinessImpact
     )
 
 def build_plan_90d(basic: Dict[str, Any], content: Dict[str, Any], technical: Dict[str, Any]) -> Plan90D:
+    """Build a realistic week-by-week 90-day execution plan"""
+    score = basic.get('digital_maturity_score', 0)
+    breakdown = basic.get('score_breakdown', {})
+    
+    # Determine top 3 priority areas based on scoring gaps
+    priorities = []
+    if breakdown.get('security', 0) < 10:
+        priorities.append('security')
+    if breakdown.get('seo_basics', 0) < 12:
+        priorities.append('seo')
+    if breakdown.get('content', 0) < 10:
+        priorities.append('content')
+    if breakdown.get('mobile', 0) < 10:
+        priorities.append('mobile')
+    if not technical.get('has_analytics'):
+        priorities.append('analytics')
+    
+    # If nothing critical, focus on optimization
+    if not priorities:
+        priorities = ['content', 'ux', 'performance']
+    
+    # Wave 1 (Weeks 1-4): Foundation & Quick Wins
+    wave_1 = []
+    if 'security' in priorities:
+        wave_1.extend([
+            "Week 1: Install SSL certificate + enable HTTPS redirect",
+            "Week 2: Configure security headers (CSP, HSTS, X-Frame-Options)",
+        ])
+    if 'analytics' in priorities:
+        wave_1.append("Week 1: Install GA4 + define 3-5 key conversion events")
+    if 'seo' in priorities:
+        wave_1.extend([
+            f"Week {'3' if len(wave_1) >= 2 else '1'}: Audit & fix titles/meta descriptions on top 10 pages",
+            f"Week {'4' if len(wave_1) >= 3 else '2'}: Add missing H1 tags + fix heading hierarchy",
+        ])
+    if 'mobile' in priorities:
+        wave_1.append(f"Week {'3-4' if len(wave_1) >= 2 else '2'}: Add viewport meta + test responsive breakpoints")
+    
+    # Pad to 4-5 items if needed
+    while len(wave_1) < 4:
+        wave_1.append(f"Week {len(wave_1)+1}: Compress images on top 10 pages + enable lazy loading")
+        break
+    
+    # Wave 2 (Weeks 5-8): Content & Technical SEO
+    wave_2 = []
+    if 'content' in priorities:
+        wave_2.extend([
+            "Week 5-6: Research & outline 6 pillar content topics (keyword analysis)",
+            "Week 7-8: Write & publish first 3 pillar articles (2000+ words each)",
+        ])
+    else:
+        wave_2.extend([
+            "Week 5-6: Update existing content - refresh dates, add internal links",
+            "Week 7: Add FAQ schema markup to key pages",
+        ])
+    
+    if 'seo' in priorities or not content:
+        wave_2.append("Week 8: Build XML sitemap + submit to Search Console")
+    
+    if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
+        wave_2.append("Week 7-8: Research SSR/prerendering options for SPA (implementation in Wave 3)")
+    
+    # Wave 3 (Weeks 9-12): Scale & Optimize
+    wave_3 = []
+    if 'content' in priorities:
+        wave_3.extend([
+            "Week 9-10: Publish remaining 3 pillar articles + 6 cluster posts",
+            "Week 11: Build internal linking structure between pillar/cluster content",
+        ])
+    else:
+        wave_3.append("Week 9-10: A/B test top 3 landing pages (headlines, CTAs)")
+    
+    if basic.get('spa_detected'):
+        wave_3.append("Week 10-11: Implement SSR/prerendering for critical routes")
+    else:
+        wave_3.append("Week 10: Optimize Core Web Vitals (LCP < 2.5s, CLS < 0.1)")
+    
+    wave_3.extend([
+        "Week 11-12: Set up conversion tracking + build GA4 dashboard",
+        "Week 12: Review metrics, document wins, plan Q2 priorities",
+    ])
+    
+    # One thing this week - most critical action
+    if 'security' in priorities:
+        one_thing = "Install SSL certificate (blocks everything else)"
+    elif 'analytics' in priorities:
+        one_thing = "Install GA4 tracking (need data to make decisions)"
+    elif 'seo' in priorities:
+        one_thing = "Fix titles & meta on your top 10 pages"
+    elif 'content' in priorities:
+        one_thing = "Outline your first pillar article topic"
+    else:
+        one_thing = "Run Lighthouse audit on top 5 pages, note top 3 issues"
+    
     return Plan90D(
-        wave_1=[
-            "Fix titles & meta on top 10 pages",
-            "Add viewport & responsive gaps (media queries)",
-            "Compress hero images; enable lazy-loading"
-        ],
-        wave_2=[
-            "Publish 6 pillar+cluster articles",
-            "Add schema (FAQ/Product/Article) & internal linking",
-            "Set up GA4 + conversion events"
-        ],
-        wave_3=[
-            "SSR/prerender for SPA or critical routes",
-            "CRO tests on top 3 landing pages",
-            "CWV monitoring & regression alerts"
-        ],
-        one_thing_this_week="Fix top 10 page titles & meta."
+        wave_1=wave_1[:5],  # Cap at 5 items
+        wave_2=wave_2[:4],  # Cap at 4 items
+        wave_3=wave_3[:5],  # Cap at 5 items
+        one_thing_this_week=one_thing
     )
 
 def build_risk_register(basic: Dict[str, Any], technical: Dict[str, Any], content: Dict[str, Any]) -> List[RiskItem]:
