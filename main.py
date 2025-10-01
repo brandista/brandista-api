@@ -730,7 +730,7 @@ class CompetitorAnalysisRequest(BaseModel):
     url: str = Field(..., description="Website URL to analyze")
     company_name: Optional[str] = Field(None, max_length=100)
     analysis_type: str = Field("comprehensive", pattern="^(basic|comprehensive|ai_enhanced)$")
-    language: str = Field("en", pattern="^(en)$")
+    language: str = Field("en", pattern="^(en|fi)$")
     include_ai: bool = Field(True)
     include_social: bool = Field(True)
     force_playwright: bool = Field(False, description="Force Playwright rendering even for non-SPAs")
@@ -2113,12 +2113,86 @@ def build_role_summaries(url: str, basic: Dict[str, Any], impact: BusinessImpact
         CTO=f"Prioritize CWV/LCP, defer non-critical JS, analytics hygiene. If SPA, add SSR/prerender for critical routes."
     )
 
-def build_plan_90d(basic: Dict[str, Any], content: Dict[str, Any], technical: Dict[str, Any]) -> Plan90D:
-    """Build a realistic week-by-week 90-day execution plan"""
+def build_plan_90d(basic: Dict[str, Any], content: Dict[str, Any], technical: Dict[str, Any], language: str = 'en') -> Plan90D:
+    """Build a realistic week-by-week 90-day execution plan with i18n support"""
     score = basic.get('digital_maturity_score', 0)
     breakdown = basic.get('score_breakdown', {})
     
-    # Determine top 3 priority areas based on scoring gaps
+    # Translations dictionary
+    translations = {
+        'en': {
+            'week': 'Week',
+            'weeks': 'Weeks',
+            'actions': {
+                'ssl_install': 'Week 1: Install SSL certificate + enable HTTPS redirect',
+                'security_headers': 'Week 2: Configure security headers (CSP, HSTS, X-Frame-Options)',
+                'ga4_install': 'Week 1: Install GA4 + define 3-5 key conversion events',
+                'seo_audit': 'Week {w}: Audit & fix titles/meta descriptions on top 10 pages',
+                'heading_fix': 'Week {w}: Add missing H1 tags + fix heading hierarchy',
+                'viewport_meta': 'Week {w}: Add viewport meta + test responsive breakpoints',
+                'compress_images': 'Week {w}: Compress images on top 10 pages + enable lazy loading',
+                'content_research': 'Week 5-6: Research & outline 6 pillar content topics (keyword analysis)',
+                'content_write': 'Week 7-8: Write & publish first 3 pillar articles (2000+ words each)',
+                'content_update': 'Week 5-6: Update existing content - refresh dates, add internal links',
+                'faq_schema': 'Week 7: Add FAQ schema markup to key pages',
+                'sitemap_submit': 'Week 8: Build XML sitemap + submit to Search Console',
+                'ssr_research': 'Week 7-8: Research SSR/prerendering options for SPA (implementation in Wave 3)',
+                'content_publish': 'Week 9-10: Publish remaining 3 pillar articles + 6 cluster posts',
+                'internal_linking': 'Week 11: Build internal linking structure between pillar/cluster content',
+                'ab_testing': 'Week 9-10: A/B test top 3 landing pages (headlines, CTAs)',
+                'ssr_implement': 'Week 10-11: Implement SSR/prerendering for critical routes',
+                'cwv_optimize': 'Week 10: Optimize Core Web Vitals (LCP < 2.5s, CLS < 0.1)',
+                'conversion_tracking': 'Week 11-12: Set up conversion tracking + build GA4 dashboard',
+                'review_metrics': 'Week 12: Review metrics, document wins, plan Q2 priorities',
+            },
+            'one_thing': {
+                'ssl': 'Install SSL certificate (blocks everything else)',
+                'analytics': 'Install GA4 tracking (need data to make decisions)',
+                'seo': 'Fix titles & meta on your top 10 pages',
+                'content': 'Outline your first pillar article topic',
+                'default': 'Run Lighthouse audit on top 5 pages, note top 3 issues'
+            }
+        },
+        'fi': {
+            'week': 'Viikko',
+            'weeks': 'Viikot',
+            'actions': {
+                'ssl_install': 'Viikko 1: Asenna SSL-sertifikaatti + ota käyttöön HTTPS-uudelleenohjaus',
+                'security_headers': 'Viikko 2: Määritä turvallisuusotsikot (CSP, HSTS, X-Frame-Options)',
+                'ga4_install': 'Viikko 1: Asenna GA4 + määrittele 3-5 keskeistä konversiota',
+                'seo_audit': 'Viikko {w}: Tarkasta & korjaa otsikot/meta-kuvaukset 10 parhaalla sivulla',
+                'heading_fix': 'Viikko {w}: Lisää puuttuvat H1-tagit + korjaa otsikkohierarkia',
+                'viewport_meta': 'Viikko {w}: Lisää viewport meta + testaa responsiiviset keskeytyskohdat',
+                'compress_images': 'Viikko {w}: Pakkaa kuvat 10 parhaalla sivulla + ota käyttöön lazy loading',
+                'content_research': 'Viikko 5-6: Tutki & hahmottele 6 pilari-sisältöaihetta (avainsana-analyysi)',
+                'content_write': 'Viikko 7-8: Kirjoita & julkaise ensimmäiset 3 pilariartikkelia (2000+ sanaa)',
+                'content_update': 'Viikko 5-6: Päivitä olemassa oleva sisältö - päivitä päivämäärät, lisää sisäisiä linkkejä',
+                'faq_schema': 'Viikko 7: Lisää FAQ schema-merkintä avainsivuille',
+                'sitemap_submit': 'Viikko 8: Rakenna XML-sivukartta + lähetä Search Consoleen',
+                'ssr_research': 'Viikko 7-8: Tutki SSR/esirenderöintivaihtoehdot SPA:lle (toteutus Vaihe 3:ssa)',
+                'content_publish': 'Viikko 9-10: Julkaise loput 3 pilariartikkelia + 6 klusteripostausta',
+                'internal_linking': 'Viikko 11: Rakenna sisäinen linkitysrakenne pilari/klusteri-sisällön välille',
+                'ab_testing': 'Viikko 9-10: A/B-testaa 3 parasta aloitussivua (otsikot, CTA:t)',
+                'ssr_implement': 'Viikko 10-11: Ota käyttöön SSR/esirenderöinti kriittisille reiteille',
+                'cwv_optimize': 'Viikko 10: Optimoi Core Web Vitals (LCP < 2.5s, CLS < 0.1)',
+                'conversion_tracking': 'Viikko 11-12: Aseta konversiontaseuranta + rakenna GA4-dashboard',
+                'review_metrics': 'Viikko 12: Tarkista mittarit, dokumentoi voitot, suunnittele Q2-prioriteetit',
+            },
+            'one_thing': {
+                'ssl': 'Asenna SSL-sertifikaatti (estää kaiken muun)',
+                'analytics': 'Asenna GA4-seuranta (tarvitaan dataa päätöksiin)',
+                'seo': 'Korjaa otsikot & metat 10 parhaalla sivullasi',
+                'content': 'Hahmottele ensimmäinen pilariartikkelin aihe',
+                'default': 'Suorita Lighthouse-auditointi 5 parhaalle sivulle, merkitse 3 tärkeintä ongelmaa'
+            }
+        }
+    }
+    
+    t = translations.get(language, translations['en'])
+    actions = t['actions']
+    one_thing_texts = t['one_thing']
+    
+    # Determine priorities
     priorities = []
     if breakdown.get('security', 0) < 10:
         priorities.append('security')
@@ -2131,124 +2205,96 @@ def build_plan_90d(basic: Dict[str, Any], content: Dict[str, Any], technical: Di
     if not technical.get('has_analytics'):
         priorities.append('analytics')
     
-    # If nothing critical, focus on optimization
     if not priorities:
         priorities = ['content', 'ux', 'performance']
     
-    # Wave 1 (Weeks 1-4): Foundation & Quick Wins
+    # Wave 1 (Weeks 1-4): Foundation
     wave_1 = []
+    week_counter = 1
+    
     if 'security' in priorities:
         wave_1.extend([
-            "Week 1: Install SSL certificate + enable HTTPS redirect",
-            "Week 2: Configure security headers (CSP, HSTS, X-Frame-Options)",
+            actions['ssl_install'],
+            actions['security_headers'],
         ])
+        week_counter = 3
+    
     if 'analytics' in priorities:
-        wave_1.append("Week 1: Install GA4 + define 3-5 key conversion events")
+        wave_1.append(actions['ga4_install'])
+        week_counter = max(week_counter, 2)
+    
     if 'seo' in priorities:
         wave_1.extend([
-            f"Week {'3' if len(wave_1) >= 2 else '1'}: Audit & fix titles/meta descriptions on top 10 pages",
-            f"Week {'4' if len(wave_1) >= 3 else '2'}: Add missing H1 tags + fix heading hierarchy",
+            actions['seo_audit'].format(w=week_counter if week_counter <= 3 else '3'),
+            actions['heading_fix'].format(w=week_counter + 1 if week_counter <= 3 else '4'),
         ])
-    if 'mobile' in priorities:
-        wave_1.append(f"Week {'3-4' if len(wave_1) >= 2 else '2'}: Add viewport meta + test responsive breakpoints")
     
-    # Pad to 4-5 items if needed
+    if 'mobile' in priorities:
+        wave_1.append(actions['viewport_meta'].format(w='3-4' if len(wave_1) >= 2 else '2'))
+    
+    # Pad to 4-5 items
     while len(wave_1) < 4:
-        wave_1.append(f"Week {len(wave_1)+1}: Compress images on top 10 pages + enable lazy loading")
+        wave_1.append(actions['compress_images'].format(w=len(wave_1) + 1))
         break
     
     # Wave 2 (Weeks 5-8): Content & Technical SEO
     wave_2 = []
+    
     if 'content' in priorities:
         wave_2.extend([
-            "Week 5-6: Research & outline 6 pillar content topics (keyword analysis)",
-            "Week 7-8: Write & publish first 3 pillar articles (2000+ words each)",
+            actions['content_research'],
+            actions['content_write'],
         ])
     else:
         wave_2.extend([
-            "Week 5-6: Update existing content - refresh dates, add internal links",
-            "Week 7: Add FAQ schema markup to key pages",
+            actions['content_update'],
+            actions['faq_schema'],
         ])
     
     if 'seo' in priorities or not content:
-        wave_2.append("Week 8: Build XML sitemap + submit to Search Console")
+        wave_2.append(actions['sitemap_submit'])
     
     if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
-        wave_2.append("Week 7-8: Research SSR/prerendering options for SPA (implementation in Wave 3)")
+        wave_2.append(actions['ssr_research'])
     
     # Wave 3 (Weeks 9-12): Scale & Optimize
     wave_3 = []
+    
     if 'content' in priorities:
         wave_3.extend([
-            "Week 9-10: Publish remaining 3 pillar articles + 6 cluster posts",
-            "Week 11: Build internal linking structure between pillar/cluster content",
+            actions['content_publish'],
+            actions['internal_linking'],
         ])
     else:
-        wave_3.append("Week 9-10: A/B test top 3 landing pages (headlines, CTAs)")
+        wave_3.append(actions['ab_testing'])
     
     if basic.get('spa_detected'):
-        wave_3.append("Week 10-11: Implement SSR/prerendering for critical routes")
+        wave_3.append(actions['ssr_implement'])
     else:
-        wave_3.append("Week 10: Optimize Core Web Vitals (LCP < 2.5s, CLS < 0.1)")
+        wave_3.append(actions['cwv_optimize'])
     
     wave_3.extend([
-        "Week 11-12: Set up conversion tracking + build GA4 dashboard",
-        "Week 12: Review metrics, document wins, plan Q2 priorities",
+        actions['conversion_tracking'],
+        actions['review_metrics'],
     ])
     
-    # One thing this week - most critical action
+    # One thing this week
     if 'security' in priorities:
-        one_thing = "Install SSL certificate (blocks everything else)"
+        one_thing = one_thing_texts['ssl']
     elif 'analytics' in priorities:
-        one_thing = "Install GA4 tracking (need data to make decisions)"
+        one_thing = one_thing_texts['analytics']
     elif 'seo' in priorities:
-        one_thing = "Fix titles & meta on your top 10 pages"
+        one_thing = one_thing_texts['seo']
     elif 'content' in priorities:
-        one_thing = "Outline your first pillar article topic"
+        one_thing = one_thing_texts['content']
     else:
-        one_thing = "Run Lighthouse audit on top 5 pages, note top 3 issues"
+        one_thing = one_thing_texts['default']
     
     return Plan90D(
-        wave_1=wave_1[:5],  # Cap at 5 items
-        wave_2=wave_2[:4],  # Cap at 4 items
-        wave_3=wave_3[:5],  # Cap at 5 items
+        wave_1=wave_1[:5],
+        wave_2=wave_2[:4],
+        wave_3=wave_3[:5],
         one_thing_this_week=one_thing
-    )
-
-def build_risk_register(basic: Dict[str, Any], technical: Dict[str, Any], content: Dict[str, Any]) -> List[RiskItem]:
-    items: List[RiskItem] = []
-    if technical.get('page_speed_score', 100) < 70:
-        items.append(RiskItem(risk="Mobile performance degrades conversions", likelihood=4, impact=4, mitigation="Compress images, defer JS, optimize LCP"))
-    if not technical.get('has_analytics', True):
-        items.append(RiskItem(risk="No analytics → decisions blind", likelihood=3, impact=4, mitigation="Install GA4 & events"))
-    if content.get('content_quality_score', 100) < 50:
-        items.append(RiskItem(risk="Thin content → weak rankings", likelihood=3, impact=3, mitigation="Pillar/cluster content plan"))
-    if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
-        items.append(RiskItem(risk="SPA client-only rendering → low visibility", likelihood=3, impact=4, mitigation="SSR/prerender critical routes"))
-    for it in items:
-        it.risk_score = it.likelihood * it.impact
-    return items
-
-def build_snippet_examples(url: str, basic: Dict[str, Any]) -> SnippetExamples:
-    brand = basic.get('company', get_domain_from_url(url)).capitalize()
-    return SnippetExamples(
-        seo_title=[
-            f"{brand} — fast, modern & reliable",
-            f"{brand}: solutions that drive results",
-            f"{brand} | Everything you need to grow"
-        ],
-        meta_desc=[
-            f"{brand} helps you get measurable results. Explore features, stories and pricing — start today.",
-            f"Modern {brand} with impact. See how teams ship better experiences. Try now."
-        ],
-        h1_intro=[
-            f"{brand} that gets the job done.",
-            f"Build, ship and grow with {brand}."
-        ],
-        product_copy=[
-            "Value prop in 1–2 lines → 2–3 benefits with proof → single CTA.",
-            "Problem → outcome → proof → CTA. Keep it scannable (40–80 words)."
-        ]
     )
 
 
@@ -2943,6 +2989,23 @@ async def ai_analyze_comprehensive(
         enhanced_features["admin_features_enabled"] = (user.role == "admin")
         smart_actions = generate_smart_actions(ai_analysis, technical_audit, content_analysis, basic_analysis)
 
+        # Add humanized layers with language support
+        try:
+            impact = compute_business_impact(basic_analysis, content_analysis, ux_analysis)
+            role = build_role_summaries(url, basic_analysis, impact)
+            plan = build_plan_90d(basic_analysis, content_analysis, technical_audit, language=request.language)
+            risks = build_risk_register(basic_analysis, technical_audit, content_analysis)
+            snippets = build_snippet_examples(url, basic_analysis)
+
+            # Update ai_analysis with humanized layers
+            ai_analysis.business_impact = impact
+            ai_analysis.role_summaries = role
+            ai_analysis.plan_90d = plan
+            ai_analysis.risk_register = risks
+            ai_analysis.snippet_examples = snippets
+        except Exception as e:
+            logger.warning(f"Humanized layer build failed: {e}")
+        
         # Construct complete result
         result = {
             "success": True,
