@@ -137,6 +137,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer
 from pydantic import BaseModel, Field
 
+from starlette.middleware.base import BaseHTTPMiddleware
+
+class UTF8Middleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        if "application/json" in response.headers.get("content-type", ""):
+            response.headers["content-type"] = "application/json; charset=utf-8"
+        return response
+
+app.add_middleware(UTF8Middleware)
+
 # Playwright imports (optional for SPA support)
 try:
     from playwright.async_api import async_playwright
