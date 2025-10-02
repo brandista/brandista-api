@@ -1949,7 +1949,8 @@ async def analyze_ux_elements(html: str) -> Dict[str, Any]:
     if 'display: flex' in hl: 
         design_score += 10
         design_frameworks.append('flexbox')
-    if '@media' in hl: design_score += 10
+    if '@media' in hl: 
+        design_score += 10
     design_score = min(100, design_score)
     
     # Accessibility scoring
@@ -1977,15 +1978,21 @@ async def analyze_ux_elements(html: str) -> Dict[str, Any]:
     
     a11y_score = min(100, a11y_score)
     
-    # Mobile UX
-    mobile_score = 0
+    # Mobile UX - KORJATTU SKAALAUS 0-100
+    mobile_raw = 0
     vp = soup.find('meta', attrs={'name':'viewport'})
     if vp:
         vc = vp.get('content','')
-        if 'width=device-width' in vc: mobile_score += 20
-        if 'initial-scale=1' in vc: mobile_score += 10
-    mobile_score = min(100, mobile_score)
+        if 'width=device-width' in vc: 
+            mobile_raw += 40
+        if 'initial-scale=1' in vc: 
+            mobile_raw += 20
+        if detect_responsive_signals(html):
+            mobile_raw += 20
+        if '@media' in hl:
+            mobile_raw += 20
     
+    mobile_score = min(100, mobile_raw)
     overall = int((nav_score + design_score + a11y_score + mobile_score)/4)
     
     return {
