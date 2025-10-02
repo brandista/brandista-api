@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Brandista Competitive Intelligence API - Complete Unified Version
-Version: 6.2.1 - Merged Baseline (analysis + robustness)
+Version: 6.2.0 - Merged Baseline (analysis + robustness)
 Author: Brandista Team
 Date: 2025
 Description: Complete production-ready website analysis with configurable scoring system and comprehensive SPA support
@@ -2076,15 +2076,27 @@ async def analyze_competitive_positioning(url: str, basic: Dict[str, Any]) -> Di
         }
     }
 
-# --- HUMANIZED HELPERS ---
-
 def _fmt_range(low: int, high: int, suffix: str) -> str:
     return f"{low}–{high} {suffix}"
 
 def _confidence_label(val: int) -> str:
     return "H" if val >= 75 else "M" if val >= 50 else "L"
 
-def compute_business_impact(basic: Dict[str, Any], content: Dict[str, Any], ux: Dict[str, Any]) -> BusinessImpact:
+def compute_business_impact(
+    basic: Dict[str, Any], 
+    content: Dict[str, Any], 
+    ux: Dict[str, Any],
+    estimated_annual_revenue: int = 750_000  # Default: 750k€ medium business
+) -> BusinessImpact:
+    """
+    Compute realistic business impact with actual revenue estimation.
+    
+    Args:
+        estimated_annual_revenue: Company's estimated annual revenue (default 750k€)
+    
+    Returns:
+        BusinessImpact with realistic lead and revenue projections
+    """
     score = basic.get('digital_maturity_score', 0)
     seo_pts = basic.get('score_breakdown', {}).get('seo_basics', 0)
     mob_pts = basic.get('score_breakdown', {}).get('mobile', 0)
@@ -2098,38 +2110,145 @@ def compute_business_impact(basic: Dict[str, Any], content: Dict[str, Any], ux: 
     content_score = content.get('content_quality_score', 0)
     ux_score = ux.get('overall_ux_score', 0)
 
-    # Maltillinen heuristiikka
-    lead_low = max(3, (seo_pct + content_score) // 40)     # esim. 3–15 liidiä/kk
+    # LEAD GENERATION (säilytetään alkuperäinen)
+    lead_low = max(3, (seo_pct + content_score) // 40)
     lead_high = max(lead_low + 2, (seo_pct + content_score) // 25)
-    rev_low = max(1, (mobile_pct + ux_score) // 60)        # +1–12%
-    rev_high = min(12, (mobile_pct + ux_score) // 35)
+
+    # REVENUE CALCULATION (korjattu)
+    # Digitaalisten parannusten vaikutus: 0.5% per 10 pistettä parannusta
+    score_improvement_potential = max(10, 90 - score)
+    
+    # Kasvuprosentti: 4-7% kun 10 pisteen parannus
+    growth_rate_low = (score_improvement_potential * 0.4) / 100
+    growth_rate_high = (score_improvement_potential * 0.7) / 100
+    
+    # Euromääräinen vuotuinen arvio
+    revenue_impact_low = int(estimated_annual_revenue * growth_rate_low)
+    revenue_impact_high = int(estimated_annual_revenue * growth_rate_high)
+    
+    # Kuukausittainen breakdown
+    monthly_low = revenue_impact_low // 12
+    monthly_high = revenue_impact_high // 12
+
+    # Format revenue range nicely
+    def format_currency(amount: int) -> str:
+        if amount >= 1_000_000:
+            return f"€{amount/1_000_000:.1f}M"
+        elif amount >= 1000:
+            return f"€{amount//1000}k"
+        else:
+            return f"€{amount}"
+
+    revenue_range = (
+        f"{format_currency(revenue_impact_low)}–{format_currency(revenue_impact_high)}/year "
+        f"({format_currency(monthly_low)}–{format_currency(monthly_high)}/mo)"
+    )
 
     return BusinessImpact(
         lead_gain_estimate=_fmt_range(lead_low, lead_high, "leads/mo"),
-        revenue_uplift_range=f"+{_fmt_range(rev_low, rev_high, '% revenue')}",
+        revenue_uplift_range=revenue_range,
         confidence=_confidence_label(score),
-        customer_trust_effect="Improves perceived quality (NPS +2–4)" if basic.get('modernity_score', 0) >= 50 else "Small positive trust signal"
+        customer_trust_effect=(
+            "Improves perceived quality (NPS +2–4)" 
+            if basic.get('modernity_score', 0) >= 50 
+            else "Small positive trust signal"
+        )
     )
 
 def build_role_summaries(url: str, basic: Dict[str, Any], impact: BusinessImpact) -> RoleSummaries:
+    """Generate role-specific summaries based on actual analysis findings"""
     s = basic.get('digital_maturity_score', 0)
+    breakdown = basic.get('score_breakdown', {})
+    
     state = ("leader" if s >= 75 else "strong" if s >= 60 else "baseline" if s >= 45 else "early")
+    
+    # Identify top priorities dynamically by calculating completion percentage
+    weights = SCORING_CONFIG.weights
+    completion = {
+        'security': (breakdown.get('security', 0) / weights['security']) * 100 if weights['security'] > 0 else 100,
+        'seo': (breakdown.get('seo_basics', 0) / weights['seo_basics']) * 100 if weights['seo_basics'] > 0 else 100,
+        'content': (breakdown.get('content', 0) / weights['content']) * 100 if weights['content'] > 0 else 100,
+        'mobile': (breakdown.get('mobile', 0) / weights['mobile']) * 100 if weights['mobile'] > 0 else 100,
+        'technical': (breakdown.get('technical', 0) / weights['technical']) * 100 if weights['technical'] > 0 else 100,
+    }
+    
+    # Sort by lowest completion (biggest gaps = highest priority)
+    sorted_gaps = sorted(completion.items(), key=lambda x: x[1])
+    top_gaps = [gap[0] for gap in sorted_gaps[:3]]
+    
+    # Map categories to actionable business language
+    action_map = {
+        'security': 'SSL + security headers',
+        'seo': 'SEO fundamentals',
+        'content': 'content depth',
+        'mobile': 'mobile UX',
+        'technical': 'technical SEO + analytics',
+    }
+    
+    priority_items = [action_map.get(gap, gap) for gap in top_gaps]
+    
+    # Ensure at least 2 priorities exist (fallback for edge cases)
+    if len(priority_items) < 2:
+        priority_items.extend(['technical SEO', 'content optimization'])
+    
+    # CEO: Strategic overview with top 2 priorities
+    ceo_summary = (
+        f"We are at {s}/100 ({state}). "
+        f"Top priorities: {priority_items[0]}, {priority_items[1]}. "
+        f"If we ship these fixes, we can unlock {impact.revenue_uplift_range} "
+        f"and {impact.lead_gain_estimate}. Focus: one change per week."
+    )
+    
+    # CMO: Growth levers based on actual gaps
+    cmo_focus = []
+    if 'seo' in top_gaps or 'content' in top_gaps:
+        cmo_focus.append(f"SEO + content → {impact.lead_gain_estimate}")
+    if 'mobile' in top_gaps:
+        cmo_focus.append(f"mobile UX → better conversion")
+    if not cmo_focus:
+        cmo_focus.append(f"Conversion optimization → {impact.revenue_uplift_range}")
+    
+    cmo_summary = (
+        f"Growth levers: {' + '.join(cmo_focus)}. "
+        f"Target: {impact.revenue_uplift_range}. Track weekly progress on lead quality."
+    )
+    
+    # CTO: Technical priorities based on gaps and SPA detection
+    cto_priorities = []
+    if 'security' in top_gaps:
+        cto_priorities.append("SSL + security headers")
+    if 'mobile' in top_gaps:
+        cto_priorities.append("Core Web Vitals (LCP, CLS)")
+    if 'technical' in top_gaps:
+        cto_priorities.append("analytics + technical SEO")
+    
+    # Add SPA-specific recommendation if applicable
+    if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
+        cto_priorities.insert(0, "SSR/prerender for SPA")
+    
+    # Fallback if no major gaps
+    if not cto_priorities:
+        cto_priorities = ["defer non-critical JS", "optimize images"]
+    
+    cto_summary = (
+        f"Prioritize: {', '.join(cto_priorities[:3])}. "
+        f"Ship one technical win per sprint."
+    )
+    
     return RoleSummaries(
-        CEO=f"We are at {s}/100 ({state}). If we ship the top fixes, we can unlock {impact.revenue_uplift_range} and {impact.lead_gain_estimate}. Focus: one change per week.",
-        CMO=f"Growth levers: SEO fundamentals + content depth → {impact.lead_gain_estimate}. Conversion: mobile & UX to target {impact.revenue_uplift_range}.",
-        CTO=f"Prioritize CWV/LCP, defer non-critical JS, analytics hygiene. If SPA, add SSR/prerender for critical routes."
+        CEO=ceo_summary,
+        CMO=cmo_summary,
+        CTO=cto_summary
     )
 
 def build_plan_90d(basic: Dict[str, Any], content: Dict[str, Any], technical: Dict[str, Any], language: str = 'en') -> Plan90D:
-    """Build a realistic week-by-week 90-day execution plan with i18n support"""
+    """Build a realistic week-by-week 90-day execution plan dynamically based on actual gaps"""
     score = basic.get('digital_maturity_score', 0)
     breakdown = basic.get('score_breakdown', {})
     
-    # Translations dictionary
+    # Translations dictionary - TÄYSI TOTEUTUS
     translations = {
         'en': {
-            'week': 'Week',
-            'weeks': 'Weeks',
             'actions': {
                 'ssl_install': 'Week 1: Install SSL certificate + enable HTTPS redirect',
                 'security_headers': 'Week 2: Configure security headers (CSP, HSTS, X-Frame-Options)',
@@ -2143,13 +2262,13 @@ def build_plan_90d(basic: Dict[str, Any], content: Dict[str, Any], technical: Di
                 'content_update': 'Week 5-6: Update existing content - refresh dates, add internal links',
                 'faq_schema': 'Week 7: Add FAQ schema markup to key pages',
                 'sitemap_submit': 'Week 8: Build XML sitemap + submit to Search Console',
-                'ssr_research': 'Week 7-8: Research SSR/prerendering options for SPA (implementation in Wave 3)',
+                'ssr_research': 'Week 7-8: Research SSR/prerendering options for SPA',
                 'content_publish': 'Week 9-10: Publish remaining 3 pillar articles + 6 cluster posts',
-                'internal_linking': 'Week 11: Build internal linking structure between pillar/cluster content',
+                'internal_linking': 'Week 11: Build internal linking structure',
                 'ab_testing': 'Week 9-10: A/B test top 3 landing pages (headlines, CTAs)',
                 'ssr_implement': 'Week 10-11: Implement SSR/prerendering for critical routes',
                 'cwv_optimize': 'Week 10: Optimize Core Web Vitals (LCP < 2.5s, CLS < 0.1)',
-                'conversion_tracking': 'Week 11-12: Set up conversion tracking + build GA4 dashboard',
+                'conversion_tracking': 'Week 11-12: Set up conversion tracking + GA4 dashboard',
                 'review_metrics': 'Week 12: Review metrics, document wins, plan Q2 priorities',
             },
             'one_thing': {
@@ -2161,36 +2280,34 @@ def build_plan_90d(basic: Dict[str, Any], content: Dict[str, Any], technical: Di
             }
         },
         'fi': {
-            'week': 'Viikko',
-            'weeks': 'Viikot',
             'actions': {
-                'ssl_install': 'Viikko 1: Asenna SSL-sertifikaatti + ota käyttöön HTTPS-uudelleenohjaus',
+                'ssl_install': 'Viikko 1: Asenna SSL-sertifikaatti + HTTPS-uudelleenohjaus',
                 'security_headers': 'Viikko 2: Määritä turvallisuusotsikot (CSP, HSTS, X-Frame-Options)',
-                'ga4_install': 'Viikko 1: Asenna GA4 + määrittele 3-5 keskeistä konversiota',
-                'seo_audit': 'Viikko {w}: Tarkasta & korjaa otsikot/meta-kuvaukset 10 parhaalla sivulla',
-                'heading_fix': 'Viikko {w}: Lisää puuttuvat H1-tagit + korjaa otsikkohierarkia',
-                'viewport_meta': 'Viikko {w}: Lisää viewport meta + testaa responsiiviset keskeytyskohdat',
-                'compress_images': 'Viikko {w}: Pakkaa kuvat 10 parhaalla sivulla + ota käyttöön lazy loading',
-                'content_research': 'Viikko 5-6: Tutki & hahmottele 6 pilari-sisältöaihetta (avainsana-analyysi)',
-                'content_write': 'Viikko 7-8: Kirjoita & julkaise ensimmäiset 3 pilariartikkelia (2000+ sanaa)',
-                'content_update': 'Viikko 5-6: Päivitä olemassa oleva sisältö - päivitä päivämäärät, lisää sisäisiä linkkejä',
+                'ga4_install': 'Viikko 1: Asenna GA4 + määrittele 3-5 konversiota',
+                'seo_audit': 'Viikko {w}: Tarkasta & korjaa otsikot/meta-kuvaukset 10 sivulla',
+                'heading_fix': 'Viikko {w}: Lisää H1-tagit + korjaa otsikkohierarkia',
+                'viewport_meta': 'Viikko {w}: Lisää viewport meta + testaa responsiivisuus',
+                'compress_images': 'Viikko {w}: Pakkaa kuvat + ota käyttöön lazy loading',
+                'content_research': 'Viikko 5-6: Tutki 6 pilari-sisältöaihetta (avainsanat)',
+                'content_write': 'Viikko 7-8: Kirjoita & julkaise 3 pilariartikkelia (2000+ sanaa)',
+                'content_update': 'Viikko 5-6: Päivitä sisältö - päivämäärät, sisäiset linkit',
                 'faq_schema': 'Viikko 7: Lisää FAQ schema-merkintä avainsivuille',
                 'sitemap_submit': 'Viikko 8: Rakenna XML-sivukartta + lähetä Search Consoleen',
-                'ssr_research': 'Viikko 7-8: Tutki SSR/esirenderöintivaihtoehdot SPA:lle (toteutus Vaihe 3:ssa)',
-                'content_publish': 'Viikko 9-10: Julkaise loput 3 pilariartikkelia + 6 klusteripostausta',
-                'internal_linking': 'Viikko 11: Rakenna sisäinen linkitysrakenne pilari/klusteri-sisällön välille',
-                'ab_testing': 'Viikko 9-10: A/B-testaa 3 parasta aloitussivua (otsikot, CTA:t)',
-                'ssr_implement': 'Viikko 10-11: Ota käyttöön SSR/esirenderöinti kriittisille reiteille',
+                'ssr_research': 'Viikko 7-8: Tutki SSR/esirenderöintivaihtoehdot SPA:lle',
+                'content_publish': 'Viikko 9-10: Julkaise loput 3 artikkelia + 6 klusteripostausta',
+                'internal_linking': 'Viikko 11: Rakenna sisäinen linkitysrakenne',
+                'ab_testing': 'Viikko 9-10: A/B-testaa 3 aloitussivua (otsikot, CTA:t)',
+                'ssr_implement': 'Viikko 10-11: Ota käyttöön SSR/esirenderöinti',
                 'cwv_optimize': 'Viikko 10: Optimoi Core Web Vitals (LCP < 2.5s, CLS < 0.1)',
-                'conversion_tracking': 'Viikko 11-12: Aseta konversiontaseuranta + rakenna GA4-dashboard',
-                'review_metrics': 'Viikko 12: Tarkista mittarit, dokumentoi voitot, suunnittele Q2-prioriteetit',
+                'conversion_tracking': 'Viikko 11-12: Aseta konversiontaseuranta + GA4-dashboard',
+                'review_metrics': 'Viikko 12: Tarkista mittarit, dokumentoi voitot',
             },
             'one_thing': {
                 'ssl': 'Asenna SSL-sertifikaatti (estää kaiken muun)',
                 'analytics': 'Asenna GA4-seuranta (tarvitaan dataa päätöksiin)',
-                'seo': 'Korjaa otsikot & metat 10 parhaalla sivullasi',
-                'content': 'Hahmottele ensimmäinen pilariartikkelin aihe',
-                'default': 'Suorita Lighthouse-auditointi 5 parhaalle sivulle, merkitse 3 tärkeintä ongelmaa'
+                'seo': 'Korjaa otsikot & metat 10 sivullasi',
+                'content': 'Hahmottele ensimmäinen pilariartikkeli',
+                'default': 'Suorita Lighthouse-auditointi 5 sivulle'
             }
         }
     }
@@ -2199,79 +2316,80 @@ def build_plan_90d(basic: Dict[str, Any], content: Dict[str, Any], technical: Di
     actions = t['actions']
     one_thing_texts = t['one_thing']
     
-    # Determine priorities
-    priorities = []
-    if breakdown.get('security', 0) < 10:
-        priorities.append('security')
-    if breakdown.get('seo_basics', 0) < 12:
-        priorities.append('seo')
-    if breakdown.get('content', 0) < 10:
-        priorities.append('content')
-    if breakdown.get('mobile', 0) < 10:
-        priorities.append('mobile')
-    if not technical.get('has_analytics'):
-        priorities.append('analytics')
+    # DYNAAMINEN PRIORISOINTI
+    weights = SCORING_CONFIG.weights
+    completion = {
+        'security': (breakdown.get('security', 0) / weights['security']) * 100 if weights['security'] > 0 else 100,
+        'seo': (breakdown.get('seo_basics', 0) / weights['seo_basics']) * 100 if weights['seo_basics'] > 0 else 100,
+        'content': (breakdown.get('content', 0) / weights['content']) * 100 if weights['content'] > 0 else 100,
+        'mobile': (breakdown.get('mobile', 0) / weights['mobile']) * 100 if weights['mobile'] > 0 else 100,
+        'technical': (breakdown.get('technical', 0) / weights['technical']) * 100 if weights['technical'] > 0 else 100,
+    }
     
-    if not priorities:
-        priorities = ['content', 'ux', 'performance']
+    sorted_priorities = sorted(completion.items(), key=lambda x: x[1])
+    top_priorities = [p[0] for p in sorted_priorities if p[1] < 70][:3]
     
-    # Wave 1 (Weeks 1-4): Foundation
+    if not technical.get('has_analytics') and 'technical' not in top_priorities:
+        top_priorities.append('analytics')
+    
+    if not top_priorities:
+        top_priorities = ['content', 'mobile', 'technical']
+    
+    # === WAVE 1 (Weeks 1-4): FOUNDATION ===
     wave_1 = []
-    week_counter = 1
+    week = 1
     
-    if 'security' in priorities:
-        wave_1.extend([
-            actions['ssl_install'],
-            actions['security_headers'],
-        ])
-        week_counter = 3
+    if 'security' in top_priorities and completion.get('security', 100) < 30:
+        wave_1.extend([actions['ssl_install'], actions['security_headers']])
+        week = 3
     
-    if 'analytics' in priorities:
+    if 'analytics' in top_priorities or not technical.get('has_analytics'):
         wave_1.append(actions['ga4_install'])
-        week_counter = max(week_counter, 2)
+        week = max(week, 2)
     
-    if 'seo' in priorities:
-        wave_1.extend([
-            actions['seo_audit'].format(w=week_counter if week_counter <= 3 else '3'),
-            actions['heading_fix'].format(w=week_counter + 1 if week_counter <= 3 else '4'),
-        ])
+    if 'seo' in top_priorities:
+        wave_1.append(actions['seo_audit'].format(w=week))
+        wave_1.append(actions['heading_fix'].format(w=week+1))
+        week += 2
     
-    if 'mobile' in priorities:
-        wave_1.append(actions['viewport_meta'].format(w='3-4' if len(wave_1) >= 2 else '2'))
+    if 'mobile' in top_priorities and completion.get('mobile', 100) < 50:
+        wave_1.append(actions['viewport_meta'].format(w=week))
     
-    # Pad to 4-5 items
-    while len(wave_1) < 4:
-        wave_1.append(actions['compress_images'].format(w=len(wave_1) + 1))
-        break
+    if len(wave_1) < 4:
+        wave_1.append(actions['compress_images'].format(w=4))
     
-    # Wave 2 (Weeks 5-8): Content & Technical SEO
+    # === WAVE 2 (Weeks 5-8): CONTENT & TECHNICAL SEO ===
     wave_2 = []
     
-    if 'content' in priorities:
-        wave_2.extend([
-            actions['content_research'],
-            actions['content_write'],
-        ])
-    else:
-        wave_2.extend([
-            actions['content_update'],
-            actions['faq_schema'],
-        ])
+    # Sisältöstrategia
+    if 'content' in top_priorities:
+        if content.get('word_count', 0) < 500:
+            wave_2.extend([actions['content_research'], actions['content_write']])
+        else:
+            wave_2.append(actions['content_update'])
     
-    if 'seo' in priorities or not content:
-        wave_2.append(actions['sitemap_submit'])
+    # Technical SEO - KORJATTU logiikka
+    if 'seo' in top_priorities or 'technical' in top_priorities:
+        # Lisää FAQ schema jos ei jo täynnä
+        if len(wave_2) < 3:
+            wave_2.append(actions['faq_schema'])
+        # Lisää sitemap jos ei jo täynnä
+        if len(wave_2) < 4:
+            wave_2.append(actions['sitemap_submit'])
     
+    # SPA-ongelma
     if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
-        wave_2.append(actions['ssr_research'])
+        if len(wave_2) < 4:
+            wave_2.append(actions['ssr_research'])
     
-    # Wave 3 (Weeks 9-12): Scale & Optimize
+    # Varmista max 4
+    wave_2 = wave_2[:4]
+    
+    # === WAVE 3 (Weeks 9-12): SCALE ===
     wave_3 = []
     
-    if 'content' in priorities:
-        wave_3.extend([
-            actions['content_publish'],
-            actions['internal_linking'],
-        ])
+    if 'content' in top_priorities:
+        wave_3.extend([actions['content_publish'], actions['internal_linking']])
     else:
         wave_3.append(actions['ab_testing'])
     
@@ -2280,19 +2398,16 @@ def build_plan_90d(basic: Dict[str, Any], content: Dict[str, Any], technical: Di
     else:
         wave_3.append(actions['cwv_optimize'])
     
-    wave_3.extend([
-        actions['conversion_tracking'],
-        actions['review_metrics'],
-    ])
+    wave_3.extend([actions['conversion_tracking'], actions['review_metrics']])
     
-    # One thing this week
-    if 'security' in priorities:
+    # === ONE THING ===
+    if 'security' in top_priorities and completion.get('security', 100) < 30:
         one_thing = one_thing_texts['ssl']
-    elif 'analytics' in priorities:
+    elif not technical.get('has_analytics'):
         one_thing = one_thing_texts['analytics']
-    elif 'seo' in priorities:
+    elif 'seo' in top_priorities:
         one_thing = one_thing_texts['seo']
-    elif 'content' in priorities:
+    elif 'content' in top_priorities:
         one_thing = one_thing_texts['content']
     else:
         one_thing = one_thing_texts['default']
@@ -2381,7 +2496,7 @@ def build_snippet_examples(url: str, basic: Dict[str, Any]) -> SnippetExamples:
 # ============================================================================
 
 async def generate_ai_insights(url: str, basic: Dict[str, Any], technical: Dict[str, Any], content: Dict[str, Any], ux: Dict[str, Any], social: Dict[str, Any], language: str = 'en') -> AIAnalysis:
-    """Generate comprehensive AI-powered insights"""
+    
     """Generate comprehensive AI-powered insights"""
     overall = basic.get('digital_maturity_score', 0)
     spa_detected = basic.get('spa_detected', False)
