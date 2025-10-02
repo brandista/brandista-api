@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Brandista Competitive Intelligence API - Complete Unified Version
-Version: 6.2.0 - Merged Baseline (analysis + robustness)
+Version: 6.2.1 - Merged Baseline (analysis + robustness)
 Author: Brandista Team
 Date: 2025
 Description: Complete production-ready website analysis with configurable scoring system and comprehensive SPA support
@@ -3220,7 +3220,7 @@ async def basic_analyze(request: CompetitorAnalysisRequest, user: UserInfo = Dep
         logger.error(f"Basic analysis error: {e}", exc_info=True)
         raise HTTPException(500, "Analysis failed due to internal error")
 
-# ============================================================================
+## ============================================================================
 # SYSTEM AND ADMIN ENDPOINTS
 # ============================================================================
 
@@ -3323,6 +3323,57 @@ async def admin_update_quota(username: str, payload: QuotaUpdateRequest, user: U
         search_limit=USERS_DB[username]["search_limit"],
         searches_used=user_search_counts.get(username, 0),
     )
+
+# ============================================================================
+# NEW: USER MANAGEMENT ENDPOINTS
+# ============================================================================
+
+class UserCreateRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=50, pattern="^[a-zA-Z0-9_-]+$")
+    password: str = Field(..., min_length=6)
+    role: str = Field("user", pattern="^(user|admin)$")
+    search_limit: int = Field(3, ge=-1)
+
+@app.post("/admin/users", response_model=UserQuotaView)
+async def admin_create_user(payload: UserCreateRequest, user: UserInfo = Depends(require_admin)):
+    """Create a new user (admin only)"""
+    if payload.username in USERS_DB:
+        raise HTTPException(400, f"User '{payload.username}' already exists")
+    
+    USERS_DB[payload.username] = {
+        "username": payload.username,
+        "hashed_password": pwd_context.hash(payload.password),
+        "role": payload.role,
+        "search_limit": payload.search_limit
+    }
+    
+    logger.info(f"Admin {user.username} created user: {payload.username} (role={payload.role}, limit={payload.search_limit})")
+    
+    return UserQuotaView(
+        username=payload.username,
+        role=payload.role,
+        search_limit=payload.search_limit,
+        searches_used=0
+    )
+
+@app.delete("/admin/users/{username}")
+async def admin_delete_user(username: str, user: UserInfo = Depends(require_admin)):
+    """Delete a user (admin only)"""
+    if username not in USERS_DB:
+        raise HTTPException(404, "User not found")
+    
+    if username == "admin":
+        raise HTTPException(403, "Cannot delete admin user")
+    
+    if username == user.username:
+        raise HTTPException(403, "Cannot delete yourself")
+    
+    del USERS_DB[username]
+    user_search_counts.pop(username, None)
+    
+    logger.info(f"Admin {user.username} deleted user: {username}")
+    
+    return {"ok": True, "message": f"User '{username}' deleted successfully"}
 
 # ============================================================================
 # MAIN APPLICATION ENTRY POINT
