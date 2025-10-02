@@ -3634,7 +3634,7 @@ async def ai_analyze_comprehensive(
         sb_with_aliases = create_score_breakdown_with_aliases(basic_analysis.get('score_breakdown', {}))
 
         # Generate AI insights and features
-        ai_analysis = await generate_ai_insights( url, basic_analysis, technical_audit, content_analysis, ux_analysis, social_analysis, html_content,  # ADD THIS language=request.language)
+        ai_analysis = await generate_ai_insights(url, basic_analysis, technical_audit, content_analysis, ux_analysis, social_analysis, html_content, language=request.language)
         enhanced_features = await generate_enhanced_features(url, basic_analysis, technical_audit, content_analysis, social_analysis)
         enhanced_features["admin_features_enabled"] = (user.role == "admin")
         smart_actions = generate_smart_actions(ai_analysis, technical_audit, content_analysis, basic_analysis)
