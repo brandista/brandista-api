@@ -847,6 +847,23 @@ class SnippetExamples(BaseModel):
     h1_intro: List[str] = []
     product_copy: List[str] = []
 
+class AISearchFactor(BaseModel):
+    name: str
+    score: int = Field(0, ge=0, le=100)
+    status: str  # "excellent" | "good" | "needs_improvement" | "poor"
+    findings: List[str] = []
+    recommendations: List[str] = []
+
+class AISearchVisibility(BaseModel):
+    chatgpt_readiness_score: int = Field(0, ge=0, le=100)
+    perplexity_readiness_score: int = Field(0, ge=0, le=100)
+    overall_ai_search_score: int = Field(0, ge=0, le=100)
+    competitive_advantage: str = "First Nordic company to systematically analyze AI search readiness"
+    validation_status: str = "estimated"  # "estimated" | "validated" | "monitored"
+    factors: Dict[str, AISearchFactor] = {}
+    key_insights: List[str] = []
+    priority_actions: List[str] = []
+
 class AIAnalysis(BaseModel):
     summary: str = ""
     strengths: List[str] = []
@@ -1739,7 +1756,7 @@ async def get_website_content(
 
                 # Go and wait for network to be (nearly) idle
                 
-                # Try cookie banner auto-dismiss (best-effort)
+                
                 # Try cookie banner auto-dismiss (best-effort)
                 if COOKIE_AUTO_DISMISS:
                     try:
@@ -2086,13 +2103,13 @@ def compute_business_impact(
     basic: Dict[str, Any], 
     content: Dict[str, Any], 
     ux: Dict[str, Any],
-    estimated_annual_revenue: int = 750_000  # Default: 750k€ medium business
+    estimated_annual_revenue: int = 450_000  # €450k = EU SME keskiarvo
 ) -> BusinessImpact:
     """
     Compute realistic business impact with actual revenue estimation.
     
     Args:
-        estimated_annual_revenue: Company's estimated annual revenue (default 750k€)
+        estimated_annual_revenue: Company's estimated annual revenue (default 450k€ EU SME average)
     
     Returns:
         BusinessImpact with realistic lead and revenue projections
@@ -2114,11 +2131,11 @@ def compute_business_impact(
     lead_low = max(3, (seo_pct + content_score) // 40)
     lead_high = max(lead_low + 2, (seo_pct + content_score) // 25)
 
-    # REVENUE CALCULATION (korjattu)
-    # Digitaalisten parannusten vaikutus: 0.5% per 10 pistettä parannusta
+    # REVENUE CALCULATION (korjattu realistisiksi arvoiksi)
+    # Digitaalisten parannusten vaikutus: 0.4-0.7% per 10 pistettä parannusta
     score_improvement_potential = max(10, 90 - score)
     
-    # Kasvuprosentti: 4-7% kun 10 pisteen parannus
+    # Kasvuprosentti: 4-7% per 10 pisteen parannus
     growth_rate_low = (score_improvement_potential * 0.4) / 100
     growth_rate_high = (score_improvement_potential * 0.7) / 100
     
@@ -2489,14 +2506,447 @@ def build_snippet_examples(url: str, basic: Dict[str, Any]) -> SnippetExamples:
             "Problem → outcome → proof → CTA. Keep it scannable (40–80 words)."
         ]
     )
+# ============================================================================
+# AI SEARCH VISIBILITY ANALYSIS (NORDIC FIRST)
+# ============================================================================
+
+def _check_schema_markup(html: str, soup: BeautifulSoup) -> AISearchFactor:
+    """Analyze structured data quality for AI parsing"""
+    score = 0
+    findings = []
+    recommendations = []
+    
+    # Check for JSON-LD
+    jsonld_scripts = soup.find_all('script', type='application/ld+json')
+    if jsonld_scripts:
+        score += 40
+        findings.append(f"Found {len(jsonld_scripts)} JSON-LD schema blocks")
+        
+        # Parse and check schema types
+        schema_types = []
+        for script in jsonld_scripts:
+            try:
+                data = json.loads(script.string or '{}')
+                schema_type = data.get('@type', '')
+                if schema_type:
+                    schema_types.append(schema_type)
+            except:
+                pass
+        
+        if schema_types:
+            findings.append(f"Schema types: {', '.join(set(schema_types))}")
+            if 'FAQPage' in schema_types or 'QAPage' in schema_types:
+                score += 20
+                findings.append("FAQ/QA schema found - excellent for AI parsing")
+            if 'Organization' in schema_types:
+                score += 10
+                findings.append("Organization schema provides entity context")
+    else:
+        recommendations.append("Add JSON-LD structured data (especially FAQPage)")
+    
+    # Check for microdata/RDFa
+    if soup.find_all(attrs={'itemtype': True}):
+        score += 10
+        findings.append("Microdata markup detected")
+    
+    # Check Open Graph
+    og_tags = soup.find_all('meta', property=lambda x: x and x.startswith('og:'))
+    if len(og_tags) >= 4:
+        score += 15
+        findings.append(f"Rich Open Graph metadata ({len(og_tags)} tags)")
+    elif og_tags:
+        score += 5
+        recommendations.append("Expand Open Graph metadata coverage")
+    
+    if score < 30:
+        recommendations.append("Implement comprehensive schema markup strategy")
+    
+    status = "excellent" if score >= 70 else "good" if score >= 50 else "needs_improvement" if score >= 30 else "poor"
+    
+    return AISearchFactor(
+        name="Structured Data Quality",
+        score=score,
+        status=status,
+        findings=findings,
+        recommendations=recommendations
+    )
+
+def _check_semantic_structure(html: str, soup: BeautifulSoup) -> AISearchFactor:
+    """Analyze semantic HTML structure for AI comprehension"""
+    score = 0
+    findings = []
+    recommendations = []
+    
+    # Check semantic HTML5 elements
+    semantic_elements = {
+        'article': 15,
+        'section': 10,
+        'nav': 8,
+        'aside': 5,
+        'header': 8,
+        'footer': 5,
+        'main': 12
+    }
+    
+    found_elements = []
+    for element, points in semantic_elements.items():
+        if soup.find(element):
+            score += points
+            found_elements.append(element)
+    
+    if found_elements:
+        findings.append(f"Semantic HTML5 elements: {', '.join(found_elements)}")
+    else:
+        recommendations.append("Use semantic HTML5 elements (article, section, main)")
+    
+    # Check heading hierarchy
+    h1_count = len(soup.find_all('h1'))
+    h2_count = len(soup.find_all('h2'))
+    h3_count = len(soup.find_all('h3'))
+    
+    if h1_count == 1:
+        score += 10
+        findings.append("Proper H1 hierarchy (exactly 1)")
+    else:
+        recommendations.append(f"Fix H1 count (found {h1_count}, should be 1)")
+    
+    if h2_count >= 3:
+        score += 10
+        findings.append(f"Good content structure ({h2_count} H2 headings)")
+    elif h2_count >= 1:
+        score += 5
+    else:
+        recommendations.append("Add H2 headings to structure content")
+    
+    # Check for lists (AI models like structured lists)
+    lists = soup.find_all(['ul', 'ol'])
+    if len(lists) >= 3:
+        score += 10
+        findings.append(f"Well-structured content with {len(lists)} lists")
+    elif lists:
+        score += 5
+    
+    status = "excellent" if score >= 70 else "good" if score >= 50 else "needs_improvement" if score >= 30 else "poor"
+    
+    return AISearchFactor(
+        name="Semantic Structure",
+        score=min(100, score),
+        status=status,
+        findings=findings,
+        recommendations=recommendations
+    )
+
+def _assess_content_comprehensiveness(content: Dict[str, Any], html: str, soup: BeautifulSoup) -> AISearchFactor:
+    """Assess content depth and quality for AI training/citation"""
+    score = 0
+    findings = []
+    recommendations = []
+    
+    word_count = content.get('word_count', 0)
+    
+    # Word count scoring
+    if word_count >= 2500:
+        score += 40
+        findings.append(f"Comprehensive content ({word_count} words)")
+    elif word_count >= 1500:
+        score += 30
+        findings.append(f"Good content depth ({word_count} words)")
+    elif word_count >= 800:
+        score += 20
+        findings.append(f"Moderate content ({word_count} words)")
+    else:
+        score += 10
+        recommendations.append(f"Expand content depth (current: {word_count} words, target: 1500+)")
+    
+    # Check for FAQ/Q&A format (AI models love this)
+    faq_indicators = ['faq', 'frequently asked', 'questions', 'q&a', 'what is', 'how to', 'why']
+    html_lower = html.lower()
+    faq_matches = sum(1 for indicator in faq_indicators if indicator in html_lower)
+    
+    if faq_matches >= 3:
+        score += 25
+        findings.append("FAQ/Q&A format detected - ideal for AI parsing")
+    elif faq_matches >= 1:
+        score += 10
+        findings.append("Some conversational format detected")
+    else:
+        recommendations.append("Add FAQ section with question-answer pairs")
+    
+    # Check for definitions/explanations
+    definition_indicators = soup.find_all(['dl', 'dt', 'dd'])
+    if definition_indicators:
+        score += 10
+        findings.append("Definition lists found - clear explanations")
+    
+    # Check content freshness
+    freshness = content.get('content_freshness', 'unknown')
+    if freshness in ['very_fresh', 'fresh']:
+        score += 15
+        findings.append(f"Fresh content ({freshness})")
+    elif freshness == 'moderate':
+        score += 8
+    else:
+        recommendations.append("Update content with current year/dates")
+    
+    # Check for examples/case studies
+    example_keywords = ['example', 'case study', 'for instance', 'such as']
+    example_count = sum(html_lower.count(keyword) for keyword in example_keywords)
+    if example_count >= 5:
+        score += 10
+        findings.append("Rich with examples and case studies")
+    
+    status = "excellent" if score >= 75 else "good" if score >= 55 else "needs_improvement" if score >= 35 else "poor"
+    
+    return AISearchFactor(
+        name="Content Comprehensiveness",
+        score=min(100, score),
+        status=status,
+        findings=findings,
+        recommendations=recommendations
+    )
+
+def _check_authority_markers(technical: Dict[str, Any], basic: Dict[str, Any]) -> AISearchFactor:
+    """Check authority signals that AI models consider"""
+    score = 0
+    findings = []
+    recommendations = []
+    
+    # HTTPS (trust signal)
+    if basic.get('has_ssl', False):
+        score += 20
+        findings.append("HTTPS enabled - trusted source")
+    else:
+        recommendations.append("CRITICAL: Enable HTTPS for trust")
+    
+    # Security headers (additional trust)
+    security_headers = technical.get('security_headers', {})
+    if security_headers.get('csp'):
+        score += 10
+        findings.append("Content Security Policy configured")
+    if security_headers.get('strict_transport'):
+        score += 10
+        findings.append("HSTS enabled")
+    
+    # Analytics/tracking (shows site is monitored)
+    if technical.get('has_analytics', False):
+        score += 15
+        findings.append("Analytics tracking - monitored website")
+    else:
+        recommendations.append("Add analytics to demonstrate active monitoring")
+    
+    # Technical SEO basics
+    if technical.get('has_sitemap', False):
+        score += 10
+        findings.append("Sitemap available")
+    else:
+        recommendations.append("Add XML sitemap")
+    
+    if technical.get('has_robots_txt', False):
+        score += 5
+        findings.append("Robots.txt configured")
+    
+    # Overall digital maturity as authority proxy
+    maturity = basic.get('digital_maturity_score', 0)
+    if maturity >= 70:
+        score += 20
+        findings.append("High digital maturity indicates authority")
+    elif maturity >= 50:
+        score += 10
+    
+    # Performance (fast sites = better user experience = authority signal)
+    page_speed = technical.get('page_speed_score', 0)
+    if page_speed >= 70:
+        score += 10
+        findings.append("Fast page speed - good user experience")
+    
+    status = "excellent" if score >= 70 else "good" if score >= 50 else "needs_improvement" if score >= 30 else "poor"
+    
+    return AISearchFactor(
+        name="Authority Signals",
+        score=min(100, score),
+        status=status,
+        findings=findings,
+        recommendations=recommendations
+    )
+
+def _check_conversational_readiness(html: str, soup: BeautifulSoup, content: Dict[str, Any]) -> AISearchFactor:
+    """Check readiness for conversational AI queries"""
+    score = 0
+    findings = []
+    recommendations = []
+    
+    html_lower = html.lower()
+    
+    # Question-based headers
+    question_patterns = [
+        r'what is', r'how to', r'why', r'when', r'where', r'who',
+        r'mikä on', r'miten', r'miksi', r'milloin', r'missä', r'kuka'
+    ]
+    
+    headers = soup.find_all(['h1', 'h2', 'h3', 'h4'])
+    question_headers = []
+    for header in headers:
+        text = header.get_text().lower()
+        if any(re.search(pattern, text) for pattern in question_patterns):
+            question_headers.append(header.get_text()[:50])
+    
+    if len(question_headers) >= 5:
+        score += 30
+        findings.append(f"Excellent conversational format ({len(question_headers)} question-based headers)")
+    elif len(question_headers) >= 2:
+        score += 15
+        findings.append(f"Some conversational format ({len(question_headers)} Q&A headers)")
+    else:
+        recommendations.append("Structure content with question-based headings")
+    
+    # Direct answer format (looking for clear, concise answers)
+    sentences = content.get('word_count', 0) // 20  # Rough sentence count
+    if sentences >= 50:  # Enough content for good answers
+        score += 20
+        findings.append("Sufficient content depth for detailed answers")
+    
+    # Check for bullet points and numbered lists (easy for AI to parse)
+    lists = soup.find_all(['ul', 'ol'])
+    list_items = sum(len(l.find_all('li')) for l in lists)
+    if list_items >= 10:
+        score += 20
+        findings.append(f"Well-structured lists ({list_items} items) - easy AI parsing")
+    elif list_items >= 5:
+        score += 10
+    else:
+        recommendations.append("Add more structured lists for clarity")
+    
+    # Check for summary/conclusion sections
+    summary_indicators = ['summary', 'conclusion', 'key takeaways', 'yhteenveto', 'johtopäätös']
+    has_summary = any(indicator in html_lower for indicator in summary_indicators)
+    if has_summary:
+        score += 15
+        findings.append("Summary/conclusion section found")
+    else:
+        recommendations.append("Add summary section for key takeaways")
+    
+    # Check readability
+    readability = content.get('readability_score', 50)
+    if readability >= 70:
+        score += 15
+        findings.append("Good readability - clear for AI parsing")
+    elif readability >= 50:
+        score += 8
+    else:
+        recommendations.append("Improve readability (shorter sentences, clearer language)")
+    
+    status = "excellent" if score >= 75 else "good" if score >= 55 else "needs_improvement" if score >= 35 else "poor"
+    
+    return AISearchFactor(
+        name="Conversational Readiness",
+        score=min(100, score),
+        status=status,
+        findings=findings,
+        recommendations=recommendations
+    )
+
+async def analyze_ai_search_visibility(
+    url: str,
+    html: str,
+    basic: Dict[str, Any],
+    technical: Dict[str, Any],
+    content: Dict[str, Any],
+    social: Dict[str, Any]
+) -> AISearchVisibility:
+    """
+    Complete AI search visibility analysis
+    Nordic First: Systematic analysis of ChatGPT & Perplexity readiness
+    """
+    
+    soup = BeautifulSoup(html, 'html.parser')
+    
+    # Run all factor analyses
+    factors = {
+        'structured_data': _check_schema_markup(html, soup),
+        'semantic_structure': _check_semantic_structure(html, soup),
+        'content_depth': _assess_content_comprehensiveness(content, html, soup),
+        'authority_signals': _check_authority_markers(technical, basic),
+        'conversational_format': _check_conversational_readiness(html, soup, content)
+    }
+    
+    # Calculate overall scores
+    factor_scores = [f.score for f in factors.values()]
+    overall_score = int(sum(factor_scores) / len(factor_scores))
+    
+    # ChatGPT readiness (emphasizes content depth + structure)
+    chatgpt_score = int(
+        factors['content_depth'].score * 0.35 +
+        factors['structured_data'].score * 0.25 +
+        factors['conversational_format'].score * 0.20 +
+        factors['semantic_structure'].score * 0.15 +
+        factors['authority_signals'].score * 0.05
+    )
+    
+    # Perplexity readiness (emphasizes authority + freshness)
+    perplexity_score = int(
+        factors['authority_signals'].score * 0.30 +
+        factors['content_depth'].score * 0.25 +
+        factors['structured_data'].score * 0.20 +
+        factors['semantic_structure'].score * 0.15 +
+        factors['conversational_format'].score * 0.10
+    )
+    
+    # Generate key insights
+    key_insights = []
+    priority_actions = []
+    
+    # Find weakest factors
+    weak_factors = [(name, factor) for name, factor in factors.items() if factor.score < 50]
+    strong_factors = [(name, factor) for name, factor in factors.items() if factor.score >= 70]
+    
+    if strong_factors:
+        key_insights.append(f"Strong in: {', '.join(f[1].name for f in strong_factors[:2])}")
+    
+    if weak_factors:
+        key_insights.append(f"Improvement needed: {', '.join(f[1].name for f in weak_factors[:2])}")
+        for name, factor in weak_factors[:3]:
+            if factor.recommendations:
+                priority_actions.extend(factor.recommendations[:2])
+    
+    # Add specific insights based on scores
+    if chatgpt_score < 50:
+        key_insights.append("Limited ChatGPT citation likelihood - focus on content depth and Q&A format")
+    elif chatgpt_score >= 70:
+        key_insights.append("Good ChatGPT readiness - likely to be cited in relevant queries")
+    
+    if perplexity_score < 50:
+        key_insights.append("Weak Perplexity ranking signals - strengthen authority markers")
+    elif perplexity_score >= 70:
+        key_insights.append("Strong Perplexity positioning - authoritative source signals present")
+    
+    # Nordic first positioning
+    if overall_score >= 70:
+        key_insights.append("🌟 Above-average AI search readiness - competitive advantage in Nordics")
+    
+    return AISearchVisibility(
+        chatgpt_readiness_score=chatgpt_score,
+        perplexity_readiness_score=perplexity_score,
+        overall_ai_search_score=overall_score,
+        factors={name: factor.dict() for name, factor in factors.items()},
+        key_insights=key_insights[:5],
+        priority_actions=priority_actions[:5]
+    )
     
 
 # ============================================================================
 # COMPLETE AI INSIGHTS AND ENHANCED FEATURES
 # ============================================================================
 
-async def generate_ai_insights(url: str, basic: Dict[str, Any], technical: Dict[str, Any], content: Dict[str, Any], ux: Dict[str, Any], social: Dict[str, Any], language: str = 'en') -> AIAnalysis:
-    
+async def generate_ai_insights(
+    url: str, 
+    basic: Dict[str, Any], 
+    technical: Dict[str, Any], 
+    content: Dict[str, Any], 
+    ux: Dict[str, Any], 
+    social: Dict[str, Any],
+    html: str,  # ADD THIS PARAMETER
+    language: str = 'en'
+) -> AIAnalysis:
     """Generate comprehensive AI-powered insights"""
     overall = basic.get('digital_maturity_score', 0)
     spa_detected = basic.get('spa_detected', False)
@@ -2538,13 +2988,19 @@ async def generate_ai_insights(url: str, basic: Dict[str, Any], technical: Dict[
                 insights['recommendations'] = base + cleaned[:5]
         except Exception as e:
             logger.warning(f"OpenAI enhancement failed: {e}")
-    # --- NEW: humanized layer fusion ---
+    
+    # --- Humanized layer fusion ---
     try:
         impact = compute_business_impact(basic, content, ux)
         role = build_role_summaries(url, basic, impact)
         plan = build_plan_90d(basic, content, technical, language=language)  
         risks = build_risk_register(basic, technical, content)
         snippets = build_snippet_examples(url, basic)
+        
+        # NEW: AI Search Visibility Analysis
+        ai_visibility = await analyze_ai_search_visibility(
+            url, html, basic, technical, content, social
+        )
 
         insights.update({
             "business_impact": impact.dict(),
@@ -2552,6 +3008,7 @@ async def generate_ai_insights(url: str, basic: Dict[str, Any], technical: Dict[
             "plan_90d": plan.dict(),
             "risk_register": [r.dict() for r in risks],
             "snippet_examples": snippets.dict(),
+            "ai_search_visibility": ai_visibility.dict()  # NEW
         })
     except Exception as e:
         logger.warning(f"Humanized layer build failed: {e}")
@@ -2690,7 +3147,7 @@ async def generate_enhanced_features(
     content: Dict[str, Any],
     social: Dict[str, Any]
 ) -> Dict[str, Any]:
-    """Generate all 9 enhanced features for complete frontend compatibility"""
+    """Generate all 10 enhanced features for complete frontend compatibility"""
     try:
         score = int(basic.get("digital_maturity_score", 0))
         breakdown = (basic.get("score_breakdown") or {})
@@ -2859,46 +3316,36 @@ async def generate_enhanced_features(
         }
 
         
-                # 9. Technology stack - Improved version combining both approaches
+        # 9. Technology stack
         detected = ["HTML5", "CSS3", "JavaScript"]
-
-        # Get SPA frameworks from modern features (6.2.0 approach)
         modern_features = basic.get('detailed_findings', {}).get('modern_features', {})
         spa_frameworks = modern_features.get('features', {}).get('spa_framework', [])
-
-        # Normalize framework names
+        
         framework_map = {
-            'react': 'React',
-            'nextjs': 'Next.js', 
-            'vue': 'Vue.js',
-            'angular': 'Angular',
-            'svelte': 'Svelte',
-            'nuxt': 'Nuxt.js'
+            'react': 'React', 'nextjs': 'Next.js', 'vue': 'Vue.js',
+            'angular': 'Angular', 'svelte': 'Svelte', 'nuxt': 'Nuxt.js'
         }
-
+        
         frameworks_detected = []
         for fw in spa_frameworks:
             fw_normalized = framework_map.get(str(fw).strip().lower(), str(fw))
             if fw_normalized not in detected:
                 detected.append(fw_normalized)
                 frameworks_detected.append(fw_normalized)
-
-        # Add media types (but exclude "images")
+        
         media_technologies = []
         for media in (content.get("media_types") or []):
             if media and media.lower() not in ['images', 'image']:
                 if media not in detected:
                     detected.append(media)
                     media_technologies.append(media)
-
-        # Add analytics tools
+        
         analytics_tools = []
         if technical.get("has_analytics"):
             if "Google Analytics" not in detected:
                 detected.append("Google Analytics")
                 analytics_tools.append("Google Analytics")
-
-        # Build technology stack with categorization (6.1.1 structure + 6.2.0 detection)
+        
         technology_stack = {
             "name": "Technology Stack",
             "value": f"{len(detected)} technologies detected",
@@ -2912,7 +3359,15 @@ async def generate_enhanced_features(
             "modernity": "modern" if basic.get('modernity_score', 0) > 60 else "standard"
         }
 
-        # PALAUTA KAIKKI ENHANCED FEATURES
+        # 10. AI Search Visibility - Placeholder (data comes from ai_analysis)
+        ai_search_visibility = {
+            "name": "AI Search Visibility",
+            "value": "Analysis in progress",
+            "description": "ChatGPT & Perplexity readiness - see AI Analysis section",
+            "note": "Full analysis available in ai_analysis.ai_search_visibility"
+        }
+
+        # PALAUTA KAIKKI 10 ENHANCED FEATURES
         return {
             "industry_benchmarking": industry_benchmarking,
             "competitor_gaps": competitor_gaps,
@@ -2922,12 +3377,12 @@ async def generate_enhanced_features(
             "estimated_traffic_rank": estimated_traffic_rank,
             "mobile_first_index_ready": mobile_first_index_ready,
             "core_web_vitals_assessment": core_web_vitals_assessment,
-            "technology_stack": technology_stack
+            "technology_stack": technology_stack,
+            "ai_search_visibility": ai_search_visibility  # ← LISÄTTY
         }
 
     except Exception as e:
         logger.error(f"Enhanced features generation failed: {e}")
-        # Palauta tyhjät featured jos virhe
         return {
             "industry_benchmarking": {"name": "Industry Benchmarking", "value": "N/A"},
             "competitor_gaps": {"name": "Competitor Gaps", "value": "N/A"},
@@ -2937,7 +3392,8 @@ async def generate_enhanced_features(
             "estimated_traffic_rank": {"name": "Traffic Estimate", "value": "N/A"},
             "mobile_first_index_ready": {"name": "Mobile-First Readiness", "value": "N/A"},
             "core_web_vitals_assessment": {"name": "Core Web Vitals", "value": "N/A"},
-            "technology_stack": {"name": "Technology Stack", "value": "N/A", "detected": []}
+            "technology_stack": {"name": "Technology Stack", "value": "N/A", "detected": []},
+            "ai_search_visibility": {"name": "AI Search Visibility", "value": "N/A"}  # ← LISÄTTY
         }
 
 def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], content: Dict[str, Any], basic: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -3178,7 +3634,7 @@ async def ai_analyze_comprehensive(
         sb_with_aliases = create_score_breakdown_with_aliases(basic_analysis.get('score_breakdown', {}))
 
         # Generate AI insights and features
-        ai_analysis = await generate_ai_insights(url, basic_analysis, technical_audit, content_analysis, ux_analysis, social_analysis, language=request.language)
+        ai_analysis = await generate_ai_insights( url, basic_analysis, technical_audit, content_analysis, ux_analysis, social_analysis, html_content,  # ADD THIS language=request.language)
         enhanced_features = await generate_enhanced_features(url, basic_analysis, technical_audit, content_analysis, social_analysis)
         enhanced_features["admin_features_enabled"] = (user.role == "admin")
         smart_actions = generate_smart_actions(ai_analysis, technical_audit, content_analysis, basic_analysis)
