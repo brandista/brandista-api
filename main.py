@@ -3008,21 +3008,15 @@ async def generate_ai_insights(
         plan = build_plan_90d(basic, content, technical, language=language)  
         risks = build_risk_register(basic, technical, content)
         snippets = build_snippet_examples(url, basic)
-        
-        # NEW: AI Search Visibility Analysis
-        ai_visibility = await analyze_ai_search_visibility(
-            url, html, basic, technical, content, social
-        )
 
         insights.update({
             "business_impact": impact.dict(),
             "role_summaries": role.dict(),
             "plan_90d": plan.dict(),
             "risk_register": [r.dict() for r in risks],
-            "snippet_examples": snippets.dict(),
-            "ai_search_visibility": ai_visibility.dict()  # NEW
+            "snippet_examples": snippets.dict()
         })
-    except Exception as e:  # ← CORRECT INDENTATION - aligned with 'try'
+    except Exception as e:
         logger.warning(f"Humanized layer build failed: {e}")
 
     # NEW: AI Search Visibility Analysis - SEPARATE try block
@@ -3033,7 +3027,6 @@ async def generate_ai_insights(
         insights["ai_search_visibility"] = ai_visibility.dict()
     except Exception as e:
         logger.error(f"AI Search Visibility analysis failed: {e}")
-        # Fallback placeholder
         insights["ai_search_visibility"] = {
             "chatgpt_readiness_score": 0,
             "perplexity_readiness_score": 0,
