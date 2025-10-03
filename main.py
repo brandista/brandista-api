@@ -3001,6 +3001,7 @@ async def generate_ai_insights(
             logger.warning(f"OpenAI enhancement failed: {e}")
     
     # --- Humanized layer fusion ---
+    # --- Humanized layer fusion ---
     try:
         impact = compute_business_impact(basic, content, ux)
         role = build_role_summaries(url, basic, impact)
@@ -3021,29 +3022,28 @@ async def generate_ai_insights(
             "snippet_examples": snippets.dict(),
             "ai_search_visibility": ai_visibility.dict()  # NEW
         })
-        except Exception as e:
+    except Exception as e:  # ← CORRECT INDENTATION - aligned with 'try'
         logger.warning(f"Humanized layer build failed: {e}")
 
-        # NEW: AI Search Visibility Analysis - ERILLINEN try block
+    # NEW: AI Search Visibility Analysis - SEPARATE try block
     try:
         ai_visibility = await analyze_ai_search_visibility(
-        url, html, basic, technical, content, social
+            url, html, basic, technical, content, social
         )
         insights["ai_search_visibility"] = ai_visibility.dict()
-        
     except Exception as e:
         logger.error(f"AI Search Visibility analysis failed: {e}")
         # Fallback placeholder
         insights["ai_search_visibility"] = {
-        "chatgpt_readiness_score": 0,
-        "perplexity_readiness_score": 0,
-        "overall_ai_search_score": 0,
-        "competitive_advantage": "Analysis unavailable",
-        "validation_status": "error",
-        "factors": {},
-        "key_insights": ["Analysis failed - see logs"],
-        "priority_actions": []
-    }
+            "chatgpt_readiness_score": 0,
+            "perplexity_readiness_score": 0,
+            "overall_ai_search_score": 0,
+            "competitive_advantage": "Analysis unavailable",
+            "validation_status": "error",
+            "factors": {},
+            "key_insights": ["Analysis failed - see logs"],
+            "priority_actions": []
+        }
 
     return AIAnalysis(**insights)
 
