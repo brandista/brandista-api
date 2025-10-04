@@ -3681,7 +3681,12 @@ async def ai_analyze_comprehensive(
         ai_analysis = await generate_ai_insights(url, basic_analysis, technical_audit, content_analysis, ux_analysis, social_analysis, html_content, language=request.language)
         enhanced_features = await generate_enhanced_features(url, basic_analysis, technical_audit, content_analysis, social_analysis)
         enhanced_features["admin_features_enabled"] = (user.role == "admin")
-        smart_actions = generate_smart_actions(ai_analysis, technical_audit, content_analysis, basic_analysis)
+
+        # ✅ Kopioi AI Search Visibility enhanced_features:iin
+        if hasattr(ai_analysis, 'ai_search_visibility') and ai_analysis.ai_search_visibility:
+            enhanced_features["ai_search_visibility"] = ai_analysis.ai_search_visibility
+
+        smart_actions = generate_smart_actions(ai_analysis, technical_audit, content_analysis, basic_analysis)                                                          
 
         # Add humanized layers with language support
         try:
