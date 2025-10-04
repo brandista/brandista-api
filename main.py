@@ -893,7 +893,7 @@ class AIAnalysis(BaseModel):
     plan_90d: Optional[Plan90D] = None
     risk_register: Optional[List[RiskItem]] = None
     snippet_examples: Optional[SnippetExamples] = None
-
+    ai_search_visibility: AISearchVisibility = Field(default_factory=lambda: AISearchVisibility())
 
 
 class SmartAction(BaseModel):
@@ -3024,7 +3024,7 @@ async def generate_ai_insights(
         ai_visibility = await analyze_ai_search_visibility(
             url, html, basic, technical, content, social
         )
-        insights["ai_search_visibility"] = ai_visibility.dict()
+        insights["ai_search_visibility"] = ai_visibility
     except Exception as e:
         logger.error(f"AI Search Visibility analysis failed: {e}")
         insights["ai_search_visibility"] = {
