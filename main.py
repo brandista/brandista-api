@@ -3403,13 +3403,8 @@ async def generate_enhanced_features(
             "modernity": "modern" if basic.get('modernity_score', 0) > 60 else "standard"
         }
 
-        # 10. AI Search Visibility - Placeholder (data comes from ai_analysis)
-        ai_search_visibility = {
-            "name": "AI Search Visibility",
-            "value": "Analysis in progress",
-            "description": "ChatGPT & Perplexity readiness - see AI Analysis section",
-            "note": "Full analysis available in ai_analysis.ai_search_visibility"
-        }
+        
+        
 
         # PALAUTA KAIKKI 10 ENHANCED FEATURES
         return {
@@ -3422,7 +3417,7 @@ async def generate_enhanced_features(
             "mobile_first_index_ready": mobile_first_index_ready,
             "core_web_vitals_assessment": core_web_vitals_assessment,
             "technology_stack": technology_stack,
-            "ai_search_visibility": ai_search_visibility  # ← LISÄTTY
+            
         }
 
     except Exception as e:
@@ -3682,14 +3677,18 @@ async def ai_analyze_comprehensive(
         enhanced_features = await generate_enhanced_features(url, basic_analysis, technical_audit, content_analysis, social_analysis)
         enhanced_features["admin_features_enabled"] = (user.role == "admin")
 
-        # ✅ Kopioi AI Search Visibility enhanced_features:iin (KORJATTU)
+        # ✅ Kopioi AI Search Visibility
         if hasattr(ai_analysis, 'ai_search_visibility') and ai_analysis.ai_search_visibility:
-            # Muunna Pydantic-objekti dict:ksi ennen kopiointia
-            enhanced_features["ai_search_visibility"] = ai_analysis.ai_search_visibility.dict() if hasattr(ai_analysis.ai_search_visibility, 'dict') else ai_analysis.ai_search_visibility
+            ai_vis_dict = ai_analysis.ai_search_visibility.dict() if hasattr(ai_analysis.ai_search_visibility, 'dict') else ai_analysis.ai_search_visibility
+            enhanced_features["ai_search_visibility"] = ai_vis_dict
+            print(f"✅ AI Search copied: {ai_vis_dict.get('overall_ai_search_score')}/100")
+        else:
+            print("❌ No AI search visibility data")
 
+        # ← TÄMÄ PITÄÄ OLLA SAMALLA TASOLLA KUIN ai_analysis = ...
         smart_actions = generate_smart_actions(ai_analysis, technical_audit, content_analysis, basic_analysis)
 
-        smart_actions = generate_smart_actions(ai_analysis, technical_audit, content_analysis, basic_analysis)                                                          
+                                                                  
 
         # Add humanized layers with language support
         try:
