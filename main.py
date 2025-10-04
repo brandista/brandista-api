@@ -2183,7 +2183,7 @@ def compute_business_impact(
         )
     )
 
-def build_role_summaries(url: str, basic: Dict[str, Any], impact: BusinessImpact) -> RoleSummaries:
+def build_role_summaries(url: str, basic: Dict[str, Any], impact: BusinessImpact, language: str = 'en') -> RoleSummaries:
     """Generate role-specific summaries based on actual analysis findings"""
     s = basic.get('digital_maturity_score', 0)
     breakdown = basic.get('score_breakdown', {})
@@ -2204,64 +2204,123 @@ def build_role_summaries(url: str, basic: Dict[str, Any], impact: BusinessImpact
     sorted_gaps = sorted(completion.items(), key=lambda x: x[1])
     top_gaps = [gap[0] for gap in sorted_gaps[:3]]
     
-    # Map categories to actionable business language
-    action_map = {
-        'security': 'SSL + security headers',
-        'seo': 'SEO fundamentals',
-        'content': 'content depth',
-        'mobile': 'mobile UX',
-        'technical': 'technical SEO + analytics',
-    }
+    # Map categories to actionable business language (language-aware)
+    if language == 'fi':
+        action_map = {
+            'security': 'SSL + turvallisuusotsikot',
+            'seo': 'SEO-perusteet',
+            'content': 'sisällön syvyys',
+            'mobile': 'mobiilikäyttökokemus',
+            'technical': 'tekninen SEO + analytiikka',
+        }
+    else:
+        action_map = {
+            'security': 'SSL + security headers',
+            'seo': 'SEO fundamentals',
+            'content': 'content depth',
+            'mobile': 'mobile UX',
+            'technical': 'technical SEO + analytics',
+        }
     
     priority_items = [action_map.get(gap, gap) for gap in top_gaps]
     
     # Ensure at least 2 priorities exist (fallback for edge cases)
     if len(priority_items) < 2:
-        priority_items.extend(['technical SEO', 'content optimization'])
+        if language == 'fi':
+            priority_items.extend(['tekninen SEO', 'sisällön optimointi'])
+        else:
+            priority_items.extend(['technical SEO', 'content optimization'])
     
-    # CEO: Strategic overview with top 2 priorities
-    ceo_summary = (
-        f"We are at {s}/100 ({state}). "
-        f"Top priorities: {priority_items[0]}, {priority_items[1]}. "
-        f"If we ship these fixes, we can unlock {impact.revenue_uplift_range} "
-        f"and {impact.lead_gain_estimate}. Focus: one change per week."
-    )
-    
-    # CMO: Growth levers based on actual gaps
-    cmo_focus = []
-    if 'seo' in top_gaps or 'content' in top_gaps:
-        cmo_focus.append(f"SEO + content → {impact.lead_gain_estimate}")
-    if 'mobile' in top_gaps:
-        cmo_focus.append(f"mobile UX → better conversion")
-    if not cmo_focus:
-        cmo_focus.append(f"Conversion optimization → {impact.revenue_uplift_range}")
-    
-    cmo_summary = (
-        f"Growth levers: {' + '.join(cmo_focus)}. "
-        f"Target: {impact.revenue_uplift_range}. Track weekly progress on lead quality."
-    )
-    
-    # CTO: Technical priorities based on gaps and SPA detection
-    cto_priorities = []
-    if 'security' in top_gaps:
-        cto_priorities.append("SSL + security headers")
-    if 'mobile' in top_gaps:
-        cto_priorities.append("Core Web Vitals (LCP, CLS)")
-    if 'technical' in top_gaps:
-        cto_priorities.append("analytics + technical SEO")
-    
-    # Add SPA-specific recommendation if applicable
-    if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
-        cto_priorities.insert(0, "SSR/prerender for SPA")
-    
-    # Fallback if no major gaps
-    if not cto_priorities:
-        cto_priorities = ["defer non-critical JS", "optimize images"]
-    
-    cto_summary = (
-        f"Prioritize: {', '.join(cto_priorities[:3])}. "
-        f"Ship one technical win per sprint."
-    )
+    # Generate summaries based on language
+    if language == 'fi':
+        state_fi = {
+            'leader': 'johtaja',
+            'strong': 'vahva',
+            'baseline': 'perustaso',
+            'early': 'alkuvaihe'
+        }[state]
+        
+        # CEO: Strategic overview
+        ceo_summary = (
+            f"Olemme {s}/100 ({state_fi}). "
+            f"Tärkeimmät prioriteetit: {priority_items[0]}, {priority_items[1]}. "
+            f"Jos toteutamme nämä korjaukset, voimme avata {impact.revenue_uplift_range} "
+            f"ja {impact.lead_gain_estimate}. Fokus: yksi muutos viikossa."
+        )
+        
+        # CMO: Growth levers
+        cmo_focus = []
+        if 'seo' in top_gaps or 'content' in top_gaps:
+            cmo_focus.append(f"SEO + sisältö → {impact.lead_gain_estimate}")
+        if 'mobile' in top_gaps:
+            cmo_focus.append(f"mobiilikäyttökokemus → parempi konversio")
+        if not cmo_focus:
+            cmo_focus.append(f"Konversion optimointi → {impact.revenue_uplift_range}")
+        
+        cmo_summary = (
+            f"Kasvun vipuvarret: {' + '.join(cmo_focus)}. "
+            f"Tavoite: {impact.revenue_uplift_range}. Seuraa viikoittain liidien laatua."
+        )
+        
+        # CTO: Technical priorities
+        cto_priorities = []
+        if 'security' in top_gaps:
+            cto_priorities.append("SSL + turvallisuusotsikot")
+        if 'mobile' in top_gaps:
+            cto_priorities.append("Core Web Vitals (LCP, CLS)")
+        if 'technical' in top_gaps:
+            cto_priorities.append("analytiikka + tekninen SEO")
+        
+        if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
+            cto_priorities.insert(0, "SSR/esirenderöinti SPA:lle")
+        
+        if not cto_priorities:
+            cto_priorities = ["viivästä ei-kriittinen JS", "optimoi kuvat"]
+        
+        cto_summary = (
+            f"Priorisoi: {', '.join(cto_priorities[:3])}. "
+            f"Toimita yksi tekninen voitto per sprintti."
+        )
+    else:
+        # English (original)
+        ceo_summary = (
+            f"We are at {s}/100 ({state}). "
+            f"Top priorities: {priority_items[0]}, {priority_items[1]}. "
+            f"If we ship these fixes, we can unlock {impact.revenue_uplift_range} "
+            f"and {impact.lead_gain_estimate}. Focus: one change per week."
+        )
+        
+        cmo_focus = []
+        if 'seo' in top_gaps or 'content' in top_gaps:
+            cmo_focus.append(f"SEO + content → {impact.lead_gain_estimate}")
+        if 'mobile' in top_gaps:
+            cmo_focus.append(f"mobile UX → better conversion")
+        if not cmo_focus:
+            cmo_focus.append(f"Conversion optimization → {impact.revenue_uplift_range}")
+        
+        cmo_summary = (
+            f"Growth levers: {' + '.join(cmo_focus)}. "
+            f"Target: {impact.revenue_uplift_range}. Track weekly progress on lead quality."
+        )
+        
+        cto_priorities = []
+        if 'security' in top_gaps:
+            cto_priorities.append("SSL + security headers")
+        if 'mobile' in top_gaps:
+            cto_priorities.append("Core Web Vitals (LCP, CLS)")
+        if 'technical' in top_gaps:
+            cto_priorities.append("analytics + technical SEO")
+        
+        if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
+            cto_priorities.insert(0, "SSR/prerender for SPA")
+        
+        if not cto_priorities:
+            cto_priorities = ["defer non-critical JS", "optimize images"]
+        
+        cto_summary = (
+            f"Prioritize: {', '.join(cto_priorities[:3])}. "
+            f"Ship one technical win per sprint."
+        )
     
     return RoleSummaries(
         CEO=ceo_summary,
@@ -3004,7 +3063,7 @@ async def generate_ai_insights(
     # --- Humanized layer fusion ---
     try:
         impact = compute_business_impact(basic, content, ux)
-        role = build_role_summaries(url, basic, impact)
+        role = build_role_summaries(url, basic, impact, language=language)
         plan = build_plan_90d(basic, content, technical, language=language)  
         risks = build_risk_register(basic, technical, content)
         snippets = build_snippet_examples(url, basic)
