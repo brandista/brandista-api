@@ -136,9 +136,7 @@ from fastapi import FastAPI, HTTPException, Header, Depends, BackgroundTasks, Re
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer
 from pydantic import BaseModel, Field
-class RevenueCalculationRequest(BaseModel):
-    revenue_input: dict = {}
-    digital_score: int = 0
+
 
 # Playwright imports (optional for SPA support)
 try:
@@ -966,6 +964,12 @@ class RevenueInputRequest(BaseModel):
     monthly_visitors: Optional[int] = Field(None, ge=0, description="Monthly website visitors")
     conversion_rate: Optional[float] = Field(None, ge=0, le=100, description="Current conversion rate %")
     average_order_value: Optional[int] = Field(None, ge=0, description="Average order value in euros")
+
+    # LISÄÄ TÄMÄ TÄHÄN:
+class RevenueCalculationRequest(BaseModel):
+    """Request for standalone revenue impact calculation"""
+    revenue_input: Optional[RevenueInputRequest] = None  # ✅ Nyt tämä toimii!
+    digital_score: int = Field(0, ge=0, le=100, description="Current digital maturity score")
 
 class BusinessImpactDetailed(BaseModel):
     """Enhanced BusinessImpact with detailed calculation info and user input support"""
@@ -2290,31 +2294,41 @@ def compute_business_impact_with_input(
     metrics_used = {}
     annual_revenue = 450_000  # Default EU SME average
     
+    # ✅ KORJAUS: Handle both Pydantic model AND dict
     if revenue_input:
-        if revenue_input.annual_revenue and revenue_input.annual_revenue > 0:
-            annual_revenue = revenue_input.annual_revenue
+        # Convert to dict if it's a Pydantic model
+        if hasattr(revenue_input, 'dict'):
+            rev_data = revenue_input.dict()
+        elif isinstance(revenue_input, dict):
+            rev_data = revenue_input
+        else:
+            rev_data = {}
+        
+        # Now safely access as dict
+        if rev_data.get('annual_revenue') and rev_data['annual_revenue'] > 0:
+            annual_revenue = rev_data['annual_revenue']
             calculation_basis = "provided"
             metrics_used['annual_revenue'] = annual_revenue
             
-        elif revenue_input.monthly_revenue and revenue_input.monthly_revenue > 0:
-            annual_revenue = revenue_input.monthly_revenue * 12
+        elif rev_data.get('monthly_revenue') and rev_data['monthly_revenue'] > 0:
+            annual_revenue = rev_data['monthly_revenue'] * 12
             calculation_basis = "provided"
-            metrics_used['monthly_revenue'] = revenue_input.monthly_revenue
+            metrics_used['monthly_revenue'] = rev_data['monthly_revenue']
             metrics_used['calculated_annual'] = annual_revenue
             
-        elif (revenue_input.monthly_visitors and 
-              revenue_input.conversion_rate and 
-              revenue_input.average_order_value):
+        elif (rev_data.get('monthly_visitors') and 
+              rev_data.get('conversion_rate') and 
+              rev_data.get('average_order_value')):
             # Calculate revenue from traffic metrics
-            monthly_orders = (revenue_input.monthly_visitors * 
-                            revenue_input.conversion_rate / 100)
-            monthly_revenue = int(monthly_orders * revenue_input.average_order_value)
+            monthly_orders = (rev_data['monthly_visitors'] * 
+                            rev_data['conversion_rate'] / 100)
+            monthly_revenue = int(monthly_orders * rev_data['average_order_value'])
             annual_revenue = monthly_revenue * 12
             calculation_basis = "calculated"
             metrics_used.update({
-                'monthly_visitors': revenue_input.monthly_visitors,
-                'conversion_rate': revenue_input.conversion_rate,
-                'average_order_value': revenue_input.average_order_value,
+                'monthly_visitors': rev_data['monthly_visitors'],
+                'conversion_rate': rev_data['conversion_rate'],
+                'average_order_value': rev_data['average_order_value'],
                 'calculated_monthly_revenue': monthly_revenue,
                 'calculated_annual_revenue': annual_revenue
             })
