@@ -948,6 +948,150 @@ class UserQuotaView(BaseModel):
     username: str
     role: str
     search_limit: int
+    searches_used: int# --- NEW: humanized analysis models ---
+
+class BusinessImpact(BaseModel):
+    """Original BusinessImpact model - kept for backward compatibility"""
+    lead_gain_estimate: Optional[str] = None         # e.g. "12–20 leads/mo"
+    revenue_uplift_range: Optional[str] = None       # e.g. "+3–6% revenue"
+    confidence: Optional[str] = "M"                  # L | M | H
+    customer_trust_effect: Optional[str] = None      # short human note
+
+class RevenueInputRequest(BaseModel):
+    """User's actual business metrics for personalized impact calculation"""
+    annual_revenue: Optional[int] = Field(None, ge=0, description="Annual revenue in euros")
+    monthly_revenue: Optional[int] = Field(None, ge=0, description="Monthly revenue in euros")
+    monthly_visitors: Optional[int] = Field(None, ge=0, description="Monthly website visitors")
+    conversion_rate: Optional[float] = Field(None, ge=0, le=100, description="Current conversion rate %")
+    average_order_value: Optional[int] = Field(None, ge=0, description="Average order value in euros")
+
+class BusinessImpactDetailed(BaseModel):
+    """Enhanced BusinessImpact with detailed calculation info and user input support"""
+    lead_gain_estimate: Optional[str] = None
+    revenue_uplift_range: Optional[str] = None
+    monthly_revenue_range: Optional[str] = None
+    confidence: Optional[str] = "M"
+    customer_trust_effect: Optional[str] = None
+    # New detailed fields
+    calculation_basis: str = "estimated"  # "estimated" | "provided" | "calculated" | "hybrid"
+    metrics_used: Dict[str, Any] = {}
+    improvement_areas: List[str] = []
+    potential_scenarios: Dict[str, Dict[str, Any]] = {}
+
+class RoleSummaries(BaseModel):
+    CEO: Optional[str] = None
+    CMO: Optional[str] = None
+    CTO: Optional[str] = None
+
+class Plan90D(BaseModel):
+    wave_1: List[str] = []            # days 0–30
+    wave_2: List[str] = []            # days 31–60
+    wave_3: List[str] = []            # days 61–90
+    one_thing_this_week: Optional[str] = None
+
+class RiskItem(BaseModel):
+    risk: str
+    likelihood: int = Field(1, ge=1, le=5)
+    impact: int = Field(1, ge=1, le=5)
+    mitigation: Optional[str] = None
+    risk_score: Optional[int] = None   # computed later as L*I
+
+class SnippetExamples(BaseModel):
+    seo_title: List[str] = []
+    meta_desc: List[str] = []
+    h1_intro: List[str] = []
+    product_copy: List[str] = []
+
+class AISearchFactor(BaseModel):
+    name: str
+    score: int = Field(0, ge=0, le=100)
+    status: str  # "excellent" | "good" | "needs_improvement" | "poor"
+    findings: List[str] = []
+    recommendations: List[str] = []
+
+class AISearchVisibility(BaseModel):
+    chatgpt_readiness_score: int = Field(0, ge=0, le=100)
+    perplexity_readiness_score: int = Field(0, ge=0, le=100)
+    overall_ai_search_score: int = Field(0, ge=0, le=100)
+    competitive_advantage: str = "First Nordic company to systematically analyze AI search readiness"
+    validation_status: str = "estimated"  # "estimated" | "validated" | "monitored"
+    factors: Dict[str, AISearchFactor] = {}
+    key_insights: List[str] = []
+    priority_actions: List[str] = []
+
+class AIAnalysis(BaseModel):
+    summary: str = ""
+    strengths: List[str] = []
+    weaknesses: List[str] = []
+    opportunities: List[str] = []
+    threats: List[str] = []
+    recommendations: List[str] = []
+    confidence_score: int = Field(0, ge=0, le=100)
+    sentiment_score: float = Field(0.0, ge=-1.0, le=1.0)
+    key_metrics: Dict[str, Any] = {}
+    action_priority: List[Dict[str, Any]] = []
+
+    # NEW humanized layers
+    business_impact: Optional[BusinessImpact] = None
+    role_summaries: Optional[RoleSummaries] = None
+    plan_90d: Optional[Plan90D] = None
+    risk_register: Optional[List[RiskItem]] = None
+    snippet_examples: Optional[SnippetExamples] = None
+    ai_search_visibility: AISearchVisibility = Field(default_factory=lambda: AISearchVisibility())
+
+
+class SmartAction(BaseModel):
+    title: str
+    description: str
+    priority: str = Field(..., pattern="^(critical|high|medium|low)$")
+    effort: str = Field(..., pattern="^(low|medium|high)$")
+    impact: str = Field(..., pattern="^(low|medium|high|critical)$")
+    estimated_score_increase: int = Field(0, ge=0, le=100)
+    category: str = ""
+    estimated_time: str = ""
+
+    # NEW humanized fields (optional → backward compatible)
+    so_what: Optional[str] = None
+    why_now: Optional[str] = None
+    what_to_do: Optional[str] = None
+    owner: Optional[str] = None
+    eta_days: Optional[int] = None
+
+    # Lightweight prioritization
+    reach: Optional[int] = None        # 0–100
+    confidence: Optional[int] = None   # 1–10
+    rice_score: Optional[int] = None   # computed
+
+    # Evidence & confidence
+    signals: Optional[List[str]] = None
+    evidence_confidence: Optional[str] = None  # "L|M|H"
+
+class SmartScores(BaseModel):
+    overall: int = Field(0, ge=0, le=100)
+    technical: int = Field(0, ge=0, le=100)
+    content: int = Field(0, ge=0, le=100)
+    social: int = Field(0, ge=0, le=100)
+    ux: int = Field(0, ge=0, le=100)
+    competitive: int = Field(0, ge=0, le=100)
+    trend: str = "stable"
+    percentile: int = Field(0, ge=0, le=100)
+
+class DetailedAnalysis(BaseModel):
+    social_media: SocialMediaAnalysis
+    technical_audit: TechnicalAudit
+    content_analysis: ContentAnalysis
+    ux_analysis: UXAnalysis
+    competitive_analysis: CompetitiveAnalysis
+
+class QuotaUpdateRequest(BaseModel):
+    search_limit: Optional[int] = None
+    grant_extra: Optional[int] = Field(None, ge=1)
+    reset_count: bool = False
+
+class UserQuotaView(BaseModel):
+    username: str
+    role: str
+    search_limit: int
     searches_used: int
 
 # ============================================================================
@@ -2110,55 +2254,140 @@ def _fmt_range(low: int, high: int, suffix: str) -> str:
 def _confidence_label(val: int) -> str:
     return "H" if val >= 75 else "M" if val >= 50 else "L"
 
-def compute_business_impact(
-    basic: Dict[str, Any], 
-    content: Dict[str, Any], 
+def compute_business_impact_with_input(
+    basic: Dict[str, Any],
+    content: Dict[str, Any],
     ux: Dict[str, Any],
-    estimated_annual_revenue: int = 450_000  # €450k = EU SME keskiarvo
-) -> BusinessImpact:
+    revenue_input: Optional[RevenueInputRequest] = None
+) -> BusinessImpactDetailed:
     """
-    Compute realistic business impact with actual revenue estimation.
+    Compute business impact with optional user-provided revenue data
     
-    Args:
-        estimated_annual_revenue: Company's estimated annual revenue (default 450k€ EU SME average)
-    
-    Returns:
-        BusinessImpact with realistic lead and revenue projections
+    Priority logic:
+    1. If user provides annual_revenue → use that
+    2. If user provides monthly_revenue → calculate annual (monthly × 12)
+    3. If user provides traffic + conversion + AOV → calculate revenue
+    4. Otherwise → use EU SME average (450k€)
     """
+    
     score = basic.get('digital_maturity_score', 0)
     seo_pts = basic.get('score_breakdown', {}).get('seo_basics', 0)
     mob_pts = basic.get('score_breakdown', {}).get('mobile', 0)
-
+    
     seo_w = SCORING_CONFIG.weights.get('seo_basics', 20) or 1
     mob_w = SCORING_CONFIG.weights.get('mobile', 15) or 1
-
+    
     seo_pct = int(seo_pts / seo_w * 100)
     mobile_pct = int(mob_pts / mob_w * 100)
-
+    
     content_score = content.get('content_quality_score', 0)
     ux_score = ux.get('overall_ux_score', 0)
-
-    # LEAD GENERATION (säilytetään alkuperäinen)
+    
+    # ===== REVENUE DETERMINATION =====
+    calculation_basis = "estimated"
+    metrics_used = {}
+    annual_revenue = 450_000  # Default EU SME average
+    
+    if revenue_input:
+        if revenue_input.annual_revenue and revenue_input.annual_revenue > 0:
+            annual_revenue = revenue_input.annual_revenue
+            calculation_basis = "provided"
+            metrics_used['annual_revenue'] = annual_revenue
+            
+        elif revenue_input.monthly_revenue and revenue_input.monthly_revenue > 0:
+            annual_revenue = revenue_input.monthly_revenue * 12
+            calculation_basis = "provided"
+            metrics_used['monthly_revenue'] = revenue_input.monthly_revenue
+            metrics_used['calculated_annual'] = annual_revenue
+            
+        elif (revenue_input.monthly_visitors and 
+              revenue_input.conversion_rate and 
+              revenue_input.average_order_value):
+            # Calculate revenue from traffic metrics
+            monthly_orders = (revenue_input.monthly_visitors * 
+                            revenue_input.conversion_rate / 100)
+            monthly_revenue = int(monthly_orders * revenue_input.average_order_value)
+            annual_revenue = monthly_revenue * 12
+            calculation_basis = "calculated"
+            metrics_used.update({
+                'monthly_visitors': revenue_input.monthly_visitors,
+                'conversion_rate': revenue_input.conversion_rate,
+                'average_order_value': revenue_input.average_order_value,
+                'calculated_monthly_revenue': monthly_revenue,
+                'calculated_annual_revenue': annual_revenue
+            })
+        else:
+            calculation_basis = "hybrid"
+            metrics_used['note'] = "Using EU SME average, partial data provided"
+    
+    # ===== LEAD GENERATION (original logic) =====
     lead_low = max(3, (seo_pct + content_score) // 40)
     lead_high = max(lead_low + 2, (seo_pct + content_score) // 25)
-
-    # REVENUE CALCULATION (korjattu realistisiksi arvoiksi)
-    # Digitaalisten parannusten vaikutus: 0.4-0.7% per 10 pistettä parannusta
+    
+    # ===== REVENUE CALCULATION =====
     score_improvement_potential = max(10, 90 - score)
     
-    # Kasvuprosentti: 4-7% per 10 pisteen parannus
-    growth_rate_low = (score_improvement_potential * 0.4) / 100
-    growth_rate_high = (score_improvement_potential * 0.7) / 100
+    # Base growth rates (conservative to aggressive based on score gap)
+    if score < 30:
+        # Very low score → high potential
+        growth_rate_low = (score_improvement_potential * 0.5) / 100
+        growth_rate_high = (score_improvement_potential * 0.9) / 100
+    elif score < 50:
+        # Below average → good potential
+        growth_rate_low = (score_improvement_potential * 0.4) / 100
+        growth_rate_high = (score_improvement_potential * 0.7) / 100
+    elif score < 70:
+        # Average → moderate potential
+        growth_rate_low = (score_improvement_potential * 0.3) / 100
+        growth_rate_high = (score_improvement_potential * 0.5) / 100
+    else:
+        # High score → incremental gains
+        growth_rate_low = (score_improvement_potential * 0.2) / 100
+        growth_rate_high = (score_improvement_potential * 0.4) / 100
     
-    # Euromääräinen vuotuinen arvio
-    revenue_impact_low = int(estimated_annual_revenue * growth_rate_low)
-    revenue_impact_high = int(estimated_annual_revenue * growth_rate_high)
+    # Calculate impact
+    revenue_impact_low = int(annual_revenue * growth_rate_low)
+    revenue_impact_high = int(annual_revenue * growth_rate_high)
     
-    # Kuukausittainen breakdown
-    monthly_low = revenue_impact_low // 12
-    monthly_high = revenue_impact_high // 12
-
-    # Format revenue range nicely
+    monthly_impact_low = revenue_impact_low // 12
+    monthly_impact_high = revenue_impact_high // 12
+    
+    # ===== IMPROVEMENT AREAS ANALYSIS =====
+    improvement_areas = []
+    if seo_pct < 60:
+        improvement_areas.append("SEO optimization")
+    if mobile_pct < 60:
+        improvement_areas.append("Mobile experience")
+    if content_score < 60:
+        improvement_areas.append("Content depth and quality")
+    if ux_score < 60:
+        improvement_areas.append("User experience design")
+    if score < 50:
+        improvement_areas.append("Technical foundation")
+    
+    # ===== SCENARIO PLANNING =====
+    potential_scenarios = {
+        "quick_wins": {
+            "timeframe": "1-3 months",
+            "effort": "low",
+            "revenue_uplift": f"€{revenue_impact_low//3:,} - €{revenue_impact_low//2:,}",
+            "actions": ["Fix critical SEO issues", "Improve mobile viewport", "Add analytics tracking"]
+        },
+        "standard_improvement": {
+            "timeframe": "3-6 months",
+            "effort": "medium",
+            "revenue_uplift": f"€{revenue_impact_low:,} - €{int(revenue_impact_low*1.5):,}",
+            "actions": ["Content strategy execution", "Technical SEO overhaul", "UX optimization"]
+        },
+        "comprehensive_transformation": {
+            "timeframe": "6-12 months",
+            "effort": "high",
+            "revenue_uplift": f"€{int(revenue_impact_high*0.8):,} - €{revenue_impact_high:,}",
+            "actions": ["Complete digital strategy", "Marketing automation", "Conversion optimization"]
+        }
+    }
+    
+    # ===== FORMATTING =====
     def format_currency(amount: int) -> str:
         if amount >= 1_000_000:
             return f"€{amount/1_000_000:.1f}M"
@@ -2166,21 +2395,56 @@ def compute_business_impact(
             return f"€{amount//1000}k"
         else:
             return f"€{amount}"
-
+    
     revenue_range = (
         f"{format_currency(revenue_impact_low)}–{format_currency(revenue_impact_high)}/year "
-        f"({format_currency(monthly_low)}–{format_currency(monthly_high)}/mo)"
+        f"({format_currency(monthly_impact_low)}–{format_currency(monthly_impact_high)}/mo)"
     )
-
-    return BusinessImpact(
+    
+    monthly_range = f"{format_currency(monthly_impact_low)}–{format_currency(monthly_impact_high)}"
+    
+    # Confidence based on data quality
+    if calculation_basis == "provided":
+        confidence = "H"  # High confidence with real data
+    elif calculation_basis == "calculated":
+        confidence = "M"  # Medium confidence with derived data
+    else:
+        confidence = "L"  # Low confidence with estimates
+    
+    # Trust effect
+    customer_trust_effect = (
+        "Improves perceived quality (NPS +2–4)" 
+        if basic.get('modernity_score', 0) >= 50 
+        else "Small positive trust signal"
+    )
+    
+    return BusinessImpactDetailed(
         lead_gain_estimate=_fmt_range(lead_low, lead_high, "leads/mo"),
         revenue_uplift_range=revenue_range,
-        confidence=_confidence_label(score),
-        customer_trust_effect=(
-            "Improves perceived quality (NPS +2–4)" 
-            if basic.get('modernity_score', 0) >= 50 
-            else "Small positive trust signal"
-        )
+        monthly_revenue_range=monthly_range,
+        confidence=confidence,
+        customer_trust_effect=customer_trust_effect,
+        calculation_basis=calculation_basis,
+        metrics_used=metrics_used,
+        improvement_areas=improvement_areas,
+        potential_scenarios=potential_scenarios
+    )
+
+# Keep old function for backward compatibility
+def compute_business_impact(
+    basic: Dict[str, Any], 
+    content: Dict[str, Any], 
+    ux: Dict[str, Any],
+    estimated_annual_revenue: int = 450_000
+) -> BusinessImpact:
+    """Backward compatible wrapper - calls new function without revenue input"""
+    detailed = compute_business_impact_with_input(basic, content, ux, revenue_input=None)
+    # Convert detailed to simple BusinessImpact
+    return BusinessImpact(
+        lead_gain_estimate=detailed.lead_gain_estimate,
+        revenue_uplift_range=detailed.revenue_uplift_range,
+        confidence=detailed.confidence,
+        customer_trust_effect=detailed.customer_trust_effect
     )
 
 def build_role_summaries(url: str, basic: Dict[str, Any], impact: BusinessImpact, language: str = 'en') -> RoleSummaries:
@@ -3062,14 +3326,24 @@ async def generate_ai_insights(
     # --- Humanized layer fusion ---
     # --- Humanized layer fusion ---
     try:
-        impact = compute_business_impact(basic, content, ux)
+        # Use detailed impact calculation (with optional revenue input support)
+        detailed_impact = compute_business_impact_with_input(basic, content, ux, revenue_input=None)
+        
+        # Convert to simple BusinessImpact for backward compatibility with role summaries
+        impact = BusinessImpact(
+            lead_gain_estimate=detailed_impact.lead_gain_estimate,
+            revenue_uplift_range=detailed_impact.revenue_uplift_range,
+            confidence=detailed_impact.confidence,
+            customer_trust_effect=detailed_impact.customer_trust_effect
+        )
+        
         role = build_role_summaries(url, basic, impact, language=language)
         plan = build_plan_90d(basic, content, technical, language=language)  
         risks = build_risk_register(basic, technical, content)
         snippets = build_snippet_examples(url, basic)
 
         insights.update({
-            "business_impact": impact.dict(),
+            "business_impact": detailed_impact.dict(),  # Use detailed version in output
             "role_summaries": role.dict(),
             "plan_90d": plan.dict(),
             "risk_register": [r.dict() for r in risks],
@@ -3673,6 +3947,258 @@ async def login(request: LoginRequest):
 async def get_me(user: UserInfo = Depends(require_user)):
     return user
 
+# ============================================================================
+# REVENUE INPUT ENDPOINTS
+# ============================================================================
+
+# ============================================================================
+# REVENUE INPUT ENDPOINTS
+# ============================================================================
+
+class CompetitorAnalysisRequestEnhanced(CompetitorAnalysisRequest):
+    """Enhanced request with optional revenue input"""
+    revenue_input: Optional[RevenueInputRequest] = None
+
+@app.post("/api/v1/ai-analyze-with-revenue")
+async def ai_analyze_with_revenue_input(
+    request: CompetitorAnalysisRequestEnhanced,
+    background_tasks: BackgroundTasks,
+    user: UserInfo = Depends(require_user)
+):
+    """
+    Comprehensive analysis with optional revenue input for personalized impact calculation
+    
+    Usage examples:
+    1. With annual revenue:
+       {"url": "example.com", "revenue_input": {"annual_revenue": 850000}}
+    
+    2. With monthly revenue:
+       {"url": "example.com", "revenue_input": {"monthly_revenue": 45000}}
+    
+    3. With traffic metrics:
+       {"url": "example.com", "revenue_input": {
+           "monthly_visitors": 15000,
+           "conversion_rate": 2.5,
+           "average_order_value": 120
+       }}
+    
+    4. Without revenue data (uses EU SME average):
+       {"url": "example.com"}
+    """
+    try:
+        # Quota check
+        if user.role != "admin":
+            user_limit = USERS_DB.get(user.username, {}).get("search_limit", DEFAULT_USER_LIMIT)
+            current_count = user_search_counts.get(user.username, 0)
+            if user_limit > 0 and current_count >= user_limit:
+                raise HTTPException(403, f"Search limit reached ({user_limit} searches)")
+
+        url = clean_url(request.url)
+        _reject_ssrf(url)
+
+        # Check analysis cache
+        cache_key = get_cache_key(url, "ai_comprehensive_with_revenue_v1")
+        cached_result = await get_from_cache(cache_key)
+        if cached_result:
+            logger.info(f"Cache hit for {url} (user: {user.username})")
+            return cached_result
+
+        logger.info(f"Starting analysis with revenue input for {url}")
+        
+        # Fetch website content
+        html_content, used_spa = await get_website_content(url, force_spa=getattr(request, 'force_spa', False))
+        if not html_content or len(html_content.strip()) < 100:
+            raise HTTPException(400, "Website returned insufficient content")
+
+        rendering_info = {
+            'spa_detected': bool(used_spa),
+            'spa_info': {'spa_detected': bool(used_spa)},
+            'rendering_method': 'playwright' if used_spa else 'http',
+            'final_url': url
+        }
+
+        # Perform analyses
+        basic_analysis = await analyze_basic_metrics_enhanced(
+            url, html_content,
+            headers=httpx.Headers({}),
+            rendering_info=rendering_info
+        )
+        
+        technical_audit = await analyze_technical_aspects(url, html_content, headers=httpx.Headers({}))
+        content_analysis = await analyze_content_quality(html_content)
+        ux_analysis = await analyze_ux_elements(html_content)
+        social_analysis = await analyze_social_media_presence(url, html_content)
+        competitive_analysis = await analyze_competitive_positioning(url, basic_analysis)
+
+        sb_with_aliases = create_score_breakdown_with_aliases(basic_analysis.get('score_breakdown', {}))
+
+        # USE ENHANCED BUSINESS IMPACT WITH REVENUE INPUT
+        detailed_impact = compute_business_impact_with_input(
+            basic_analysis, 
+            content_analysis, 
+            ux_analysis,
+            revenue_input=request.revenue_input
+        )
+        
+        # Convert to simple BusinessImpact for role summaries
+        impact = BusinessImpact(
+            lead_gain_estimate=detailed_impact.lead_gain_estimate,
+            revenue_uplift_range=detailed_impact.revenue_uplift_range,
+            confidence=detailed_impact.confidence,
+            customer_trust_effect=detailed_impact.customer_trust_effect
+        )
+
+        # Generate AI insights
+        ai_analysis = await generate_ai_insights(
+            url, basic_analysis, technical_audit, content_analysis, 
+            ux_analysis, social_analysis, html_content, language=request.language
+        )
+        
+        # Override business_impact with detailed version
+        ai_analysis.business_impact = detailed_impact
+        
+        # Build role summaries with impact
+        role = build_role_summaries(url, basic_analysis, impact, language=request.language)
+        ai_analysis.role_summaries = role
+        
+        plan = build_plan_90d(basic_analysis, content_analysis, technical_audit, language=request.language)
+        ai_analysis.plan_90d = plan
+        
+        risks = build_risk_register(basic_analysis, technical_audit, content_analysis)
+        ai_analysis.risk_register = risks
+        
+        snippets = build_snippet_examples(url, basic_analysis)
+        ai_analysis.snippet_examples = snippets
+
+        enhanced_features = await generate_enhanced_features(url, basic_analysis, technical_audit, content_analysis, social_analysis)
+        enhanced_features["admin_features_enabled"] = (user.role == "admin")
+
+        if hasattr(ai_analysis, 'ai_search_visibility') and ai_analysis.ai_search_visibility:
+            ai_vis_dict = ai_analysis.ai_search_visibility.dict() if hasattr(ai_analysis.ai_search_visibility, 'dict') else ai_analysis.ai_search_visibility
+            enhanced_features["ai_search_visibility"] = ai_vis_dict
+
+        smart_actions = generate_smart_actions(ai_analysis, technical_audit, content_analysis, basic_analysis)
+
+        # Construct result
+        result = {
+            "success": True,
+            "company_name": request.company_name or get_domain_from_url(url),
+            "analysis_date": datetime.now().isoformat(),
+            "basic_analysis": {
+                "company": request.company_name or get_domain_from_url(url),
+                "website": url,
+                "digital_maturity_score": basic_analysis['digital_maturity_score'],
+                "social_platforms": basic_analysis.get('social_platforms', 0),
+                "technical_score": technical_audit.get('overall_technical_score', 0),
+                "content_score": content_analysis.get('content_quality_score', 0),
+                "seo_score": int((basic_analysis.get('score_breakdown', {}).get('seo_basics', 0) / SCORING_CONFIG.weights['seo_basics']) * 100),
+                "score_breakdown": sb_with_aliases,
+                "analysis_timestamp": datetime.now().isoformat(),
+                "spa_detected": basic_analysis.get('spa_detected', False),
+                "rendering_method": basic_analysis.get('rendering_method', 'http'),
+                "modernity_score": basic_analysis.get('modernity_score', 0)
+            },
+            "ai_analysis": ai_analysis.dict(),
+            "detailed_analysis": {
+                "social_media": social_analysis,
+                "technical_audit": technical_audit,
+                "content_analysis": content_analysis,
+                "ux_analysis": ux_analysis,
+                "competitive_analysis": competitive_analysis
+            },
+            "smart": {
+                "actions": smart_actions,
+                "scores": {
+                    "overall": basic_analysis['digital_maturity_score'],
+                    "technical": technical_audit.get('overall_technical_score', 0),
+                    "content": content_analysis.get('content_quality_score', 0),
+                    "social": social_analysis.get('social_score', 0),
+                    "ux": ux_analysis.get('overall_ux_score', 0),
+                    "competitive": competitive_analysis.get('competitive_score', 0),
+                    "trend": "stable",
+                    "percentile": enhanced_features['industry_benchmarking']['details'].get('percentile', 50)
+                }
+            },
+            "enhanced_features": enhanced_features,
+            "metadata": {
+                "version": APP_VERSION,
+                "scoring_version": "configurable_v1_complete",
+                "analysis_depth": "comprehensive_with_revenue_input",
+                "confidence_level": ai_analysis.confidence_score,
+                "analyzed_by": user.username,
+                "user_role": user.role,
+                "rendering_method": rendering_info['rendering_method'],
+                "spa_detected": rendering_info['spa_detected'],
+                "revenue_calculation_basis": detailed_impact.calculation_basis,
+                "revenue_metrics_used": detailed_impact.metrics_used
+            }
+        }
+
+        result = ensure_integer_scores(result)
+        await set_cache(cache_key, result)
+        background_tasks.add_task(cleanup_cache)
+
+        if user.role != "admin":
+            user_search_counts[user.username] = user_search_counts.get(user.username, 0) + 1
+
+        logger.info(f"Analysis with revenue input finished for {url} (basis: {detailed_impact.calculation_basis})")
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Analysis error: {e}", exc_info=True)
+        raise HTTPException(500, "Analysis failed due to internal error")
+
+@app.post("/api/v1/calculate-impact")
+async def calculate_revenue_impact(
+    revenue_input: RevenueInputRequest,
+    digital_score: int = Field(45, ge=0, le=100, description="Current digital maturity score")
+):
+    """
+    Standalone calculator for revenue impact estimation
+    
+    Example usage:
+    POST /api/v1/calculate-impact
+    {
+        "revenue_input": {
+            "annual_revenue": 750000
+        },
+        "digital_score": 38
+    }
+    
+    Returns detailed revenue impact projections without full website analysis
+    """
+    
+    # Create minimal analysis objects for calculation
+    basic = {
+        'digital_maturity_score': digital_score,
+        'score_breakdown': {
+            'seo_basics': int(digital_score * 0.2),
+            'mobile': int(digital_score * 0.15)
+        },
+        'modernity_score': digital_score
+    }
+    
+    content = {'content_quality_score': digital_score}
+    ux = {'overall_ux_score': digital_score}
+    
+    impact = compute_business_impact_with_input(basic, content, ux, revenue_input)
+    
+    return {
+        "success": True,
+        "business_impact": impact.dict(),
+        "recommendations": [
+            f"Focus on {area}" for area in impact.improvement_areas[:3]
+        ],
+        "next_steps": [
+            "Run full website analysis for detailed action plan",
+            "Review scenario planning for implementation roadmap",
+            "Track metrics monthly to validate improvements"
+        ],
+        "calculation_note": f"Based on {impact.calculation_basis} revenue data"
+    }
+
 @app.post("/api/v1/ai-analyze")
 async def ai_analyze_comprehensive(
     request: CompetitorAnalysisRequest,
@@ -3698,15 +4224,12 @@ async def ai_analyze_comprehensive(
             logger.info(f"Cache hit for {url} (user: {user.username})")
             return cached_result
 
-        # Smart website content fetching
         logger.info(f"Starting complete comprehensive analysis for {url}")
         
-        # Use smart rendering that detects SPAs automatically
         html_content, used_spa = await get_website_content(url, force_spa=getattr(request, 'force_spa', False))
         if not html_content or len(html_content.strip()) < 100:
             raise HTTPException(400, "Website returned insufficient content")
 
-        # Create rendering info for enhanced analysis
         rendering_info = {
             'spa_detected': bool(used_spa),
             'spa_info': {'spa_detected': bool(used_spa)},
@@ -3714,7 +4237,6 @@ async def ai_analyze_comprehensive(
             'final_url': url
         }
 
-        # Perform complete comprehensive analysis
         basic_analysis = await analyze_basic_metrics_enhanced(
             url, html_content,
             headers=httpx.Headers({}),
@@ -3728,37 +4250,36 @@ async def ai_analyze_comprehensive(
         social_analysis = await analyze_social_media_presence(url, html_content)
         competitive_analysis = await analyze_competitive_positioning(url, basic_analysis)
 
-        # Create score breakdown with aliases
         sb_with_aliases = create_score_breakdown_with_aliases(basic_analysis.get('score_breakdown', {}))
 
-       # Generate AI insights and features
         ai_analysis = await generate_ai_insights(url, basic_analysis, technical_audit, content_analysis, ux_analysis, social_analysis, html_content, language=request.language)
         enhanced_features = await generate_enhanced_features(url, basic_analysis, technical_audit, content_analysis, social_analysis)
         enhanced_features["admin_features_enabled"] = (user.role == "admin")
 
-        # ✅ Kopioi AI Search Visibility
         if hasattr(ai_analysis, 'ai_search_visibility') and ai_analysis.ai_search_visibility:
             ai_vis_dict = ai_analysis.ai_search_visibility.dict() if hasattr(ai_analysis.ai_search_visibility, 'dict') else ai_analysis.ai_search_visibility
             enhanced_features["ai_search_visibility"] = ai_vis_dict
-            print(f"✅ AI Search copied: {ai_vis_dict.get('overall_ai_search_score')}/100")
-        else:
-            print("❌ No AI search visibility data")
 
-        # ← TÄMÄ PITÄÄ OLLA SAMALLA TASOLLA KUIN ai_analysis = ...
         smart_actions = generate_smart_actions(ai_analysis, technical_audit, content_analysis, basic_analysis)
 
-                                                                  
-
-        # Add humanized layers with language support
         try:
-            impact = compute_business_impact(basic_analysis, content_analysis, ux_analysis)
-            role = build_role_summaries(url, basic_analysis, impact)
+            # Use detailed impact calculation
+            detailed_impact = compute_business_impact_with_input(basic_analysis, content_analysis, ux_analysis, revenue_input=None)
+            
+            # Convert to simple BusinessImpact for role summaries
+            impact = BusinessImpact(
+                lead_gain_estimate=detailed_impact.lead_gain_estimate,
+                revenue_uplift_range=detailed_impact.revenue_uplift_range,
+                confidence=detailed_impact.confidence,
+                customer_trust_effect=detailed_impact.customer_trust_effect
+            )
+            
+            role = build_role_summaries(url, basic_analysis, impact, language=request.language)
             plan = build_plan_90d(basic_analysis, content_analysis, technical_audit, language=request.language)
             risks = build_risk_register(basic_analysis, technical_audit, content_analysis)
             snippets = build_snippet_examples(url, basic_analysis)
 
-            # Update ai_analysis with humanized layers
-            ai_analysis.business_impact = impact
+            ai_analysis.business_impact = detailed_impact  # Use detailed version
             ai_analysis.role_summaries = role
             ai_analysis.plan_90d = plan
             ai_analysis.risk_register = risks
@@ -3766,7 +4287,6 @@ async def ai_analyze_comprehensive(
         except Exception as e:
             logger.warning(f"Humanized layer build failed: {e}")
         
-        # Construct complete result
         result = {
             "success": True,
             "company_name": request.company_name or get_domain_from_url(url),
@@ -3823,14 +4343,10 @@ async def ai_analyze_comprehensive(
             }
         }
 
-        # Ensure all scores are integers
         result = ensure_integer_scores(result)
-        
-        # Cache result
         await set_cache(cache_key, result)
         background_tasks.add_task(cleanup_cache)
 
-        # Update user count
         if user.role != "admin":
             user_search_counts[user.username] = user_search_counts.get(user.username, 0) + 1
 
@@ -3841,64 +4357,6 @@ async def ai_analyze_comprehensive(
         raise
     except Exception as e:
         logger.error(f"Complete analysis error for {request.url}: {e}", exc_info=True)
-        raise HTTPException(500, "Analysis failed due to internal error")
-
-@app.post("/api/v1/analyze")
-async def basic_analyze(request: CompetitorAnalysisRequest, user: UserInfo = Depends(require_user)):
-    """Basic analysis endpoint"""
-    try:
-        url = clean_url(request.url)
-        _reject_ssrf(url)
-
-        # Fetch content (balanced: HTTP first, SPA if needed)
-        html_content, used_spa = await get_website_content(url, force_spa=False)
-
-        rendering_info = {
-            'spa_detected': bool(used_spa),
-            'spa_info': {'spa_detected': bool(used_spa)},
-            'rendering_method': 'playwright' if used_spa else 'http',
-            'final_url': url
-        }
-
-        basic_analysis = await analyze_basic_metrics_enhanced(
-            url, html_content,
-            headers=httpx.Headers({}),
-            rendering_info=rendering_info
-        )
-
-        sb_with_aliases = create_score_breakdown_with_aliases(basic_analysis.get('score_breakdown', {}))
-        # Compute mobile readiness (best effort)
-        try:
-            technical_proxy = {
-                'has_mobile_optimization': basic_analysis.get('has_mobile_optimization'),
-                'page_speed_score': basic_analysis.get('page_speed_score', 0),
-                'performance_indicators': basic_analysis.get('performance_indicators', [])
-            }
-            mobile_readiness, mobile_reasons = summarize_mobile_readiness(technical_proxy)
-        except Exception:
-            mobile_readiness, mobile_reasons = 'Unknown', []
-
-
-        return {
-            'mobile_readiness': mobile_readiness,
-            'mobile_reasons': mobile_reasons,
-            "success": True,
-            "company": request.company_name or "",
-            "website": url,
-            "digital_maturity_score": basic_analysis.get('digital_maturity_score', 0),
-            "social_platforms": basic_analysis.get('social_platforms', 0),
-            "score_breakdown": sb_with_aliases,
-            "analysis_date": datetime.now().isoformat(),
-            "analyzed_by": user.username,
-            "spa_detected": bool(used_spa),
-            "rendering_method": 'playwright' if used_spa else 'http',
-            "modernity_score": basic_analysis.get('modernity_score', 0),
-            "scoring_weights": SCORING_CONFIG.weights
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Basic analysis error: {e}", exc_info=True)
         raise HTTPException(500, "Analysis failed due to internal error")
 
 ## ============================================================================
