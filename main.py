@@ -136,7 +136,9 @@ from fastapi import FastAPI, HTTPException, Header, Depends, BackgroundTasks, Re
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer
 from pydantic import BaseModel, Field
-
+class RevenueCalculationRequest(BaseModel):
+    revenue_input: dict = {}
+    digital_score: int = 0
 
 # Playwright imports (optional for SPA support)
 try:
@@ -4151,10 +4153,7 @@ async def ai_analyze_with_revenue_input(
         raise HTTPException(500, "Analysis failed due to internal error")
 
 @app.post("/api/v1/calculate-impact")
-async def calculate_revenue_impact(
-    revenue_input: RevenueInputRequest,
-    digital_score: int = Field(45, ge=0, le=100, description="Current digital maturity score")
-):
+async def calculate_revenue_impact(request: RevenueCalculationRequest):  # 👈 MUUTA TÄMÄ
     """
     Standalone calculator for revenue impact estimation
     
@@ -4169,6 +4168,9 @@ async def calculate_revenue_impact(
     
     Returns detailed revenue impact projections without full website analysis
     """
+    
+    revenue_input = request.revenue_input
+    digital_score = request.digital_score
     
     # Create minimal analysis objects for calculation
     basic = {
