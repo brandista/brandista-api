@@ -755,11 +755,27 @@ USERS_DB = {
         "search_limit": -1
     }
 }
-# Initialize database and sync users
 if DATABASE_ENABLED:
     init_database()
     sync_hardcoded_users_to_db(USERS_DB)
     logger.info("✅ Database initialized and users synced")
+    
+    # ✅ UUSI: Lataa kaikki käyttäjät tietokannasta muistiin
+    try:
+        db_users = get_all_users_from_db()
+        for db_user in db_users:
+            username = db_user['username']
+            # Älä ylikirjoita hardcoded käyttäjiä
+            if username not in USERS_DB:
+                USERS_DB[username] = {
+                    'username': username,
+                    'hashed_password': db_user['hashed_password'],
+                    'role': db_user['role'],
+                    'search_limit': db_user['search_limit']
+                }
+                logger.info(f"📥 Loaded user from DB: {username}")
+    except Exception as e:
+        logger.error(f"Failed to load users from database: {e}")
 
 # ============================================================================
 # COMPLETE PYDANTIC MODELS
@@ -4507,6 +4523,8 @@ async def admin_list_users(user: UserInfo = Depends(require_admin)):
 async def admin_update_quota(username: str, payload: QuotaUpdateRequest, user: UserInfo = Depends(require_admin)):
     if username not in USERS_DB:
         raise HTTPException(404, "User not found")
+    
+    # ✅ 1. Päivitä muistissa
     if payload.search_limit is not None:
         USERS_DB[username]["search_limit"] = int(payload.search_limit)
     if payload.grant_extra is not None:
@@ -4515,6 +4533,18 @@ async def admin_update_quota(username: str, payload: QuotaUpdateRequest, user: U
             USERS_DB[username]["search_limit"] = cur + int(payload.grant_extra)
     if payload.reset_count:
         user_search_counts[username] = 0
+    
+    # ✅ 2. Päivitä tietokantaan
+    if DATABASE_ENABLED:
+        update_data = {}
+        if payload.search_limit is not None or payload.grant_extra is not None:
+            update_data['search_limit'] = USERS_DB[username]["search_limit"]
+        if payload.reset_count:
+            update_data['searches_used'] = 0
+        
+        if update_data:
+            update_user_in_db(username, **update_data)
+    
     return UserQuotaView(
         username=username,
         role=USERS_DB[username]["role"],
@@ -4535,15 +4565,37 @@ class UserCreateRequest(BaseModel):
 @app.post("/admin/users", response_model=UserQuotaView)
 async def admin_create_user(payload: UserCreateRequest, user: UserInfo = Depends(require_admin)):
     """Create a new user (admin only)"""
+    
+    # ✅ Tarkista sekä muistista ETTÄ tietokannasta
     if payload.username in USERS_DB:
         raise HTTPException(400, f"User '{payload.username}' already exists")
     
+    if DATABASE_ENABLED and get_user_from_db(payload.username):
+        raise HTTPException(400, f"User '{payload.username}' already exists in database")
+    
+    # Hash password
+    hashed_password = pwd_context.hash(payload.password)
+    
+    # ✅ 1. Tallenna USERS_DB (muisti)
     USERS_DB[payload.username] = {
         "username": payload.username,
-        "hashed_password": pwd_context.hash(payload.password),
+        "hashed_password": hashed_password,
         "role": payload.role,
         "search_limit": payload.search_limit
     }
+    
+    # ✅ 2. Tallenna tietokantaan (jos saatavilla)
+    if DATABASE_ENABLED:
+        success = create_user_in_db(
+            username=payload.username,
+            hashed_password=hashed_password,
+            role=payload.role,
+            search_limit=payload.search_limit
+        )
+        if not success:
+            # Rollback memory if DB save fails
+            del USERS_DB[payload.username]
+            raise HTTPException(500, "Failed to save user to database")
     
     logger.info(f"Admin {user.username} created user: {payload.username} (role={payload.role}, limit={payload.search_limit})")
     
@@ -4563,7 +4615,9 @@ def require_admin_or_super(user: UserInfo = Depends(get_current_user)):
 @app.delete("/admin/users/{username}")
 async def admin_delete_user(username: str, user: UserInfo = Depends(require_admin)):
     """Delete a user (admin only)"""
-    if username not in USERS_DB:
+    
+    # ✅ Tarkista sekä muistista ETTÄ tietokannasta
+    if username not in USERS_DB and (not DATABASE_ENABLED or not get_user_from_db(username)):
         raise HTTPException(404, "User not found")
     
     if username == "admin":
@@ -4572,7 +4626,15 @@ async def admin_delete_user(username: str, user: UserInfo = Depends(require_admi
     if username == user.username:
         raise HTTPException(403, "Cannot delete yourself")
     
-    del USERS_DB[username]
+    # ✅ 1. Poista muistista
+    if username in USERS_DB:
+        del USERS_DB[username]
+    
+    # ✅ 2. Poista tietokannasta
+    if DATABASE_ENABLED:
+        delete_user_from_db(username)
+    
+    # ✅ 3. Poista search counter
     user_search_counts.pop(username, None)
     
     logger.info(f"Admin {user.username} deleted user: {username}")
