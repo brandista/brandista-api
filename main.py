@@ -760,22 +760,21 @@ if DATABASE_ENABLED:
     sync_hardcoded_users_to_db(USERS_DB)
     logger.info("✅ Database initialized and users synced")
     
-    # ✅ UUSI: Lataa kaikki käyttäjät tietokannasta muistiin
-    try:
-        db_users = get_all_users_from_db()
-        for db_user in db_users:
-            username = db_user['username']
-            # Älä ylikirjoita hardcoded käyttäjiä
-            if username not in USERS_DB:
-                USERS_DB[username] = {
-                    'username': username,
-                    'hashed_password': db_user['hashed_password'],
-                    'role': db_user['role'],
-                    'search_limit': db_user['search_limit']
-                }
-                logger.info(f"📥 Loaded user from DB: {username}")
-    except Exception as e:
-        logger.error(f"Failed to load users from database: {e}")
+   # ✅ UUSI (KORJATTU)
+try:
+    db_users = get_all_users_from_db()
+    for db_user in db_users:
+        username = db_user['username']
+        if username not in USERS_DB:
+            USERS_DB[username] = {
+                'username': username,
+                'hashed_password': db_user.get('password_hash') or db_user.get('hashed_password', ''),  # ✅ Kokeilee molempia
+                'role': db_user['role'],
+                'search_limit': db_user['search_limit']
+            }
+            logger.info(f"🔥 Loaded user from DB: {username}")
+except Exception as e:
+    logger.error(f"Failed to load users from database: {e}")
 
 # ============================================================================
 # COMPLETE PYDANTIC MODELS
