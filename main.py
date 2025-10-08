@@ -1597,24 +1597,48 @@ async def analyze_basic_metrics_enhanced(
         details['modern_features'] = modern_features
         
         # MOBILE (enhanced)
+        
+        mobile_raw = 0
         viewport = soup.find('meta', attrs={'name': 'viewport'})
+
         if viewport:
             vc = viewport.get('content', '')
-            if 'width=device-width' in vc: score_components['mobile'] += 5
-            if 'initial-scale=1' in vc: score_components['mobile'] += 3
-            details['has_viewport'] = True
+            if 'width=device-width' in vc: 
+                mobile_raw += 40  # ✅ Muutettu 5 → 40
+                details['has_viewport'] = True
+            if 'initial-scale=1' in vc: 
+                mobile_raw += 20  # ✅ Muutettu 3 → 20
         else:
             details['has_viewport'] = False
-        
-        resp = check_responsive_design(html)
-        score_components['mobile'] += resp['score']
-        
-        # SPA mobile bonus (they often have good responsive design)
-        if spa_detected and resp['score'] >= 5:
-            score_components['mobile'] = min(SCORING_CONFIG.weights['mobile'], score_components['mobile'] + 2)
+
+        # Tarkista responsive signaalit (korvaa check_responsive_design)
+        if detect_responsive_signals(html):
+            mobile_raw += 20  # ✅ Uusi
+
+        # Tarkista media queries
+        if '@media' in html.lower():
+            mobile_raw += 20  # ✅ Uusi
+
+        # SPA mobile bonus (muutettu skaalaus)
+        if spa_detected and mobile_raw >= 80:  # ✅ Muutettu: jos jo vahva responsive
+            mobile_raw = min(100, mobile_raw + 10)  # ✅ Muutettu: +2 → +10 (koska 0-100 skaalassa)
             details['spa_mobile_bonus'] = True
-        
-        details['responsive_design'] = resp
+
+        # Laske 0-100 pistemäärä
+        mobile_score_100 = min(100, mobile_raw)
+
+        # Skaalaa breakdown-pisteksi (0-15)
+        score_components['mobile'] = int((mobile_score_100 / 100) * SCORING_CONFIG.weights['mobile'])
+
+        # Tallenna detailsiin
+        details['mobile_score_raw'] = mobile_score_100
+        details['responsive_design'] = {
+            'score': mobile_score_100,
+            'has_viewport': details.get('has_viewport', False),
+            'responsive_signals': detect_responsive_signals(html),
+            'media_queries': '@media' in html.lower(),
+            'spa_bonus_applied': details.get('spa_mobile_bonus', False)
+        }
         
         # SOCIAL
         social_platforms = extract_social_platforms(html)
