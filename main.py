@@ -715,6 +715,12 @@ USERS_DB = {
         "hashed_password": pwd_context.hash("kaikka123"),
         "role": "admin", 
         "search_limit": -1
+    },
+    "super_user": {
+        "username": "super_user",
+        "hashed_password": pwd_context.hash("superpower123"),
+        "role": "super_user",
+        "search_limit": -1
     }
 }
 
@@ -4486,7 +4492,7 @@ async def admin_update_quota(username: str, payload: QuotaUpdateRequest, user: U
 class UserCreateRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=50, pattern="^[a-zA-Z0-9_-]+$")
     password: str = Field(..., min_length=6)
-    role: str = Field("user", pattern="^(user|admin)$")
+    role: str = Field("user", pattern="^(user|admin|super_user)$") 
     search_limit: int = Field(3, ge=-1)
 
 @app.post("/admin/users", response_model=UserQuotaView)
@@ -4510,6 +4516,12 @@ async def admin_create_user(payload: UserCreateRequest, user: UserInfo = Depends
         search_limit=payload.search_limit,
         searches_used=0
     )
+
+def require_admin_or_super(user: UserInfo = Depends(get_current_user)):
+    """Require admin OR super_user role"""
+    if user.role not in ["admin", "super_user"]:
+        raise HTTPException(403, "Admin or Super User access required")
+    return user
 
 @app.delete("/admin/users/{username}")
 async def admin_delete_user(username: str, user: UserInfo = Depends(require_admin)):
