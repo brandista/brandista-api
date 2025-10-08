@@ -158,6 +158,8 @@ except Exception:
 from dotenv import load_dotenv
 load_dotenv()
 
+
+
 # ============================================================================
 # CONFIGURATION SYSTEM
 # ============================================================================
@@ -267,6 +269,36 @@ logger = logging.getLogger(__name__)
 logger.info(f"Starting {APP_NAME} v{APP_VERSION}")
 logger.info(f"Scoring weights: {SCORING_CONFIG.weights}")
 logger.info(f"Playwright support: {'enabled' if PLAYWRIGHT_AVAILABLE and PLAYWRIGHT_ENABLED else 'disabled'}")
+
+# ============================================================================
+# DATABASE INTEGRATION
+# ============================================================================
+
+try:
+    from database import (
+        init_database, 
+        is_database_available,
+        get_user_from_db,
+        get_all_users_from_db,
+        create_user_in_db,
+        update_user_in_db,
+        delete_user_from_db,
+        sync_hardcoded_users_to_db
+    )
+    DATABASE_ENABLED = True
+    logger.info("✅ Database module imported successfully")  # ✅ Nyt logger on olemassa!
+except ImportError as e:
+    logger.warning(f"⚠️ Database module not available: {e}")  # ✅ Nyt logger on olemassa!
+    DATABASE_ENABLED = False
+    # Fallback functions
+    def is_database_available(): return False
+    def get_user_from_db(username): return None
+    def get_all_users_from_db(): return []
+    def create_user_in_db(*args, **kwargs): return False
+    def update_user_in_db(*args, **kwargs): return False
+    def delete_user_from_db(username): return False
+    def sync_hardcoded_users_to_db(users): pass
+    def init_database(): pass
 
 # ============================================================================
 # GLOBAL VARIABLES
@@ -723,6 +755,11 @@ USERS_DB = {
         "search_limit": -1
     }
 }
+# Initialize database and sync users
+if DATABASE_ENABLED:
+    init_database()
+    sync_hardcoded_users_to_db(USERS_DB)
+    logger.info("✅ Database initialized and users synced")
 
 # ============================================================================
 # COMPLETE PYDANTIC MODELS
