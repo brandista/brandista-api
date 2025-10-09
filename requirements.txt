@@ -41,3 +41,5 @@ redis==5.0.1
 
 sqlalchemy>=2.0.0
 psycopg2-binary
+
+google-api-python-client==2.108.0
