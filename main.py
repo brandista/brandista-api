@@ -4450,30 +4450,29 @@ async def discover_competitors(
         raise HTTPException(400, "Invalid user URL provided")
     
     # === 3. GOOGLE SEARCH ===
-search_terms = [
-    f"top 5 {request.industry} Suomessa",
-    f"parhaat {request.industry}",
-    f"{request.industry} kilpailijat"
-]
-
-all_results = []
-for term in search_terms:
-    try:
-        # ✅ Käyttää nyt virallista API:a
-        results = search(term, num_results=7, lang=request.country_code)
-        all_results.extend(results)
-        logger.info(f"Google Search '{term}': {len(results)} results")
-    except Exception as e:
-        logger.warning(f"Google search failed: '{term}' - {e}")
-
-if not all_results:
-    raise HTTPException(
-        503,
-        "Google Search API not available or returned no results. "
-        "Please check API credentials and try again."
-    )
-
-unique_urls = list(dict.fromkeys(all_results))
+    search_terms = [
+        f"top 5 {request.industry} Suomessa",
+        f"parhaat {request.industry}",
+        f"{request.industry} kilpailijat"
+    ]
+    
+    all_results = []
+    for term in search_terms:
+        try:
+            results = search(term, num_results=7, lang=request.country_code)
+            all_results.extend(results)
+            logger.info(f"Google Search '{term}': {len(results)} results")
+        except Exception as e:
+            logger.warning(f"Google search failed: '{term}' - {e}")
+    
+    if not all_results:
+        raise HTTPException(
+            503,
+            "Google Search API not available or returned no results. "
+            "Please check API credentials and try again."
+        )
+    
+    unique_urls = list(dict.fromkeys(all_results))
     
     # === 4. FILTER COMPETITORS ===
     non_competitor_domains = [
@@ -4491,7 +4490,6 @@ unique_urls = list(dict.fromkeys(all_results))
             if not domain or domain in seen_domains:
                 continue
             
-            # Skip blacklisted domains
             if any(blacklist in domain for blacklist in non_competitor_domains):
                 continue
             
@@ -4501,7 +4499,7 @@ unique_urls = list(dict.fromkeys(all_results))
         except Exception:
             continue
     
-    competitors_to_analyze = potential_competitors[:4]  # Max 4 to avoid overload
+    competitors_to_analyze = potential_competitors[:4]
     
     if not competitors_to_analyze:
         raise HTTPException(
