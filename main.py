@@ -4541,7 +4541,7 @@ async def discover_competitors(
         username=user.username
     )
     
-    # === 7. START BACKGROUND PROCESSING ===
+# === 7. START BACKGROUND PROCESSING ===
     async def process_discovery():
         """Background worker for competitor analyses"""
         
@@ -4562,7 +4562,7 @@ async def discover_competitors(
                 clean_competitor_url = clean_url(competitor_url)
                 _reject_ssrf(clean_competitor_url)
                 
-                # ✅ NOW WORKS - _perform_comprehensive_analysis_internal is defined above
+                # Perform analysis
                 result = await _perform_comprehensive_analysis_internal(
                     url=clean_competitor_url,
                     company_name=competitor["domain"],
@@ -4571,7 +4571,7 @@ async def discover_competitors(
                     user=user
                 )
                 
-                # Save result to Redis
+                # ✅ Save SUCCESS result with full analysis
                 task_queue.add_result(task_id, {
                     "url": competitor_url,
                     "domain": competitor["domain"],
@@ -4581,7 +4581,8 @@ async def discover_competitors(
                         clean_competitor_url, 
                         "ai_comprehensive_v6.1.1_complete"
                     ),
-                    "analyzed_at": datetime.now().isoformat()
+                    "analyzed_at": datetime.now().isoformat(),
+                    "analysis": result  # ✅ KOKO ANALYYSI!
                 })
                 
                 logger.info(f"✅ [{task_id}] {idx}/{required_analyses} done: {competitor_url}")
@@ -4589,7 +4590,7 @@ async def discover_competitors(
             except Exception as e:
                 logger.error(f"❌ [{task_id}] Failed {competitor_url}: {e}")
                 
-                # Save error result
+                # ✅ Save FAILURE result
                 task_queue.add_result(task_id, {
                     "url": competitor_url,
                     "domain": competitor["domain"],
@@ -4611,6 +4612,7 @@ async def discover_competitors(
         
         logger.info(f"🏁 Discovery task {task_id} completed for {user.username}")
     
+    # ✅ TÄRKEÄ: Tämä on ULKONA process_discovery funktiosta!
     # Start background task (non-blocking)
     asyncio.create_task(process_discovery())
     
@@ -4625,20 +4627,13 @@ async def discover_competitors(
         "credits_reserved": required_analyses if user.role != "admin" else 0
     }
 
+# ✅ Nämä endpointit ovat ERILLÄÄN discover_competitors funktiosta!
 @app.get("/api/v1/discovery-status/{task_id}")
 async def get_discovery_status(
     task_id: str,
     user: UserInfo = Depends(require_user)
 ):
-    """
-    Get competitor discovery task status and results.
-    
-    Returns:
-    - pending: Waiting in queue
-    - running: Processing (shows progress/total)
-    - completed: Done (results available)
-    - not_found: Task expired or invalid ID
-    """
+    """Get competitor discovery task status and results."""
     
     if not task_queue:
         raise HTTPException(503, "Task queue not available")
@@ -4648,7 +4643,6 @@ async def get_discovery_status(
     if task_status.get("status") == "not_found":
         raise HTTPException(404, "Task not found or expired")
     
-    # Check ownership
     if task_status.get("username") != user.username and user.role != "admin":
         raise HTTPException(403, "Not your task")
     
@@ -4715,7 +4709,7 @@ async def get_discovery_results(
     }
 
 # ============================================================================
-# MAIN ANALYSIS ENDPOINT (continues as before...)
+# MAIN ANALYSIS ENDPOINT
 # ============================================================================
 
 @app.post("/api/v1/ai-analyze")
@@ -4741,7 +4735,7 @@ async def ai_analyze_comprehensive(
         url = clean_url(request.url)
         _reject_ssrf(url)
         
-        # === PERFORM ANALYSIS (using internal helper) ===
+        # === PERFORM ANALYSIS ===
         result = await _perform_comprehensive_analysis_internal(
             url=url,
             company_name=request.company_name,
@@ -4780,17 +4774,8 @@ async def ai_analyze_comprehensive(
         )
 
 
-
-
-
 # ============================================================================
 # ANALYSIS CORE - INTERNAL HELPER
-# ============================================================================
-
-
-
-
-
 
 ## ============================================================================
 # SYSTEM AND ADMIN ENDPOINTS
