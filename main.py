@@ -4742,83 +4742,6 @@ async def calculate_revenue_impact(request: RevenueCalculationRequest):  # 👈 
         "calculation_note": f"Based on {impact.calculation_basis} revenue data"
     }
 
-# main.py
-
-# MUOKATAAN OLEMASSA OLEVAA PÄÄTEPISTETTÄ
-
-        # === 7. START BACKGROUND PROCESSING ===
-async def process_discovery():
-        """Background worker for competitor analyses"""
-        
-        task_queue.update_task(task_id, {
-            "status": "running",
-            "started_at": datetime.now().isoformat()
-        })
-        
-        for idx, competitor in enumerate(competitors_to_analyze, 1):
-            competitor_url = competitor["url"]
-            
-            try:
-                logger.info(
-                    f"[Task {task_id}] Analyzing {idx}/{required_analyses}: {competitor_url}"
-                )
-                
-                # Clean and validate URL
-                clean_competitor_url = clean_url(competitor_url)
-                _reject_ssrf(clean_competitor_url)
-                
-                # USE INTERNAL HELPER - no quota check needed
-                result = await _perform_comprehensive_analysis_internal(
-                    url=clean_competitor_url,
-                    company_name=competitor["domain"],
-                    language=request.country_code,
-                    force_playwright=False,
-                    user=user  # For metadata only
-                )
-                
-                # Save result to Redis
-                task_queue.add_result(task_id, {
-                    "url": competitor_url,
-                    "domain": competitor["domain"],
-                    "status": "success",
-                    "score": result["basic_analysis"]["digital_maturity_score"],
-                    "cache_key": get_cache_key(
-                        clean_competitor_url, 
-                        "ai_comprehensive_v6.1.1_complete"
-                    ),
-                    "analyzed_at": datetime.now().isoformat()
-                })
-                
-                logger.info(f"✅ [{task_id}] {idx}/{required_analyses} done: {competitor_url}")
-                
-            except Exception as e:
-                logger.error(f"❌ [{task_id}] Failed {competitor_url}: {e}")
-                
-                # Save error result
-                task_queue.add_result(task_id, {
-                    "url": competitor_url,
-                    "domain": competitor["domain"],
-                    "status": "failed",
-                    "error": str(e),
-                    "error_type": type(e).__name__
-                })
-                
-                # REFUND credit on error
-                if user.role != "admin":
-                    user_search_counts[user.username] -= 1
-                    logger.info(f"Refunded 1 credit to {user.username} due to error")
-        
-        # Mark task complete
-        task_queue.update_task(task_id, {
-            "status": "completed",
-            "completed_at": datetime.now().isoformat()
-        })
-        
-        logger.info(f"🏁 Discovery task {task_id} completed for {user.username}")
-    
-    # Start background task (non-blocking)
-    asyncio.create_task(process_discovery())
-
 @app.post("/api/v1/discover-competitors", tags=["Competitor Discovery"])
 async def discover_competitors(
     request: CompetitorDiscoveryRequest,
@@ -4907,7 +4830,7 @@ async def discover_competitors(
         except Exception:
             continue
     
-    competitors_to_analyze = potential_competitors[:4]  # Max 4 to avoid overload
+    competitors_to_analyze = potential_competitors[:5]  # Max 5 to avoid overload
     
     if not competitors_to_analyze:
         raise HTTPException(
@@ -4947,7 +4870,78 @@ async def discover_competitors(
         username=user.username
     )
     
+    # === 7. START BACKGROUND PROCESSING ===
+    async def process_discovery():
+        """Background worker for competitor analyses"""
+        
+        task_queue.update_task(task_id, {
+            "status": "running",
+            "started_at": datetime.now().isoformat()
+        })
+        
+        for idx, competitor in enumerate(competitors_to_analyze, 1):
+            competitor_url = competitor["url"]
+            
+            try:
+                logger.info(
+                    f"[Task {task_id}] Analyzing {idx}/{required_analyses}: {competitor_url}"
+                )
+                
+                # Clean and validate URL
+                clean_competitor_url = clean_url(competitor_url)
+                _reject_ssrf(clean_competitor_url)
+                
+                # USE INTERNAL HELPER - no quota check needed
+                result = await _perform_comprehensive_analysis_internal(
+                    url=clean_competitor_url,
+                    company_name=competitor["domain"],
+                    language=request.country_code,
+                    force_playwright=False,
+                    user=user  # For metadata only
+                )
+                
+                # Save result to Redis
+                task_queue.add_result(task_id, {
+                    "url": competitor_url,
+                    "domain": competitor["domain"],
+                    "status": "success",
+                    "score": result["basic_analysis"]["digital_maturity_score"],
+                    "cache_key": get_cache_key(
+                        clean_competitor_url, 
+                        "ai_comprehensive_v6.1.1_complete"
+                    ),
+                    "analyzed_at": datetime.now().isoformat()
+                })
+                
+                logger.info(f"✅ [{task_id}] {idx}/{required_analyses} done: {competitor_url}")
+                
+            except Exception as e:
+                logger.error(f"❌ [{task_id}] Failed {competitor_url}: {e}")
+                
+                # Save error result
+                task_queue.add_result(task_id, {
+                    "url": competitor_url,
+                    "domain": competitor["domain"],
+                    "status": "failed",
+                    "error": str(e),
+                    "error_type": type(e).__name__
+                })
+                
+                # REFUND credit on error
+                if user.role != "admin":
+                    user_search_counts[user.username] -= 1
+                    logger.info(f"Refunded 1 credit to {user.username} due to error")
+        
+        # Mark task complete
+        task_queue.update_task(task_id, {
+            "status": "completed",
+            "completed_at": datetime.now().isoformat()
+        })
+        
+        logger.info(f"🏁 Discovery task {task_id} completed for {user.username}")
     
+    # Start background task (non-blocking)
+    asyncio.create_task(process_discovery())
     
     # === 8. RETURN IMMEDIATE RESPONSE ===
     return {
@@ -4955,10 +4949,11 @@ async def discover_competitors(
         "message": f"Competitor discovery started for {required_analyses} competitors",
         "task_id": task_id,
         "status_url": f"/api/v1/discovery-status/{task_id}",
-        "estimated_time_minutes": round(required_analyses * 0.5, 1),  # ~30s per site
+        "estimated_time_minutes": round(required_analyses * 0.5, 1),
         "competitors": [c["domain"] for c in competitors_to_analyze],
         "credits_reserved": required_analyses if user.role != "admin" else 0
     }
+
 @app.get("/api/v1/discovery-status/{task_id}")
 async def get_discovery_status(
     task_id: str,
