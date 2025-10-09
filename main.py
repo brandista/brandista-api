@@ -4501,7 +4501,7 @@ async def discover_competitors(
         except Exception:
             continue
     
-    competitors_to_analyze = potential_competitors[:4]
+    competitors_to_analyze = potential_competitors[:5]
     
     if not competitors_to_analyze:
         raise HTTPException(
