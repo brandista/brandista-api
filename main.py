@@ -4676,7 +4676,7 @@ async def get_discovery_results(
     task_id: str,
     user: UserInfo = Depends(require_user)
 ):
-    """Get full competitor analyses from cache"""
+    """Get full competitor analyses directly from task queue results"""
     
     if not task_queue:
         raise HTTPException(503, "Task queue not available")
@@ -4692,15 +4692,25 @@ async def get_discovery_results(
     if task_status.get("status") != "completed":
         raise HTTPException(400, "Task not completed yet")
     
+    # ✅ HAE TULOKSET SUORAAN REDIS:STÄ (sisältää "analysis" kentän!)
     results = task_queue.get_results(task_id)
     
-    # Fetch full analyses from cache
+    # ✅ PURA ANALYYSIT SUORAAN RESULTS:STA
     full_analyses = []
     for result in results:
-        if result.get("status") == "success" and result.get("cache_key"):
-            full_analysis = await get_from_cache(result["cache_key"])
-            if full_analysis:
-                full_analyses.append(full_analysis)
+        if result.get("status") == "success":
+            # ✅ Analyysi on jo result:ssa, ei tarvitse hakea cachesta!
+            analysis = result.get("analysis")
+            
+            if analysis:
+                full_analyses.append(analysis)
+            else:
+                # Fallback: yritä hakea cachesta jos ei löydy
+                cache_key = result.get("cache_key")
+                if cache_key:
+                    cached_analysis = await get_from_cache(cache_key)
+                    if cached_analysis:
+                        full_analyses.append(cached_analysis)
     
     return {
         "task_id": task_id,
