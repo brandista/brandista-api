@@ -38,18 +38,93 @@ import ipaddress
 import redis
 import json
 # main.py (tiedoston alussa)
-# ... muiden importien joukkoon
-from urllib.parse import urlparse
-try:
-    from googlesearch import search
-    GOOGLE_SEARCH_AVAILABLE = True
-except ImportError:
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GOOGLE_SEARCH_ENGINE_ID = os.getenv("GOOGLE_SEARCH_ENGINE_ID", "171a60959e6cb4d76")
+
+GOOGLE_SEARCH_AVAILABLE = False
+
+if GOOGLE_API_KEY and GOOGLE_SEARCH_ENGINE_ID:
+    try:
+        from googleapiclient.discovery import build
+        from googleapiclient.errors import HttpError
+        
+        def search(query: str, num_results: int = 10, lang: str = "fi") -> List[str]:
+            """
+            Official Google Custom Search API
+            
+            Args:
+                query: Search query
+                num_results: Number of results (max 100)
+                lang: Language code (fi, en, etc)
+            
+            Returns:
+                List of URLs
+            """
+            try:
+                service = build("customsearch", "v1", developerKey=GOOGLE_API_KEY)
+                
+                results = []
+                start_index = 1
+                
+                # Google API max 10 results per request, max 100 total
+                while len(results) < num_results and start_index <= 91:
+                    
+                    request_params = {
+                        "q": query,
+                        "cx": GOOGLE_SEARCH_ENGINE_ID,
+                        "num": min(10, num_results - len(results)),
+                        "start": start_index
+                    }
+                    
+                    # Add language restriction if specified
+                    if lang and lang != "en":
+                        request_params["lr"] = f"lang_{lang}"
+                    
+                    response = service.cse().list(**request_params).execute()
+                    
+                    if "items" not in response:
+                        break
+                    
+                    results.extend([item["link"] for item in response["items"]])
+                    start_index += 10
+                    
+                    # Stop if we got fewer results than requested (last page)
+                    if len(response["items"]) < 10:
+                        break
+                
+                return results[:num_results]
+                
+            except HttpError as e:
+                logger.error(f"Google API error: {e}")
+                return []
+            except Exception as e:
+                logger.error(f"Search failed: {e}")
+                return []
+        
+        GOOGLE_SEARCH_AVAILABLE = True
+        logger.info("✅ Google Custom Search API initialized (Official)")
+        
+    except ImportError:
+        logger.warning("⚠️ google-api-python-client not installed")
+        logger.warning("Install: pip install google-api-python-client")
+        GOOGLE_SEARCH_AVAILABLE = False
+        
+        def search(query, num_results, lang):
+            raise NotImplementedError(
+                "Install: pip install google-api-python-client"
+            )
+            
+else:
+    # No API credentials
+    logger.warning("⚠️ Google Search disabled - missing API credentials")
+    logger.warning("Set GOOGLE_API_KEY and GOOGLE_SEARCH_ENGINE_ID in .env")
     GOOGLE_SEARCH_AVAILABLE = False
-    # Vara-funktio, jos kirjastoa ei löydy
+    
     def search(query, num_results, lang):
-        print(f"VAROITUS: googlesearch-python ei asennettu. Palautetaan testidataa.")
-        return [f"https://www.kilpailija{i}.{lang}/" for i in range(num_results )]
-# ...
+        raise NotImplementedError(
+            "Google Search requires API credentials. "
+            "Set GOOGLE_API_KEY and GOOGLE_SEARCH_ENGINE_ID in .env file"
+        )
 
 # ===== Content Fetch Config (Aggressive defaults) =====
 CONTENT_FETCH_MODE = os.getenv("CONTENT_FETCH_MODE", "aggressive")  # "aggressive" | "balanced" | "light"
@@ -331,6 +406,8 @@ if REDIS_URL:
         redis_client = redis.from_url(REDIS_URL, decode_responses=True)
         redis_client.ping()
         logger.info("Redis connected successfully")
+        
+        from redis_tasks import RedisTaskQueue 
     except Exception as e:
         logger.warning(f"Redis connection failed: {e}")
         redis_client = None
@@ -384,29 +461,6 @@ async def detect_spa_framework(html_content: str) -> Dict[str, Any]:
         'document.getelementbyid("app")'
     ]
     
-    # Rivi 381
-REDIS_URL = os.getenv("REDIS_URL")
-redis_client = None
-
-if REDIS_URL:
-    try:
-        redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-        redis_client.ping()
-        logger.info("Redis connected successfully")
-        
-        # ✅ LISÄÄ TÄHÄN (UUSI)
-        from redis_tasks import RedisTaskQueue
-        task_queue = RedisTaskQueue(redis_client)
-        logger.info("✅ Redis task queue initialized")
-        
-    except Exception as e:
-        logger.warning(f"Redis connection failed: {e}")
-        redis_client = None
-        task_queue = None  # ✅ LISÄÄ
-else:
-    logger.info("No REDIS_URL provided, using memory cache")
-    task_queue = None  # ✅ LISÄÄ
-
     has_spa_indicators = any(indicator in html_lower for indicator in spa_indicators)
     
     # Check content ratio - SPAs often have minimal initial HTML
@@ -420,6 +474,36 @@ else:
         'content_words': content_words,
         'requires_js_rendering': bool(detected) and is_minimal_content
     }
+
+# ============================================================================
+# REDIS TASK QUEUE SETUP (MOVED HERE - OUTSIDE FUNCTION!)
+# ============================================================================
+
+REDIS_URL = os.getenv("REDIS_URL")
+redis_client = None
+task_queue = None
+
+if REDIS_URL:
+    try:
+        redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+        redis_client.ping()
+        logger.info("Redis connected successfully")
+        
+        from redis_tasks import RedisTaskQueue
+        task_queue = RedisTaskQueue(redis_client)
+        logger.info("✅ Redis task queue initialized")
+        
+    except Exception as e:
+        logger.warning(f"Redis connection failed: {e}")
+        redis_client = None
+        task_queue = None
+else:
+    logger.info("No REDIS_URL provided, using memory cache")
+    task_queue = None
+
+# ============================================================================
+# PLAYWRIGHT UTILITIES (CONTINUES)
+# ============================================================================
 
 async def fetch_with_playwright(url: str, timeout: int = PLAYWRIGHT_TIMEOUT) -> Optional[Dict[str, Any]]:
     """Fetch webpage content using Playwright for SPA support"""
@@ -1054,12 +1138,6 @@ class UserQuotaView(BaseModel):
     search_limit: int
     searches_used: int# --- NEW: humanized analysis models ---
 
-class BusinessImpact(BaseModel):
-    """Original BusinessImpact model - kept for backward compatibility"""
-    lead_gain_estimate: Optional[str] = None         # e.g. "12–20 leads/mo"
-    revenue_uplift_range: Optional[str] = None       # e.g. "+3–6% revenue"
-    confidence: Optional[str] = "M"                  # L | M | H
-    customer_trust_effect: Optional[str] = None      # short human note
 
 class RevenueInputRequest(BaseModel):
     """User's actual business metrics for personalized impact calculation"""
@@ -4372,21 +4450,30 @@ async def discover_competitors(
         raise HTTPException(400, "Invalid user URL provided")
     
     # === 3. GOOGLE SEARCH ===
-    search_terms = [
-        f"top 5 {request.industry}",
-        f"parhaat {request.industry}",
-        f"vaihtoehtoja yritykselle {user_domain}"
-    ]
-    
-    all_results = []
-    for term in search_terms:
-        try:
-            results = search(term, num_results=7, lang=request.country_code)
-            all_results.extend(results)
-        except Exception as e:
-            logger.warning(f"Google search failed: '{term}' - {e}")
-    
-    unique_urls = list(dict.fromkeys(all_results))
+search_terms = [
+    f"top 5 {request.industry} Suomessa",
+    f"parhaat {request.industry}",
+    f"{request.industry} kilpailijat"
+]
+
+all_results = []
+for term in search_terms:
+    try:
+        # ✅ Käyttää nyt virallista API:a
+        results = search(term, num_results=7, lang=request.country_code)
+        all_results.extend(results)
+        logger.info(f"Google Search '{term}': {len(results)} results")
+    except Exception as e:
+        logger.warning(f"Google search failed: '{term}' - {e}")
+
+if not all_results:
+    raise HTTPException(
+        503,
+        "Google Search API not available or returned no results. "
+        "Please check API credentials and try again."
+    )
+
+unique_urls = list(dict.fromkeys(all_results))
     
     # === 4. FILTER COMPETITORS ===
     non_competitor_domains = [
@@ -4693,615 +4780,17 @@ async def ai_analyze_comprehensive(
         )
 
 
-@app.post("/api/v1/calculate-impact")
-async def calculate_revenue_impact(request: RevenueCalculationRequest):  # 👈 MUUTA TÄMÄ
-    """
-    Standalone calculator for revenue impact estimation
-    
-    Example usage:
-    POST /api/v1/calculate-impact
-    {
-        "revenue_input": {
-            "annual_revenue": 750000
-        },
-        "digital_score": 38
-    }
-    
-    Returns detailed revenue impact projections without full website analysis
-    """
-    
-    revenue_input = request.revenue_input
-    digital_score = request.digital_score
-    
-    # Create minimal analysis objects for calculation
-    basic = {
-        'digital_maturity_score': digital_score,
-        'score_breakdown': {
-            'seo_basics': int(digital_score * 0.2),
-            'mobile': int(digital_score * 0.15)
-        },
-        'modernity_score': digital_score
-    }
-    
-    content = {'content_quality_score': digital_score}
-    ux = {'overall_ux_score': digital_score}
-    
-    impact = compute_business_impact_with_input(basic, content, ux, revenue_input)
-    
-    return {
-        "success": True,
-        "business_impact": impact.dict(),
-        "recommendations": [
-            f"Focus on {area}" for area in impact.improvement_areas[:3]
-        ],
-        "next_steps": [
-            "Run full website analysis for detailed action plan",
-            "Review scenario planning for implementation roadmap",
-            "Track metrics monthly to validate improvements"
-        ],
-        "calculation_note": f"Based on {impact.calculation_basis} revenue data"
-    }
 
-@app.post("/api/v1/discover-competitors", tags=["Competitor Discovery"])
-async def discover_competitors(
-    request: CompetitorDiscoveryRequest,
-    user: UserInfo = Depends(require_user)
-):
-    """
-    Discover competitors and analyze them in background using Redis task queue.
-    
-    Process:
-    1. Search Google for competitors in your industry
-    2. Filter out non-competitor domains (social media, news sites)
-    3. Reserve quota for all analyses
-    4. Start background processing
-    5. Return task_id for status tracking
-    
-    Returns:
-        task_id: Use with /api/v1/discovery-status/{task_id}
-        competitors: List of domains being analyzed
-    """
-    
-    if not task_queue:
-        raise HTTPException(503, "Task queue not available - Redis required")
-    
-    if not GOOGLE_SEARCH_AVAILABLE and os.getenv("MODE") != "development":
-        raise HTTPException(501, "Competitor discovery not available on this server")
-    
-    logger.info(f"Discovery started: {user.username} | Industry: '{request.industry}'")
-    
-    # === 1. CHECK FOR EXISTING ACTIVE TASKS ===
-    active_tasks = task_queue.check_user_active_tasks(user.username)
-    if active_tasks > 0:
-        raise HTTPException(
-            429, 
-            f"You have {active_tasks} active discovery task(s). "
-            "Please wait for completion or check status."
-        )
-    
-    # === 2. VALIDATE USER URL ===
-    try:
-        user_domain = urlparse(request.url).netloc.replace("www.", "")
-        if not user_domain:
-            raise ValueError("Invalid domain")
-    except Exception:
-        raise HTTPException(400, "Invalid user URL provided")
-    
-    # === 3. GOOGLE SEARCH ===
-    search_terms = [
-        f"top 5 {request.industry}",
-        f"parhaat {request.industry}",
-        f"vaihtoehtoja yritykselle {user_domain}"
-    ]
-    
-    all_results = []
-    for term in search_terms:
-        try:
-            results = search(term, num_results=7, lang=request.country_code)
-            all_results.extend(results)
-        except Exception as e:
-            logger.warning(f"Google search failed: '{term}' - {e}")
-    
-    unique_urls = list(dict.fromkeys(all_results))
-    
-    # === 4. FILTER COMPETITORS ===
-    non_competitor_domains = [
-        "facebook.com", "linkedin.com", "youtube.com", "wikipedia.org", 
-        "google.com", "tori.fi", "yle.fi", "hs.fi", "is.fi", 
-        "kauppalehti.fi", "tivi.fi", "suomi24.fi"
-    ]
-    
-    potential_competitors = []
-    seen_domains = {user_domain}
-    
-    for url in unique_urls:
-        try:
-            domain = urlparse(url).netloc.replace("www.", "")
-            if not domain or domain in seen_domains:
-                continue
-            
-            # Skip blacklisted domains
-            if any(blacklist in domain for blacklist in non_competitor_domains):
-                continue
-            
-            seen_domains.add(domain)
-            potential_competitors.append({"url": url, "domain": domain})
-            
-        except Exception:
-            continue
-    
-    competitors_to_analyze = potential_competitors[:5]  # Max 5 to avoid overload
-    
-    if not competitors_to_analyze:
-        raise HTTPException(
-            404, 
-            "No suitable competitors found. Try a more specific industry term."
-        )
-    
-    # === 5. QUOTA CHECK & RESERVATION ===
-    required_analyses = len(competitors_to_analyze)
-    
-    if user.role != "admin":
-        user_limit = USERS_DB.get(user.username, {}).get("search_limit", DEFAULT_USER_LIMIT)
-        current_count = user_search_counts.get(user.username, 0)
-        available = user_limit - current_count
-        
-        if user_limit > 0 and required_analyses > available:
-            raise HTTPException(
-                403,
-                f"Discovery requires {required_analyses} analyses. "
-                f"You have {available} remaining of {user_limit} quota."
-            )
-        
-        # RESERVE quota immediately
-        user_search_counts[user.username] = current_count + required_analyses
-        logger.info(f"Reserved {required_analyses} credits for {user.username}")
-    
-    # === 6. CREATE REDIS TASK ===
-    task_id = task_queue.create_task(
-        task_type="competitor_discovery",
-        data={
-            "competitors": competitors_to_analyze,
-            "total": len(competitors_to_analyze),
-            "user_url": request.url,
-            "industry": request.industry,
-            "language": request.country_code
-        },
-        username=user.username
-    )
-    
-    # === 7. START BACKGROUND PROCESSING ===
-    async def process_discovery():
-        """Background worker for competitor analyses"""
-        
-        task_queue.update_task(task_id, {
-            "status": "running",
-            "started_at": datetime.now().isoformat()
-        })
-        
-        for idx, competitor in enumerate(competitors_to_analyze, 1):
-            competitor_url = competitor["url"]
-            
-            try:
-                logger.info(
-                    f"[Task {task_id}] Analyzing {idx}/{required_analyses}: {competitor_url}"
-                )
-                
-                # Clean and validate URL
-                clean_competitor_url = clean_url(competitor_url)
-                _reject_ssrf(clean_competitor_url)
-                
-                # USE INTERNAL HELPER - no quota check needed
-                result = await _perform_comprehensive_analysis_internal(
-                    url=clean_competitor_url,
-                    company_name=competitor["domain"],
-                    language=request.country_code,
-                    force_playwright=False,
-                    user=user  # For metadata only
-                )
-                
-                # Save result to Redis
-                task_queue.add_result(task_id, {
-                    "url": competitor_url,
-                    "domain": competitor["domain"],
-                    "status": "success",
-                    "score": result["basic_analysis"]["digital_maturity_score"],
-                    "cache_key": get_cache_key(
-                        clean_competitor_url, 
-                        "ai_comprehensive_v6.1.1_complete"
-                    ),
-                    "analyzed_at": datetime.now().isoformat()
-                })
-                
-                logger.info(f"✅ [{task_id}] {idx}/{required_analyses} done: {competitor_url}")
-                
-            except Exception as e:
-                logger.error(f"❌ [{task_id}] Failed {competitor_url}: {e}")
-                
-                # Save error result
-                task_queue.add_result(task_id, {
-                    "url": competitor_url,
-                    "domain": competitor["domain"],
-                    "status": "failed",
-                    "error": str(e),
-                    "error_type": type(e).__name__
-                })
-                
-                # REFUND credit on error
-                if user.role != "admin":
-                    user_search_counts[user.username] -= 1
-                    logger.info(f"Refunded 1 credit to {user.username} due to error")
-        
-        # Mark task complete
-        task_queue.update_task(task_id, {
-            "status": "completed",
-            "completed_at": datetime.now().isoformat()
-        })
-        
-        logger.info(f"🏁 Discovery task {task_id} completed for {user.username}")
-    
-    # Start background task (non-blocking)
-    asyncio.create_task(process_discovery())
-    
-    # === 8. RETURN IMMEDIATE RESPONSE ===
-    return {
-        "success": True,
-        "message": f"Competitor discovery started for {required_analyses} competitors",
-        "task_id": task_id,
-        "status_url": f"/api/v1/discovery-status/{task_id}",
-        "estimated_time_minutes": round(required_analyses * 0.5, 1),
-        "competitors": [c["domain"] for c in competitors_to_analyze],
-        "credits_reserved": required_analyses if user.role != "admin" else 0
-    }
 
-@app.get("/api/v1/discovery-status/{task_id}")
-async def get_discovery_status(
-    task_id: str,
-    user: UserInfo = Depends(require_user)
-):
-    """
-    Get competitor discovery task status and results.
-    
-    Returns:
-    - pending: Waiting in queue
-    - running: Processing (shows progress/total)
-    - completed: Done (results available)
-    - not_found: Task expired or invalid ID
-    """
-    
-    if not task_queue:
-        raise HTTPException(503, "Task queue not available")
-    
-    task_status = task_queue.get_task_status(task_id)
-    
-    if task_status.get("status") == "not_found":
-        raise HTTPException(404, "Task not found or expired")
-    
-    # Check ownership
-    if task_status.get("username") != user.username and user.role != "admin":
-        raise HTTPException(403, "Not your task")
-    
-    # Get results if available
-    results = []
-    if task_status.get("status") in ["running", "completed"]:
-        results = task_queue.get_results(task_id)
-    
-    return {
-        "task_id": task_id,
-        "status": task_status.get("status"),
-        "progress": task_status.get("progress", 0),
-        "total": task_status.get("total", 0),
-        "created_at": task_status.get("created_at"),
-        "started_at": task_status.get("started_at"),
-        "completed_at": task_status.get("completed_at"),
-        "results": results,
-        "summary": {
-            "successful": len([r for r in results if r.get("status") == "success"]),
-            "failed": len([r for r in results if r.get("status") == "failed"]),
-            "top_competitor": max(
-                [r for r in results if r.get("status") == "success"],
-                key=lambda x: x.get("score", 0),
-                default=None
-            ) if results else None
-        }
-    }
 
-@app.get("/api/v1/discovery-results/{task_id}")
-async def get_discovery_results(
-    task_id: str,
-    user: UserInfo = Depends(require_user)
-):
-    """Get full competitor analyses from cache"""
-    
-    if not task_queue:
-        raise HTTPException(503, "Task queue not available")
-    
-    task_status = task_queue.get_task_status(task_id)
-    
-    if task_status.get("status") == "not_found":
-        raise HTTPException(404, "Task not found")
-    
-    if task_status.get("username") != user.username and user.role != "admin":
-        raise HTTPException(403, "Not your task")
-    
-    if task_status.get("status") != "completed":
-        raise HTTPException(400, "Task not completed yet")
-    
-    results = task_queue.get_results(task_id)
-    
-    # Fetch full analyses from cache
-    full_analyses = []
-    for result in results:
-        if result.get("status") == "success" and result.get("cache_key"):
-            full_analysis = await get_from_cache(result["cache_key"])
-            if full_analysis:
-                full_analyses.append(full_analysis)
-    
-    return {
-        "task_id": task_id,
-        "competitors_analyzed": len(full_analyses),
-        "analyses": full_analyses
-    }
 # ============================================================================
 # ANALYSIS CORE - INTERNAL HELPER
 # ============================================================================
 
-# ✅ OIKEIN
-async def _perform_comprehensive_analysis_internal(
-    url: str,
-    company_name: Optional[str] = None,
-    language: str = "en",
-    force_playwright: bool = False,
-    user: Optional[UserInfo] = None,  # ✅ LISÄÄ PILKKU TÄHÄN!
-    revenue_input: Optional[RevenueInputRequest] = None
-) -> Dict[str, Any]:
-    """
-    Internal analysis core - NO QUOTA CHECK.
-    Used by both public API and background tasks.
-    
-    Args:
-        url: Cleaned URL to analyze
-        company_name: Optional company name
-        language: Language code (en/fi)
-        force_playwright: Force SPA rendering
-        user: Optional user info for metadata
-    
-    Returns:
-        Complete analysis result dict
-    
-    Raises:
-        HTTPException: For invalid URLs, SSRF, or insufficient content
-        Exception: For internal errors
-    """
-    
-    # URL validation (SSRF check already done by caller)
-    url = clean_url(url)
-    
-    # Check cache
-    cache_key = get_cache_key(url, "ai_comprehensive_v6.1.1_complete")
-    cached_result = await get_from_cache(cache_key)
-    if cached_result:
-        logger.info(f"Cache hit for {url}")
-        return cached_result
-    
-    logger.info(f"Starting analysis for {url}")
-    
-    # Fetch website content with smart rendering
-    html_content, used_spa = await get_website_content(
-        url, 
-        force_spa=force_playwright
-    )
-    
-    if not html_content or len(html_content.strip()) < 100:
-        raise HTTPException(400, "Website returned insufficient content")
-    
-    rendering_info = {
-        'spa_detected': bool(used_spa),
-        'spa_info': {'spa_detected': bool(used_spa)},
-        'rendering_method': 'playwright' if used_spa else 'http',
-        'final_url': url
-    }
-    
-    # Perform all analyses
-    basic_analysis = await analyze_basic_metrics_enhanced(
-        url, html_content,
-        headers=httpx.Headers({}),
-        rendering_info=rendering_info
-    )
-    
-    technical_audit = await analyze_technical_aspects(
-        url, html_content, 
-        headers=httpx.Headers({})
-    )
-    
-    content_analysis = await analyze_content_quality(html_content)
-    ux_analysis = await analyze_ux_elements(html_content)
-    social_analysis = await analyze_social_media_presence(url, html_content)
-    competitive_analysis = await analyze_competitive_positioning(url, basic_analysis)
-    
-    # Score breakdown with aliases
-    sb_with_aliases = create_score_breakdown_with_aliases(
-        basic_analysis.get('score_breakdown', {})
-    )
-    
-    # AI insights
-    ai_analysis = await generate_ai_insights(
-        url, basic_analysis, technical_audit, content_analysis, 
-        ux_analysis, social_analysis, html_content, language=language
-    )
-    
-    # Enhanced features
-    enhanced_features = await generate_enhanced_features(
-        url, basic_analysis, technical_audit, content_analysis, social_analysis
-    )
-    enhanced_features["admin_features_enabled"] = (user.role == "admin" if user else False)
-    
-    # AI Search Visibility
-    if hasattr(ai_analysis, 'ai_search_visibility') and ai_analysis.ai_search_visibility:
-        ai_vis_dict = (ai_analysis.ai_search_visibility.dict() 
-                      if hasattr(ai_analysis.ai_search_visibility, 'dict') 
-                      else ai_analysis.ai_search_visibility)
-        enhanced_features["ai_search_visibility"] = ai_vis_dict
-    
-    # Smart actions
-    smart_actions = generate_smart_actions(
-        ai_analysis, technical_audit, content_analysis, basic_analysis
-    )
-    
-    # Construct result
-    result = {
-        "success": True,
-        "company_name": company_name or get_domain_from_url(url),
-        "analysis_date": datetime.now().isoformat(),
-        "basic_analysis": {
-            "company": company_name or get_domain_from_url(url),
-            "website": url,
-            "digital_maturity_score": basic_analysis['digital_maturity_score'],
-            "social_platforms": basic_analysis.get('social_platforms', 0),
-            "technical_score": technical_audit.get('overall_technical_score', 0),
-            "content_score": content_analysis.get('content_quality_score', 0),
-            "seo_score": int((basic_analysis.get('score_breakdown', {}).get('seo_basics', 0) 
-                             / SCORING_CONFIG.weights['seo_basics']) * 100),
-            "score_breakdown": sb_with_aliases,
-            "analysis_timestamp": datetime.now().isoformat(),
-            "spa_detected": basic_analysis.get('spa_detected', False),
-            "rendering_method": basic_analysis.get('rendering_method', 'http'),
-            "modernity_score": basic_analysis.get('modernity_score', 0)
-        },
-        "ai_analysis": ai_analysis.dict(),
-        "detailed_analysis": {
-            "social_media": social_analysis,
-            "technical_audit": technical_audit,
-            "content_analysis": content_analysis,
-            "ux_analysis": ux_analysis,
-            "competitive_analysis": competitive_analysis
-        },
-        "smart": {
-            "actions": smart_actions,
-            "scores": {
-                "overall": basic_analysis['digital_maturity_score'],
-                "technical": technical_audit.get('overall_technical_score', 0),
-                "content": content_analysis.get('content_quality_score', 0),
-                "social": social_analysis.get('social_score', 0),
-                "ux": ux_analysis.get('overall_ux_score', 0),
-                "competitive": competitive_analysis.get('competitive_score', 0),
-                "trend": "stable",
-                "percentile": enhanced_features['industry_benchmarking']['details'].get('percentile', 50)
-            }
-        },
-        "enhanced_features": enhanced_features,
-        "metadata": {
-            "version": APP_VERSION,
-            "scoring_version": "configurable_v1_complete",
-            "analysis_depth": "comprehensive_spa_aware_complete",
-            "confidence_level": ai_analysis.confidence_score,
-            "analyzed_by": user.username if user else "system",
-            "user_role": user.role if user else "system",
-            "rendering_method": rendering_info['rendering_method'],
-            "spa_detected": rendering_info['spa_detected'],
-            "playwright_available": PLAYWRIGHT_AVAILABLE,
-            "scoring_weights": SCORING_CONFIG.weights,
-            "content_words": content_analysis.get('word_count', 0),
-            "modernity_score": basic_analysis.get('modernity_score', 0)
-        }
-    }
-    
-    # Ensure integer scores
-    result = ensure_integer_scores(result)
-    
-    # Cache result
-    await set_cache(cache_key, result)
-    
-    logger.info(
-        f"Analysis complete: {url} - "
-        f"Score: {basic_analysis['digital_maturity_score']}, "
-        f"SPA: {rendering_info['spa_detected']}, "
-        f"Method: {rendering_info['rendering_method']}"
-    )
-    
-    return result
 
 
-@app.post("/api/v1/ai-analyze")
-async def ai_analyze_comprehensive(
-    request: CompetitorAnalysisRequest,
-    background_tasks: BackgroundTasks,
-    user: UserInfo = Depends(require_user)
-):
-    """
-    Complete comprehensive website analysis with full SPA support.
-    
-    Features:
-    - Smart SPA detection and rendering
-    - AI-powered insights and recommendations
-    - 90-day action plan with role-specific summaries
-    - Business impact calculation
-    - Enhanced features (9 categories)
-    - Configurable scoring system
-    
-    Rate limiting:
-    - Admin: unlimited
-    - Users: configurable quota (default 3)
-    """
-    try:
-        # === QUOTA CHECK ===
-        if user.role != "admin":
-            user_limit = USERS_DB.get(user.username, {}).get("search_limit", DEFAULT_USER_LIMIT)
-            current_count = user_search_counts.get(user.username, 0)
-            
-            if user_limit > 0 and current_count >= user_limit:
-                raise HTTPException(
-                    status_code=403, 
-                    detail=f"Search limit reached ({user_limit} searches). Contact admin for more quota."
-                )
-        
-        # === URL VALIDATION ===
-        url = clean_url(request.url)
-        _reject_ssrf(url)  # Security: prevent SSRF attacks
-        
-        # === PERFORM ANALYSIS (using internal helper) ===
-        result = await _perform_comprehensive_analysis_internal(
-            url=url,
-            company_name=request.company_name,
-            language=request.language,
-            force_playwright=getattr(request, 'force_playwright', False),
-            user=user,
-            revenue_input=None  # Can be extended for revenue-aware analysis
-        )
-        
-        # === POST-PROCESSING ===
-        
-        # Increment quota counter AFTER successful analysis
-        if user.role != "admin":
-            user_search_counts[user.username] = current_count + 1
-            logger.info(
-                f"Quota: {user.username} used {user_search_counts[user.username]}/{user_limit}"
-            )
-        
-        # Schedule cache cleanup in background
-        background_tasks.add_task(cleanup_cache)
-        
-        logger.info(
-            f"✅ Analysis complete for {user.username}: {url} | "
-            f"Score: {result['basic_analysis']['digital_maturity_score']}"
-        )
-        
-        return result
-        
-    except HTTPException:
-        # Re-raise HTTP exceptions (400, 403, etc.)
-        raise
-        
-    except Exception as e:
-        # Catch-all for unexpected errors
-        logger.error(
-            f"❌ Analysis failed for {request.url} (user: {user.username}): {e}", 
-            exc_info=True
-        )
-        raise HTTPException(
-            status_code=500, 
-            detail="Analysis failed due to internal error. Please try again or contact support."
-        )
+
+
 
 ## ============================================================================
 # SYSTEM AND ADMIN ENDPOINTS
