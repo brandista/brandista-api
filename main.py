@@ -38,93 +38,7 @@ import ipaddress
 import redis
 import json
 # main.py (tiedoston alussa)
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-GOOGLE_SEARCH_ENGINE_ID = os.getenv("GOOGLE_SEARCH_ENGINE_ID", "171a60959e6cb4d76")
 
-GOOGLE_SEARCH_AVAILABLE = False
-
-if GOOGLE_API_KEY and GOOGLE_SEARCH_ENGINE_ID:
-    try:
-        from googleapiclient.discovery import build
-        from googleapiclient.errors import HttpError
-        
-        def search(query: str, num_results: int = 10, lang: str = "fi") -> List[str]:
-            """
-            Official Google Custom Search API
-            
-            Args:
-                query: Search query
-                num_results: Number of results (max 100)
-                lang: Language code (fi, en, etc)
-            
-            Returns:
-                List of URLs
-            """
-            try:
-                service = build("customsearch", "v1", developerKey=GOOGLE_API_KEY)
-                
-                results = []
-                start_index = 1
-                
-                # Google API max 10 results per request, max 100 total
-                while len(results) < num_results and start_index <= 91:
-                    
-                    request_params = {
-                        "q": query,
-                        "cx": GOOGLE_SEARCH_ENGINE_ID,
-                        "num": min(10, num_results - len(results)),
-                        "start": start_index
-                    }
-                    
-                    # Add language restriction if specified
-                    if lang and lang != "en":
-                        request_params["lr"] = f"lang_{lang}"
-                    
-                    response = service.cse().list(**request_params).execute()
-                    
-                    if "items" not in response:
-                        break
-                    
-                    results.extend([item["link"] for item in response["items"]])
-                    start_index += 10
-                    
-                    # Stop if we got fewer results than requested (last page)
-                    if len(response["items"]) < 10:
-                        break
-                
-                return results[:num_results]
-                
-            except HttpError as e:
-                logger.error(f"Google API error: {e}")
-                return []
-            except Exception as e:
-                logger.error(f"Search failed: {e}")
-                return []
-        
-        GOOGLE_SEARCH_AVAILABLE = True
-        logger.info("✅ Google Custom Search API initialized (Official)")
-        
-    except ImportError:
-        logger.warning("⚠️ google-api-python-client not installed")
-        logger.warning("Install: pip install google-api-python-client")
-        GOOGLE_SEARCH_AVAILABLE = False
-        
-        def search(query, num_results, lang):
-            raise NotImplementedError(
-                "Install: pip install google-api-python-client"
-            )
-            
-else:
-    # No API credentials
-    logger.warning("⚠️ Google Search disabled - missing API credentials")
-    logger.warning("Set GOOGLE_API_KEY and GOOGLE_SEARCH_ENGINE_ID in .env")
-    GOOGLE_SEARCH_AVAILABLE = False
-    
-    def search(query, num_results, lang):
-        raise NotImplementedError(
-            "Google Search requires API credentials. "
-            "Set GOOGLE_API_KEY and GOOGLE_SEARCH_ENGINE_ID in .env file"
-        )
 
 # ===== Content Fetch Config (Aggressive defaults) =====
 CONTENT_FETCH_MODE = os.getenv("CONTENT_FETCH_MODE", "aggressive")  # "aggressive" | "balanced" | "light"
@@ -359,6 +273,94 @@ logger = logging.getLogger(__name__)
 logger.info(f"Starting {APP_NAME} v{APP_VERSION}")
 logger.info(f"Scoring weights: {SCORING_CONFIG.weights}")
 logger.info(f"Playwright support: {'enabled' if PLAYWRIGHT_AVAILABLE and PLAYWRIGHT_ENABLED else 'disabled'}")
+
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GOOGLE_SEARCH_ENGINE_ID = os.getenv("GOOGLE_SEARCH_ENGINE_ID", "171a60959e6cb4d76")
+
+GOOGLE_SEARCH_AVAILABLE = False
+
+if GOOGLE_API_KEY and GOOGLE_SEARCH_ENGINE_ID:
+    try:
+        from googleapiclient.discovery import build
+        from googleapiclient.errors import HttpError
+        
+        def search(query: str, num_results: int = 10, lang: str = "fi") -> List[str]:
+            """
+            Official Google Custom Search API
+            
+            Args:
+                query: Search query
+                num_results: Number of results (max 100)
+                lang: Language code (fi, en, etc)
+            
+            Returns:
+                List of URLs
+            """
+            try:
+                service = build("customsearch", "v1", developerKey=GOOGLE_API_KEY)
+                
+                results = []
+                start_index = 1
+                
+                # Google API max 10 results per request, max 100 total
+                while len(results) < num_results and start_index <= 91:
+                    
+                    request_params = {
+                        "q": query,
+                        "cx": GOOGLE_SEARCH_ENGINE_ID,
+                        "num": min(10, num_results - len(results)),
+                        "start": start_index
+                    }
+                    
+                    # Add language restriction if specified
+                    if lang and lang != "en":
+                        request_params["lr"] = f"lang_{lang}"
+                    
+                    response = service.cse().list(**request_params).execute()
+                    
+                    if "items" not in response:
+                        break
+                    
+                    results.extend([item["link"] for item in response["items"]])
+                    start_index += 10
+                    
+                    # Stop if we got fewer results than requested (last page)
+                    if len(response["items"]) < 10:
+                        break
+                
+                return results[:num_results]
+                
+            except HttpError as e:
+                logger.error(f"Google API error: {e}")
+                return []
+            except Exception as e:
+                logger.error(f"Search failed: {e}")
+                return []
+        
+        GOOGLE_SEARCH_AVAILABLE = True
+        logger.info("✅ Google Custom Search API initialized (Official)")
+        
+    except ImportError:
+        logger.warning("⚠️ google-api-python-client not installed")
+        logger.warning("Install: pip install google-api-python-client")
+        GOOGLE_SEARCH_AVAILABLE = False
+        
+        def search(query, num_results, lang):
+            raise NotImplementedError(
+                "Install: pip install google-api-python-client"
+            )
+            
+else:
+    # No API credentials
+    logger.warning("⚠️ Google Search disabled - missing API credentials")
+    logger.warning("Set GOOGLE_API_KEY and GOOGLE_SEARCH_ENGINE_ID in .env")
+    GOOGLE_SEARCH_AVAILABLE = False
+    
+    def search(query, num_results, lang):
+        raise NotImplementedError(
+            "Google Search requires API credentials. "
+            "Set GOOGLE_API_KEY and GOOGLE_SEARCH_ENGINE_ID in .env file"
+        )
 
 # ============================================================================
 # DATABASE INTEGRATION
