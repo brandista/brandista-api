@@ -130,6 +130,7 @@ def detect_responsive_signals(html: str) -> bool:
     return any(re.search(pat, h) for pat in patterns)
 
 
+import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
 from passlib.context import CryptContext
 
