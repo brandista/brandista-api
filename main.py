@@ -129,7 +129,7 @@ def detect_responsive_signals(html: str) -> bool:
     ]
     return any(re.search(pat, h) for pat in patterns)
 
-import jwt
+
 from jwt import ExpiredSignatureError, InvalidTokenError
 from passlib.context import CryptContext
 
@@ -398,23 +398,6 @@ except ImportError as e:
 
 analysis_cache: Dict[str, Dict[str, Any]] = {}
 user_search_counts: Dict[str, int] = {}
-
-# Redis setup
-REDIS_URL = os.getenv("REDIS_URL")
-redis_client = None
-
-if REDIS_URL:
-    try:
-        redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-        redis_client.ping()
-        logger.info("Redis connected successfully")
-        
-        from redis_tasks import RedisTaskQueue 
-    except Exception as e:
-        logger.warning(f"Redis connection failed: {e}")
-        redis_client = None
-else:
-    logger.info("No REDIS_URL provided, using memory cache")
 # ============================================================================
 # OPENAI SETUP
 # ============================================================================
@@ -5324,7 +5307,14 @@ async def _build_differentiation_matrix(
     differentiation_scores = _calculate_differentiation_scores(comparison_matrix)
     
     return {
-        'comparison_matrix': comparison_matrix,
+        # Siirrä comparison_matrix sisältö SUORAAN ylätasolle
+        'messaging': comparison_matrix['messaging'],
+        'content_strategy': comparison_matrix['content_strategy'],
+        'technical_execution': comparison_matrix['technical_execution'],
+        'social_engagement': comparison_matrix['social_engagement'],
+        'ai_insights': comparison_matrix.get('ai_insights'),
+        
+        # Metadata-kentät
         'differentiation_scores': differentiation_scores,
         'your_unique_strengths': _identify_unique_strengths(your_summary, comp_summaries, comparison_matrix),
         'shared_weaknesses': _identify_shared_weaknesses([your_summary] + comp_summaries),
@@ -6120,8 +6110,11 @@ def _identify_quick_wins(matrix: Dict, gaps: List[Dict]) -> List[Dict[str, Any]]
     """Tunnista nopeat voitot"""
     quick_wins = []
     
+    # 🚨 HOTFIX: Tarkista rakenne
+    comparison = matrix.get('comparison_matrix', matrix)
+    
     # Teknisistä puutteista
-    tech_gaps = matrix['technical_execution'].get('technical_gap_analysis', [])
+    tech_gaps = comparison.get('technical_execution', {}).get('technical_gap_analysis', [])
     for gap in tech_gaps:
         if 'KRIITTINEN' in gap or 'SSL' in gap:
             quick_wins.append({
@@ -6145,10 +6138,10 @@ def _identify_quick_wins(matrix: Dict, gaps: List[Dict]) -> List[Dict[str, Any]]
             })
     
     # Sisältöaukoista
-    content_insight = matrix['content_strategy'].get('strategic_insight', '')
+    content_insight = comparison.get('content_strategy', {}).get('strategic_insight', '')
     if 'KRIITTINEN' in content_insight:
         quick_wins.append({
-            'title': 'Kirjoita 3 pilartar tikkelia',
+            'title': 'Kirjoita 3 pilariartikkelia',
             'rationale': 'Sisältösi on liian ohut kilpailijoihin nähden',
             'timeframe': '2-3 viikkoa',
             'effort': 'medium',
@@ -6170,7 +6163,7 @@ def _identify_quick_wins(matrix: Dict, gaps: List[Dict]) -> List[Dict[str, Any]]
                 'expected_result': gap.get('estimated_advantage', 'Merkittävä etu')
             })
     
-    return quick_wins[:3]
+    return quick_wins[:3]  # ✅ OIKEA RETURN!
 
 async def _get_ai_strategic_recommendations(
     your_analysis: Dict,
