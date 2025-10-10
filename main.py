@@ -5053,6 +5053,1274 @@ async def admin_delete_user(username: str, user: UserInfo = Depends(require_admi
     return {"ok": True, "message": f"User '{username}' deleted successfully"}
 
 # ============================================================================
+# KILPAILUETU-TUTKA ENDPOINT - KAUPALLINEN VERSIO
+# ============================================================================
+
+class CompetitiveRadarRequest(BaseModel):
+    your_url: str = Field(..., description="Oma verkkosivusi")
+    competitor_urls: List[str] = Field(..., min_items=1, max_items=5, description="Kilpailijoiden URL:t (1-5 kpl)")
+    language: str = Field("fi", pattern="^(en|fi)$")
+    industry_context: Optional[str] = Field(None, description="Toimiala-konteksti (valinnainen)")
+
+class CompetitiveRadarResponse(BaseModel):
+    your_analysis: Dict[str, Any]
+    competitors: List[Dict[str, Any]]
+    differentiation_matrix: Dict[str, Any]  # Muutettu: taulukkomuotoinen vertailu
+    market_gaps: List[Dict[str, Any]]
+    competitive_score: int
+    strategic_recommendations: List[Dict[str, Any]]  # UUSI: Strategiset suositukset
+    positioning_map: Dict[str, Any]  # UUSI: Positioning-kartta
+
+@app.post("/api/v1/competitive-radar", tags=["Competitive Intelligence"])
+async def analyze_competitive_radar(
+    request: CompetitiveRadarRequest,
+    user: UserInfo = Depends(require_user)
+):
+    """
+    Kilpailuetu-Tutka: Syvällinen kilpailija-analyysi kaupallisilla insighteilla.
+    
+    Palauttaa:
+    - Erottuvuusmatriisi (vertailee konkreettisia tekijöitä)
+    - Todelliset markkinaaukot (mitä asiakkaat etsivät mutta eivät löydä)
+    - Strategiset suositukset (mitä tehdä seuraavaksi)
+    - Positioning-kartta (missä olet markkinassa)
+    """
+    
+    try:
+        logger.info(f"Competitive Radar: {user.username} analyzing {len(request.competitor_urls)} competitors")
+        
+        # === QUOTA CHECK ===
+        required_analyses = 1 + len(request.competitor_urls)
+        
+        if user.role != "admin":
+            user_limit = USERS_DB.get(user.username, {}).get("search_limit", DEFAULT_USER_LIMIT)
+            current_count = user_search_counts.get(user.username, 0)
+            available = user_limit - current_count
+            
+            if user_limit > 0 and required_analyses > available:
+                raise HTTPException(
+                    403,
+                    f"Competitive Radar requires {required_analyses} analyses. "
+                    f"You have {available} remaining."
+                )
+        
+        # === 1. ANALYSOI OMA SIVU ===
+        your_url = clean_url(request.your_url)
+        _reject_ssrf(your_url)
+        
+        logger.info(f"[Radar] Deep analysis: {your_url}")
+        
+        your_analysis = await _perform_comprehensive_analysis_internal(
+            url=your_url,
+            language=request.language,
+            user=user
+        )
+        
+        # === 2. ANALYSOI KILPAILIJAT ===
+        competitor_analyses = []
+        
+        for idx, competitor_url in enumerate(request.competitor_urls, 1):
+            try:
+                clean_comp_url = clean_url(competitor_url)
+                _reject_ssrf(clean_comp_url)
+                
+                logger.info(f"[Radar] Competitor {idx}/{len(request.competitor_urls)}: {clean_comp_url}")
+                
+                comp_analysis = await _perform_comprehensive_analysis_internal(
+                    url=clean_comp_url,
+                    language=request.language,
+                    user=user
+                )
+                
+                competitor_analyses.append(comp_analysis)
+                
+            except Exception as e:
+                logger.error(f"[Radar] Failed {competitor_url}: {e}")
+                continue
+        
+        if not competitor_analyses:
+            raise HTTPException(400, "Yhtään kilpailija-analyysiä ei onnistunut")
+        
+        # === 3. UPDATE QUOTA ===
+        if user.role != "admin":
+            successful_analyses = 1 + len(competitor_analyses)
+            user_search_counts[user.username] = current_count + successful_analyses
+            logger.info(f"[Radar] Used {successful_analyses} credits for {user.username}")
+        
+        # === 4. SYVÄLLINEN EROTTUVUUSANALYYSI ===
+        differentiation_matrix = await _build_differentiation_matrix(
+            your_analysis, 
+            competitor_analyses,
+            request.language,
+            request.industry_context
+        )
+        
+        # === 5. TODELLISET MARKKINAAUKOT (AI-pohjainen) ===
+        market_gaps = await _discover_real_market_gaps(
+            your_analysis,
+            competitor_analyses,
+            request.language
+        )
+        
+        # === 6. KILPAILULLINEN ASEMOINTI ===
+        positioning = await _calculate_market_positioning(
+            your_analysis,
+            competitor_analyses
+        )
+        
+        # === 7. STRATEGISET SUOSITUKSET ===
+        strategic_recommendations = await _generate_strategic_recommendations(
+            your_analysis,
+            competitor_analyses,
+            differentiation_matrix,
+            market_gaps,
+            request.language
+        )
+        
+        return CompetitiveRadarResponse(
+            your_analysis=_extract_detailed_summary(your_analysis),
+            competitors=[_extract_detailed_summary(c) for c in competitor_analyses],
+            differentiation_matrix=differentiation_matrix,
+            market_gaps=market_gaps,
+            competitive_score=positioning['competitive_score'],
+            strategic_recommendations=strategic_recommendations,
+            positioning_map=positioning
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Competitive Radar failed: {e}", exc_info=True)
+        raise HTTPException(500, "Competitive Radar analysis failed")
+
+
+# ============================================================================
+# SYVÄLLISET ANALYYSIFUNKTIOT
+# ============================================================================
+
+def _extract_detailed_summary(analysis: Dict[str, Any]) -> Dict[str, Any]:
+    """Pura kaikki oleelliset kilpailutekijät"""
+    basic = analysis.get('basic_analysis', {})
+    ai = analysis.get('ai_analysis', {})
+    content = analysis.get('detailed_analysis', {}).get('content_analysis', {})
+    technical = analysis.get('detailed_analysis', {}).get('technical_audit', {})
+    social = analysis.get('detailed_analysis', {}).get('social_media', {})
+    
+    return {
+        'url': basic.get('website', ''),
+        'company': basic.get('company', ''),
+        'score': basic.get('digital_maturity_score', 0),
+        
+        # Viestintä
+        'messaging': {
+            'title': basic.get('title', ''),
+            'meta_description': basic.get('meta_description', ''),
+            'h1_count': basic.get('h1_count', 0),
+            'tone': _analyze_messaging_tone(content)
+        },
+        
+        # Sisältöstrategia
+        'content_strategy': {
+            'word_count': content.get('word_count', 0),
+            'has_blog': content.get('has_blog', False),
+            'content_depth': _categorize_content_depth(content.get('word_count', 0)),
+            'media_richness': len(content.get('media_types', [])),
+            'interactive_elements': len(content.get('interactive_elements', []))
+        },
+        
+        # Tekninen kypsyys
+        'technical_maturity': {
+            'has_ssl': technical.get('has_ssl', False),
+            'page_speed_score': technical.get('page_speed_score', 0),
+            'mobile_optimization': technical.get('has_mobile_optimization', False),
+            'has_analytics': technical.get('has_analytics', False),
+            'spa_detected': basic.get('spa_detected', False),
+            'modernity_score': basic.get('modernity_score', 0)
+        },
+        
+        # Sosiaalinen läsnäolo
+        'social_presence': {
+            'platforms': social.get('platforms', []),
+            'platform_count': len(social.get('platforms', [])),
+            'has_sharing': social.get('has_sharing_buttons', False),
+            'og_tags': social.get('open_graph_tags', 0)
+        },
+        
+        # AI-insightit
+        'key_strengths': ai.get('strengths', [])[:3],
+        'key_weaknesses': ai.get('weaknesses', [])[:3],
+        'opportunities': ai.get('opportunities', [])[:3]
+    }
+
+def _analyze_messaging_tone(content: Dict[str, Any]) -> str:
+    """Analysoi viestinnän sävy tarkemmin"""
+    readability = content.get('readability_score', 50)
+    word_count = content.get('word_count', 0)
+    
+    if readability >= 75 and word_count > 1000:
+        return "Asiantunteva mutta helposti lähestyttävä"
+    elif readability >= 70:
+        return "Selkeä ja keskustelevä"
+    elif readability >= 60:
+        return "Ammattimainen ja informatiivinen"
+    elif readability >= 50:
+        return "Tekninen ja muodollinen"
+    else:
+        return "Monimutkainen ja raskas"
+
+def _categorize_content_depth(word_count: int) -> str:
+    """Kategorisoi sisällön syvyys liiketoiminnallisesti"""
+    if word_count >= 5000:
+        return "Thought leadership / Comprehensive resource"
+    elif word_count >= 2500:
+        return "In-depth content / Authority building"
+    elif word_count >= 1500:
+        return "Standard informative / Service description"
+    elif word_count >= 800:
+        return "Basic landing page / Product focus"
+    elif word_count >= 300:
+        return "Minimal / Brochure-style"
+    else:
+        return "Under-developed / Thin content"
+
+async def _build_differentiation_matrix(
+    your_analysis: Dict[str, Any],
+    competitor_analyses: List[Dict[str, Any]],
+    language: str,
+    industry_context: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Rakenna syvällinen erottuvuusmatriisi vertailemalla konkreettisia tekijöitä.
+    Käyttää AI:ta mutta myös datapohjaista analyysiä.
+    """
+    
+    your_summary = _extract_detailed_summary(your_analysis)
+    comp_summaries = [_extract_detailed_summary(c) for c in competitor_analyses]
+    
+    # === 1. DATAPOHJAINEN VERTAILU ===
+    comparison_matrix = {
+        'messaging': _compare_messaging(your_summary, comp_summaries),
+        'content_strategy': _compare_content_strategy(your_summary, comp_summaries),
+        'technical_execution': _compare_technical(your_summary, comp_summaries),
+        'social_engagement': _compare_social(your_summary, comp_summaries)
+    }
+    
+    # === 2. AI-POHJAINEN SYVÄ ANALYYSI ===
+    if openai_client:
+        try:
+            ai_insights = await _get_ai_differentiation_insights(
+                your_summary,
+                comp_summaries,
+                comparison_matrix,
+                language,
+                industry_context
+            )
+            comparison_matrix['ai_insights'] = ai_insights
+        except Exception as e:
+            logger.error(f"AI insights failed: {e}")
+            comparison_matrix['ai_insights'] = None
+    
+    # === 3. LASKE EROTTUVUUSPISTEET ===
+    differentiation_scores = _calculate_differentiation_scores(comparison_matrix)
+    
+    return {
+        'comparison_matrix': comparison_matrix,
+        'differentiation_scores': differentiation_scores,
+        'your_unique_strengths': _identify_unique_strengths(your_summary, comp_summaries, comparison_matrix),
+        'shared_weaknesses': _identify_shared_weaknesses([your_summary] + comp_summaries),
+        'competitive_advantages': _identify_competitive_advantages(comparison_matrix, differentiation_scores)
+    }
+
+def _compare_messaging(your: Dict, competitors: List[Dict]) -> Dict[str, Any]:
+    """Vertaile viestintästrategioita"""
+    
+    your_title_len = len(your['messaging']['title'])
+    your_desc_len = len(your['messaging']['meta_description'])
+    your_tone = your['messaging']['tone']
+    
+    comp_title_lens = [len(c['messaging']['title']) for c in competitors]
+    comp_desc_lens = [len(c['messaging']['meta_description']) for c in competitors]
+    comp_tones = [c['messaging']['tone'] for c in competitors]
+    
+    return {
+        'your_position': {
+            'title_length': your_title_len,
+            'description_length': your_desc_len,
+            'tone': your_tone,
+            'h1_optimization': 'Good' if your['messaging']['h1_count'] == 1 else 'Needs improvement'
+        },
+        'vs_competitors': {
+            'title_comparison': 'Longer' if your_title_len > (sum(comp_title_lens) / len(comp_title_lens)) else 'Shorter',
+            'description_comparison': 'More detailed' if your_desc_len > (sum(comp_desc_lens) / len(comp_desc_lens)) else 'Less detailed',
+            'tone_differentiation': 'Unique tone' if your_tone not in comp_tones else 'Similar to competitors'
+        },
+        'insight': _generate_messaging_insight(your, competitors)
+    }
+
+def _generate_messaging_insight(your: Dict, competitors: List[Dict]) -> str:
+    """Generoi käytännöllinen insight viestinnästä"""
+    your_desc = your['messaging']['meta_description']
+    comp_descs = [c['messaging']['meta_description'] for c in competitors]
+    
+    # Tarkista onko value proposition selkeä
+    value_words = ['help', 'solution', 'best', 'leading', 'professional', 'expert', 'quality']
+    
+    your_value_count = sum(1 for word in value_words if word in your_desc.lower())
+    avg_comp_value = sum(sum(1 for word in value_words if word in desc.lower()) for desc in comp_descs) / max(1, len(comp_descs))
+    
+    if your_value_count < avg_comp_value:
+        return "⚠️ Arvolupauksesi on vähemmän selkeä kuin kilpailijoiden. Korosta konkreettista hyötyä meta-kuvauksessa."
+    elif your_value_count > avg_comp_value:
+        return "✅ Arvolupauksesi on selkeämmin esillä kuin kilpailijoilla. Hyvä erottuvuus!"
+    else:
+        return "➡️ Arvolupauksesi on samalla tasolla kilpailijoiden kanssa. Harkitse voimakkaampaa erottautumista."
+
+def _compare_content_strategy(your: Dict, competitors: List[Dict]) -> Dict[str, Any]:
+    """Vertaile sisältöstrategioita"""
+    
+    your_wc = your['content_strategy']['word_count']
+    comp_wcs = [c['content_strategy']['word_count'] for c in competitors]
+    avg_comp_wc = sum(comp_wcs) / len(comp_wcs) if comp_wcs else 0
+    
+    your_has_blog = your['content_strategy']['has_blog']
+    comp_blog_count = sum(1 for c in competitors if c['content_strategy']['has_blog'])
+    
+    return {
+        'content_depth_ranking': _rank_position(your_wc, comp_wcs),
+        'blog_strategy': {
+            'you_have_blog': your_has_blog,
+            'competitors_with_blog': comp_blog_count,
+            'total_competitors': len(competitors)
+        },
+        'content_gap': your_wc - avg_comp_wc,
+        'media_richness_score': your['content_strategy']['media_richness'],
+        'interactivity_score': your['content_strategy']['interactive_elements'],
+        'strategic_insight': _generate_content_insight(
+            your_wc, 
+            avg_comp_wc, 
+            your_has_blog, 
+            comp_blog_count,
+            len(competitors)
+        )
+    }
+
+def _generate_content_insight(
+    your_wc: int, 
+    avg_comp_wc: float, 
+    your_blog: bool, 
+    comp_blogs: int,
+    total_competitors: int
+) -> str:
+    """Generoi strateginen sisältö-insight"""
+    insights = []
+    
+    # Suojaus division by zero
+    if avg_comp_wc > 0:
+        if your_wc < avg_comp_wc * 0.7:
+            percentage = int((1 - your_wc/avg_comp_wc)*100)
+            insights.append(f"🚨 KRIITTINEN: Sisältösi on {percentage}% vähemmän kuin kilpailijoiden keskiarvo. Tämä heikentää SEO-sijoituksiasi ja auktoriteettia.")
+        elif your_wc < avg_comp_wc:
+            percentage = int((1 - your_wc/avg_comp_wc)*100)
+            insights.append(f"⚠️ Sisältösi on hieman kilpailijoita vähäisempää (-{percentage}%). Harkitse sisällön laajentamista.")
+        elif your_wc > avg_comp_wc * 1.5:
+            percentage = int((your_wc/avg_comp_wc - 1)*100)
+            insights.append(f"🌟 VAHVUUS: Sisältösi on {percentage}% runsaampaa kuin kilpailijoiden. Tämä rakentaa auktoriteettia.")
+    
+    if total_competitors > 0:
+        if not your_blog and comp_blogs >= total_competitors // 2:
+            insights.append(f"📝 MAHDOLLISUUS: {comp_blogs}/{total_competitors} kilpailijaa julkaisee blogia, mutta sinulla ei ole. Blogistrategia voisi tuoda merkittävää etua.")
+        elif your_blog and comp_blogs < total_competitors // 2:
+            insights.append(f"✅ EROTTUVUUS: Sinulla on blogi, mutta vain {comp_blogs}/{total_competitors} kilpailijalla. Hyödynnä tätä etua aktiivisella julkaisemisella.")
+    
+    return " ".join(insights) if insights else "➡️ Sisältöstrategiasi on linjassa kilpailijoiden kanssa."
+
+def _compare_technical(your: Dict, competitors: List[Dict]) -> Dict[str, Any]:
+    """Vertaile teknistä toteutusta"""
+    
+    your_tech = your['technical_maturity']
+    
+    # Laske kilpailijoiden keskiarvot
+    comp_speeds = [c['technical_maturity']['page_speed_score'] for c in competitors]
+    comp_modernities = [c['technical_maturity']['modernity_score'] for c in competitors]
+    
+    ssl_count = sum(1 for c in competitors if c['technical_maturity']['has_ssl'])
+    analytics_count = sum(1 for c in competitors if c['technical_maturity']['has_analytics'])
+    mobile_count = sum(1 for c in competitors if c['technical_maturity']['mobile_optimization'])
+    spa_count = sum(1 for c in competitors if c['technical_maturity']['spa_detected'])
+    
+    return {
+        'speed_ranking': _rank_position(your_tech['page_speed_score'], comp_speeds),
+        'modernity_ranking': _rank_position(your_tech['modernity_score'], comp_modernities),
+        'foundational_features': {
+            'ssl': {'you': your_tech['has_ssl'], 'competitors': f"{ssl_count}/{len(competitors)}"},
+            'analytics': {'you': your_tech['has_analytics'], 'competitors': f"{analytics_count}/{len(competitors)}"},
+            'mobile': {'you': your_tech['mobile_optimization'], 'competitors': f"{mobile_count}/{len(competitors)}"}
+        },
+        'advanced_features': {
+            'spa_framework': {'you': your_tech['spa_detected'], 'competitors': f"{spa_count}/{len(competitors)}"}
+        },
+        'technical_gap_analysis': _generate_technical_gaps(your_tech, competitors)
+    }
+
+def _generate_technical_gaps(your_tech: Dict, competitors: List[Dict]) -> List[str]:
+    """Tunnista tekniset puutteet"""
+    gaps = []
+    
+    if not your_tech['has_ssl']:
+        gaps.append("🚨 KRIITTINEN: Ei SSL-sertifikaattia. Tämä estää Google-sijoitukset ja heikentää luottamusta.")
+    
+    if not your_tech['has_analytics']:
+        gaps.append("📊 Ei analytiikkaa. Et voi mitata tuloksia etkä optimoida.")
+    
+    if not your_tech['mobile_optimization']:
+        gaps.append("📱 Ei mobiilioptimointia. 60%+ käyttäjistä tulee mobiililla.")
+    
+    if your_tech['page_speed_score'] < 50:
+        gaps.append(f"🐌 Hidas sivulataus ({your_tech['page_speed_score']}/100). Joka sekunti maksaa 7% konversioista.")
+    
+    # Vertaile kilpailijoihin
+    comp_speeds = [c['technical_maturity']['page_speed_score'] for c in competitors]
+    avg_speed = sum(comp_speeds) / len(comp_speeds) if comp_speeds else 0
+    
+    if your_tech['page_speed_score'] < avg_speed * 0.8:
+        gaps.append(f"⚠️ Sivusi on {int((1 - your_tech['page_speed_score']/avg_speed)*100)}% hitaampi kuin kilpailijoiden keskiarvo.")
+    
+    return gaps if gaps else ["✅ Tekninen toteutus on hyvällä tasolla"]
+
+def _compare_social(your: Dict, competitors: List[Dict]) -> Dict[str, Any]:
+    """Vertaile sosiaalista läsnäoloa"""
+    
+    your_social = your['social_presence']
+    your_platforms = set(your_social['platforms'])
+    
+    # Analysoi kilpailijoiden alustat
+    all_comp_platforms = []
+    for c in competitors:
+        all_comp_platforms.extend(c['social_presence']['platforms'])
+    
+    common_platforms = set(p for p in all_comp_platforms if all_comp_platforms.count(p) >= len(competitors) // 2)
+    your_missing_platforms = common_platforms - your_platforms
+    your_unique_platforms = your_platforms - common_platforms
+    
+    return {
+        'platform_coverage': {
+            'your_platforms': list(your_platforms),
+            'missing_common_platforms': list(your_missing_platforms),
+            'unique_platforms': list(your_unique_platforms),
+            'coverage_percentage': int((len(your_platforms) / max(1, len(common_platforms))) * 100)
+        },
+        'social_maturity': {
+            'has_og_tags': your_social['og_tags'] > 0,
+            'has_sharing_buttons': your_social['has_sharing']
+        },
+        'strategic_insight': _generate_social_insight(your_platforms, your_missing_platforms, common_platforms)
+    }
+
+def _generate_social_insight(your_platforms: set, missing: set, common: set) -> str:
+    """Generoi sosiaalinen strategia-insight"""
+    if len(missing) >= 2:
+        missing_str = ', '.join(list(missing)[:2])
+        return f"🎯 MAHDOLLISUUS: Kilpailijasi käyttävät {missing_str}, mutta sinä et. Nämä kanavat voivat tuoda lisää näkyvyyttä."
+    elif len(your_platforms) > len(common):
+        return "✅ Olet aktiivinen useammalla alustalla kuin kilpailijat. Varmista että hallitset kaikki kanavat laadukkaasti."
+    elif len(your_platforms) == 0:
+        return "🚨 Ei sosiaalista läsnäoloa. Tämä rajoittaa merkittävästi löydettävyyttäsi ja luotettavuuttasi."
+    else:
+        return "➡️ Sosiaalinen läsnäolosi on linjassa kilpailijoiden kanssa."
+
+def _rank_position(your_value: float, competitor_values: List[float]) -> Dict[str, Any]:
+    """Laske ranking-positio"""
+    all_values = [your_value] + competitor_values
+    sorted_values = sorted(all_values, reverse=True)
+    
+    position = sorted_values.index(your_value) + 1
+    total = len(all_values)
+    percentile = int(((total - position) / total) * 100)
+    
+    return {
+        'rank': position,
+        'total': total,
+        'percentile': percentile,
+        'status': 'Leading' if position == 1 else 'Above average' if position <= total // 2 else 'Below average'
+    }
+
+async def _get_ai_differentiation_insights(
+    your_summary: Dict,
+    comp_summaries: List[Dict],
+    comparison_matrix: Dict,
+    language: str,
+    industry_context: Optional[str]
+) -> Dict[str, Any]:
+    """Pyydä AI:lta syvällisiä erottuvuus-insighteja"""
+    
+    prompt_lang = "fi" if language == "fi" else "en"
+    
+    # Rakenna kontekstuaalinen prompt
+    industry_str = f"Toimiala: {industry_context}\n" if industry_context else ""
+    
+    if prompt_lang == "fi":
+        prompt = f"""{industry_str}
+Analysoi syvällisesti näiden yritysten erottuvuus ja kilpailuasema:
+
+OMAN YRITYKSEN PROFIILI:
+- Nimi: {your_summary['company']}
+- Pisteet: {your_summary['score']}/100
+- Sisältö: {your_summary['content_strategy']['word_count']} sanaa, syvyys: {your_summary['content_strategy']['content_depth']}
+- Viestintä: {your_summary['messaging']['title'][:80]}
+- Tekninen: Nopeus {your_summary['technical_maturity']['page_speed_score']}/100, Modernius {your_summary['technical_maturity']['modernity_score']}/100
+- Vahvuudet: {', '.join(your_summary['key_strengths'])}
+- Heikkoudet: {', '.join(your_summary['key_weaknesses'])}
+
+KILPAILIJAT ({len(comp_summaries)} kpl):
+{chr(10).join([f"- {c['company']}: {c['score']}/100p | Sisältö: {c['content_strategy']['word_count']} sanaa | Vahvuudet: {', '.join(c['key_strengths'][:2])}" for c in comp_summaries])}
+
+DATAPOHJAISET LÖYDÖKSET:
+- Viestintä: {comparison_matrix['messaging']['insight']}
+- Sisältöstrategia: {comparison_matrix['content_strategy']['strategic_insight']}
+- Tekninen: {', '.join(comparison_matrix['technical_execution']['technical_gap_analysis'][:2])}
+
+Vastaa JSON-muodossa:
+{{
+  "positioning_summary": "Yksi virke joka kuvaa kilpailuaseman",
+  "unique_selling_points": ["2-3 konkreettista USP:tä jotka erottavat kilpailijoista"],
+  "target_customer_profile": "Kenelle tämä yritys TODELLA puhuu (tarkka kuvaus)",
+  "messaging_strategy": "Miten viestintä eroaa kilpailijoista",
+  "immediate_opportunities": ["3 nopeaa taktiikkaa joilla voi ohittaa kilpailijoita"],
+  "strategic_vulnerabilities": ["2 isoa riskiä/heikkoutta verrattuna kilpailijoihin"],
+  "12_month_roadmap": ["3-5 strategista askelta jotka muuttavat kilpailuasetelmaa"]
+}}
+"""
+    else:
+        prompt = f"""{industry_str}
+Deep competitive analysis of these companies:
+
+YOUR COMPANY PROFILE:
+- Name: {your_summary['company']}
+- Score: {your_summary['score']}/100
+- Content: {your_summary['content_strategy']['word_count']} words, depth: {your_summary['content_strategy']['content_depth']}
+- Messaging: {your_summary['messaging']['title'][:80]}
+- Technical: Speed {your_summary['technical_maturity']['page_speed_score']}/100, Modernity {your_summary['technical_maturity']['modernity_score']}/100
+- Strengths: {', '.join(your_summary['key_strengths'])}
+- Weaknesses: {', '.join(your_summary['key_weaknesses'])}
+
+COMPETITORS ({len(comp_summaries)} total):
+{chr(10).join([f"- {c['company']}: {c['score']}/100 | Content: {c['content_strategy']['word_count']} words | Strengths: {', '.join(c['key_strengths'][:2])}" for c in comp_summaries])}
+
+DATA INSIGHTS:
+- Messaging: {comparison_matrix['messaging']['insight']}
+- Content: {comparison_matrix['content_strategy']['strategic_insight']}
+- Technical: {', '.join(comparison_matrix['technical_execution']['technical_gap_analysis'][:2])}
+
+Respond in JSON:
+{{
+  "positioning_summary": "One sentence describing competitive position",
+  "unique_selling_points": ["2-3 concrete USPs that differentiate from competitors"],
+  "target_customer_profile": "Who this company REALLY speaks to (precise description)",
+  "messaging_strategy": "How messaging differs from competitors",
+  "immediate_opportunities": ["3 quick tactics to outmaneuver competitors"],
+  "strategic_vulnerabilities": ["2 major risks/weaknesses vs competitors"],
+  "12_month_roadmap": ["3-5 strategic steps that change competitive landscape"]
+}}
+"""
+    
+    response = await openai_client.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=1500,
+        temperature=0.4,  # Hieman korkeampi creativity mutta silti fokus
+        response_format={"type": "json_object"}
+    )
+    
+    return json.loads(response.choices[0].message.content)
+
+def _calculate_differentiation_scores(comparison_matrix: Dict) -> Dict[str, int]:
+    """Laske numeerinen erottuvuuspistemäärä eri alueilla"""
+    
+    scores = {}
+    
+    # Viestintä (0-100)
+    msg = comparison_matrix['messaging']
+    msg_score = 50  # Base
+    if 'Unique tone' in msg['vs_competitors'].get('tone_differentiation', ''):
+        msg_score += 25
+    if 'More detailed' in msg['vs_competitors'].get('description_comparison', ''):
+        msg_score += 15
+    if msg['your_position']['h1_optimization'] == 'Good':
+        msg_score += 10
+    scores['messaging'] = min(100, msg_score)
+    
+    # Sisältö (0-100)
+    content = comparison_matrix['content_strategy']
+    content_score = 40  # Base
+    if content['content_gap'] > 1000:
+        content_score += 30
+    elif content['content_gap'] > 500:
+        content_score += 15
+    if content['blog_strategy']['you_have_blog'] and content['blog_strategy']['competitors_with_blog'] < content['blog_strategy']['total_competitors'] // 2:
+        content_score += 20
+    scores['content'] = min(100, content_score)
+    
+    # Tekninen (0-100)
+    tech = comparison_matrix['technical_execution']
+    tech_score = tech['speed_ranking']['percentile']
+    if all(tech['foundational_features'][f]['you'] for f in ['ssl', 'analytics', 'mobile']):
+        tech_score = min(100, tech_score + 15)
+    scores['technical'] = tech_score
+    
+    # Sosiaalinen (0-100)
+    social = comparison_matrix['social_engagement']
+    social_score = social['platform_coverage']['coverage_percentage']
+    if social['social_maturity']['has_og_tags'] and social['social_maturity']['has_sharing_buttons']:
+        social_score = min(100, social_score + 20)
+    scores['social'] = social_score
+    
+    # Kokonais-erottuvuus
+    scores['overall'] = int(sum(scores.values()) / len(scores))
+    
+    return scores
+
+def _identify_unique_strengths(your: Dict, competitors: List[Dict], matrix: Dict) -> List[str]:
+    """Tunnista ainutlaatuiset vahvuudet"""
+    strengths = []
+    
+    # Sisältö
+    if your['content_strategy']['word_count'] > max(c['content_strategy']['word_count'] for c in competitors):
+        strengths.append(f"💎 Runsain sisältö: {your['content_strategy']['word_count']} sanaa vs. kilpailijoiden max {max(c['content_strategy']['word_count'] for c in competitors)}")
+    
+    # Blogi
+    if your['content_strategy']['has_blog'] and sum(1 for c in competitors if c['content_strategy']['has_blog']) == 0:
+        strengths.append("💎 Ainoa jolla on aktiivinen blogi - vahva SEO-etu")
+    
+    # Tekninen
+    if your['technical_maturity']['page_speed_score'] > max(c['technical_maturity']['page_speed_score'] for c in competitors):
+        strengths.append(f"💎 Nopein sivulataus: {your['technical_maturity']['page_speed_score']}/100")
+    
+    # Modernit teknologiat
+    if your['technical_maturity']['spa_detected'] and sum(1 for c in competitors if c['technical_maturity']['spa_detected']) == 0:
+        strengths.append("💎 Ainoa moderni SPA-arkkitehtuuri - teknologinen edelläkävijä")
+    
+    # Jos AI-insightit saatavilla
+    if matrix.get('ai_insights') and matrix['ai_insights'].get('unique_selling_points'):
+        strengths.extend([f"💎 {usp}" for usp in matrix['ai_insights']['unique_selling_points'][:2]])
+    
+    return strengths[:5] if strengths else ["Ei selkeitä ainutlaatuisia vahvuuksia tunnistettu"]
+
+def _identify_shared_weaknesses(all_summaries: List[Dict]) -> List[str]:
+    """Tunnista kaikille yhteiset heikkoudet = markkinan aukot"""
+    
+    # Laske kuinka yleisiä eri puutteet ovat
+    total = len(all_summaries)
+    
+    # Teknisten puutteiden yleisyys
+    no_ssl_count = sum(1 for s in all_summaries if not s['technical_maturity']['has_ssl'])
+    no_analytics_count = sum(1 for s in all_summaries if not s['technical_maturity']['has_analytics'])
+    no_mobile_count = sum(1 for s in all_summaries if not s['technical_maturity']['mobile_optimization'])
+    slow_speed_count = sum(1 for s in all_summaries if s['technical_maturity']['page_speed_score'] < 60)
+    
+    # Sisältöpuutteet
+    thin_content_count = sum(1 for s in all_summaries if s['content_strategy']['word_count'] < 1000)
+    no_blog_count = sum(1 for s in all_summaries if not s['content_strategy']['has_blog'])
+    
+    # Sosiaaliset puutteet
+    limited_social_count = sum(1 for s in all_summaries if s['social_presence']['platform_count'] < 3)
+    
+    shared = []
+    threshold = total * 0.6  # 60% tai enemmän = yleinen puute
+    
+    if no_ssl_count >= threshold:
+        shared.append(f"🚨 SSL puuttuu {int(no_ssl_count/total*100)}% yrityksistä")
+    if no_analytics_count >= threshold:
+        shared.append(f"📊 Analytiikka puuttuu {int(no_analytics_count/total*100)}% yrityksistä")
+    if no_mobile_count >= threshold:
+        shared.append(f"📱 Mobiilioptimo inti puuttuu {int(no_mobile_count/total*100)}% yrityksistä")
+    if slow_speed_count >= threshold:
+        shared.append(f"🐌 Hidas lataus {int(slow_speed_count/total*100)}% yrityksistä")
+    if thin_content_count >= threshold:
+        shared.append(f"📝 Ohut sisältö (<1000 sanaa) {int(thin_content_count/total*100)}% yrityksistä")
+    if no_blog_count >= threshold:
+        shared.append(f"✍️ Ei blogia {int(no_blog_count/total*100)}% yrityksistä")
+    if limited_social_count >= threshold:
+        shared.append(f"👥 Rajoitettu sosiaalinen läsnäolo {int(limited_social_count/total*100)}% yrityksistä")
+    
+    return shared if shared else ["Alan perusasiat ovat hyvällä tasolla kaikilla"]
+
+def _identify_competitive_advantages(matrix: Dict, scores: Dict) -> List[str]:
+    """Tunnista konkreettiset kilpailuedut"""
+    advantages = []
+    
+    # Erottuvuuspisteiden perusteella
+    if scores['messaging'] >= 75:
+        advantages.append("🎯 Viestinnällinen etu: Selkeämpi ja erottuvampi arvolupauksesi")
+    
+    if scores['content'] >= 75:
+        advantages.append("📚 Sisältöetu: Syvempi ja kattavampi tietovaranto houkuttelee asiakkaita")
+    
+    if scores['technical'] >= 75:
+        advantages.append("⚡ Tekninen etu: Nopeampi ja modernimpi toteutus parantaa konversiota")
+    
+    if scores['social'] >= 75:
+        advantages.append("🌐 Sosiaalinen etu: Laajempi läsnäolo lisää löydettävyyttä ja luottamusta")
+    
+    # AI-insightit
+    if matrix.get('ai_insights'):
+        ai = matrix['ai_insights']
+        if ai.get('positioning_summary'):
+            advantages.append(f"💡 Asemointi: {ai['positioning_summary']}")
+        if ai.get('messaging_strategy'):
+            advantages.append(f"💬 Viestintästrategia: {ai['messaging_strategy']}")
+    
+    return advantages if advantages else ["Kilpailuedut eivät ole selkeästi näkyviä - keskity erottautumiseen"]
+
+async def _discover_real_market_gaps(
+    your_analysis: Dict[str, Any],
+    competitor_analyses: List[Dict[str, Any]],
+    language: str
+) -> List[Dict[str, Any]]:
+    """
+    Etsi TODELLISET markkinaaukot - ei yleisiä heikkouksia vaan
+    asiakkaiden tarpeita joihin kukaan ei vastaa.
+    """
+    
+    all_summaries = [_extract_detailed_summary(your_analysis)] + [_extract_detailed_summary(c) for c in competitor_analyses]
+    
+    # === 1. TEKNOLOGISET AUKOT ===
+    tech_gaps = _find_technical_market_gaps(all_summaries)
+    
+    # === 2. SISÄLTÖAUKOT ===
+    content_gaps = _find_content_market_gaps(all_summaries)
+    
+    # === 3. PALVELUAUKOT (AI-POHJAINEN) ===
+    service_gaps = []
+    if openai_client:
+        try:
+            service_gaps = await _find_service_gaps_with_ai(all_summaries, language)
+        except Exception as e:
+            logger.error(f"AI service gaps failed: {e}")
+    
+    # Yhdistä ja priorisoi
+    all_gaps = tech_gaps + content_gaps + service_gaps
+    
+    # Pistey tä aukot vaikutuksen ja toteuttamisen helppouden mukaan
+    for gap in all_gaps:
+        gap['priority_score'] = _calculate_gap_priority(gap)
+    
+    # Järjestä prioriteetin mukaan
+    all_gaps.sort(key=lambda x: x['priority_score'], reverse=True)
+    
+    return all_gaps[:7]  # Top 7 markkina-aukkoa
+
+def _find_technical_market_gaps(summaries: List[Dict]) -> List[Dict[str, Any]]:
+    """Tunnista teknologiset markkinaaukot"""
+    gaps = []
+    
+    total = len(summaries)
+    
+    # Laske puutteet
+    has_modern_tech = sum(1 for s in summaries if s['technical_maturity']['modernity_score'] >= 60)
+    has_fast_speed = sum(1 for s in summaries if s['technical_maturity']['page_speed_score'] >= 70)
+    has_mobile = sum(1 for s in summaries if s['technical_maturity']['mobile_optimization'])
+    
+    # Jos vähemmän kuin 50% täyttää kriteerin = aukko
+    if has_modern_tech < total * 0.5:
+        gaps.append({
+            'type': 'technology',
+            'gap_title': 'Modernit web-teknologiat puuttuvat alalta',
+            'description': f'{int((total - has_modern_tech)/total*100)}% yrityksistä käyttää vanhentuneita teknologioita',
+            'opportunity': 'Modernilla SPA-arkkitehtuurilla ja PWA-ominaisuuksilla voit erottua ja tarjota paremman käyttökokemuksen',
+            'impact': 'high',
+            'effort': 'medium',
+            'estimated_advantage': '+15-25 pistettä kilpailijoihin nähden'
+        })
+    
+    if has_fast_speed < total * 0.5:
+        gaps.append({
+            'type': 'performance',
+            'gap_title': 'Hitaat latausajat yleisiä alalla',
+            'description': f'{int((total - has_fast_speed)/total*100)}% yrityksistä on hidas (<70 pistettä)',
+            'opportunity': 'Optimoimalla sivun nopeuden alle 2 sekuntiin voit parantaa konversiota 20-30%',
+            'impact': 'high',
+            'effort': 'low',
+            'estimated_advantage': 'Joka sekunti nopeampi = 7% parempi konversio'
+        })
+    
+    if has_mobile < total * 0.7:
+        gaps.append({
+            'type': 'mobile',
+            'gap_title': 'Mobiilikokemus heikko alalla',
+            'description': f'{int((total - has_mobile)/total*100)}% yrityksistä ei ole optimoitu mobiilille kunnolla',
+            'opportunity': '60%+ liikenteet tulee mobiililla - responsiivisella designilla tavoitat enemmän asiakkaita',
+            'impact': 'critical',
+            'effort': 'medium',
+            'estimated_advantage': 'Tavoita 40-60% enemmän potentiaalisia asiakkaita'
+        })
+    
+    return gaps
+
+def _find_content_market_gaps(summaries: List[Dict]) -> List[Dict[str, Any]]:
+    """Tunnista sisältöaukot"""
+    gaps = []
+    
+    total = len(summaries)
+    
+    # Analysoi sisältöstrategioita
+    has_blog = sum(1 for s in summaries if s['content_strategy']['has_blog'])
+    has_deep_content = sum(1 for s in summaries if s['content_strategy']['word_count'] >= 2000)
+    has_media = sum(1 for s in summaries if s['content_strategy']['media_richness'] >= 2)
+    
+    if has_blog < total * 0.4:
+        gaps.append({
+            'type': 'content_marketing',
+            'gap_title': 'Vain harva yritys julkaisee sisältöä säännöllisesti',
+            'description': f'Vain {int(has_blog/total*100)}% yrityksistä on aktiivinen blogi',  # ✅ KORJATTU
+            'opportunity': 'Sisältömarkkinoinnilla voit kasvattaa orgaanista liikennettä 200-400% vuodessa',
+            'impact': 'high',
+            'effort': 'high',
+            'estimated_advantage': '4-6 laadukasta artikkelia/kk = 50-100 uutta kävijää/kk'
+        })
+    
+    if has_deep_content < total * 0.3:
+        gaps.append({
+            'type': 'thought_leadership',
+            'gap_title': 'Alan thought leadership -sisältö puuttuu',
+            'description': f'Vain {int(has_deep_content/total*100)}% yrityksistä julkaisee syvällistä asiantuntijasisältöä',  # ✅ Tämä on oikein
+            'opportunity': 'Pitkät, kattavat oppaat (2000+ sanaa) rakentavat auktoriteettia ja dominoivat hakutuloksia',
+            'impact': 'high',
+            'effort': 'medium',
+            'estimated_advantage': '1 kattava opas voi tuoda 100-500 kävijää/kk vuosia'
+        })
+    
+    if has_media < total * 0.5:
+        gaps.append({
+            'type': 'multimedia',
+            'gap_title': 'Multimedia-sisältö on harvinaista',
+            'description': f'{int((total - has_media)/total*100)}% yrityksistä käyttää vain tekstiä',
+            'opportunity': 'Videot, infografiikat ja interaktiiviset elementit lisäävät sitoutumista 3-5x',
+            'impact': 'medium',
+            'effort': 'medium',
+            'estimated_advantage': 'Video lisää konversiota 80% ja aikaa sivulla 2-3x'
+        })
+    
+    return gaps
+
+async def _find_service_gaps_with_ai(summaries: List[Dict], language: str) -> List[Dict[str, Any]]:
+    """Käytä AI:ta tunnistamaan palvelu- ja liiketoimintaaukot"""
+    
+    # Rakenna yhteenveto kaikista yrityksistä
+    companies_summary = "\n".join([
+        f"- {s['company']}: Pisteet {s['score']}/100, Sisältö: {s['content_strategy']['content_depth']}, "
+        f"Vahvuudet: {', '.join(s['key_strengths'][:2])}, Heikkoudet: {', '.join(s['key_weaknesses'][:2])}"
+        for s in summaries
+    ])
+    
+    prompt_lang = "fi" if language == "fi" else "en"
+    
+    if prompt_lang == "fi":
+        prompt = f"""Analysoi näiden {len(summaries)} yrityksen perusteella, mitä ASIAKKAAT kaipaavat mutta kukaan ei tarjoa:
+
+{companies_summary}
+
+Etsi TODELLISIA markkinaaukkoja - ei yleisiä puutteita vaan konkreettisia asiakastarte ita joita kukaan ei täytä.
+
+Vastaa JSON-muodossa (max 3 aukkoa):
+{{
+  "gaps": [
+    {{
+      "gap_title": "Lyhyt otsikko aukosta",
+      "customer_pain_point": "Mikä ongelma asiakkaalla on",
+      "why_unfulfilled": "Miksi kukaan ei vastaa tähän",
+      "opportunity": "Miten tähän voi vastata",
+      "revenue_potential": "Arvio liikevaih tovaikutuksesta",
+      "competitive_moat": "Miten tämä suojaa kilpailijoilta"
+    }}
+  ]
+}}
+"""
+    else:
+        prompt = f"""Analyze these {len(summaries)} companies to find what CUSTOMERS need but nobody provides:
+
+{companies_summary}
+
+Find REAL market gaps - not generic weaknesses but concrete customer needs nobody fulfills.
+
+Respond in JSON (max 3 gaps):
+{{
+  "gaps": [
+    {{
+      "gap_title": "Short gap title",
+      "customer_pain_point": "What problem does customer have",
+      "why_unfulfilled": "Why nobody addresses this",
+      "opportunity": "How to address this",
+      "revenue_potential": "Estimated revenue impact",
+      "competitive_moat": "How this protects from competitors"
+    }}
+  ]
+}}
+"""
+    
+    response = await openai_client.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=1200,
+        temperature=0.6,
+        response_format={"type": "json_object"}
+    )
+    
+    result = json.loads(response.choices[0].message.content)
+    
+    # Muotoile AI:n löydökset yhtenäiseen muotoon
+    formatted_gaps = []
+    for gap in result.get('gaps', []):
+        formatted_gaps.append({
+            'type': 'service_innovation',
+            'gap_title': gap['gap_title'],
+            'description': gap['customer_pain_point'],
+            'opportunity': gap['opportunity'],
+            'impact': 'high',
+            'effort': 'high',
+            'estimated_advantage': gap.get('revenue_potential', 'Merkittävä liikevaihtomahdollisuus'),
+            'competitive_moat': gap.get('competitive_moat', ''),
+            'why_gap_exists': gap.get('why_unfulfilled', '')
+        })
+    
+    return formatted_gaps
+
+def _calculate_gap_priority(gap: Dict) -> int:
+    """Laske aukon prioriteettipistemäärä"""
+    score = 0
+    
+    # Vaikutus
+    impact_scores = {'critical': 40, 'high': 30, 'medium': 20, 'low': 10}
+    score += impact_scores.get(gap.get('impact', 'medium'), 20)
+    
+    # Toteutettavuus (käänteinen - helpompi = parempi)
+    effort_scores = {'low': 30, 'medium': 20, 'high': 10}
+    score += effort_scores.get(gap.get('effort', 'medium'), 20)
+    
+    # Tyyppikohtainen bonus
+    type_scores = {
+        'performance': 15,  # Nopea toteuttaa, suuri vaikutus
+        'mobile': 15,
+        'content_marketing': 10,
+        'service_innovation': 25  # AI löysi - todennäköisesti arvokas
+    }
+    score += type_scores.get(gap.get('type', ''), 0)
+    
+    return score
+
+async def _calculate_market_positioning(
+    your_analysis: Dict[str, Any],
+    competitor_analyses: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Laske kilpailullinen asemointi (positioning map)"""
+    
+    your_summary = _extract_detailed_summary(your_analysis)
+    comp_summaries = [_extract_detailed_summary(c) for c in competitor_analyses]
+    all_summaries = [your_summary] + comp_summaries
+    
+    # Laske kaksi pääakselia: Digitaalinen kypsyys vs. Sisällön syvyys
+    scores = []
+    for s in all_summaries:
+        scores.append({
+            'company': s['company'],
+            'is_you': s['company'] == your_summary['company'],
+            'digital_maturity': s['score'],
+            'content_depth_score': min(100, (s['content_strategy']['word_count'] / 50)),  # 5000 sanaa = 100p
+            'technical_score': s['technical_maturity']['page_speed_score'],
+            'social_score': s['social_presence']['platform_count'] * 20  # 5 alustaa = 100p
+        })
+    
+    # Laske keskiarvot
+    avg_maturity = sum(s['digital_maturity'] for s in scores) / len(scores)
+    avg_content = sum(s['content_depth_score'] for s in scores) / len(scores)
+    
+    # Määritä kvadrantit
+    your_score = [s for s in scores if s['is_you']][0]
+    
+    if your_score['digital_maturity'] >= avg_maturity and your_score['content_depth_score'] >= avg_content:
+        quadrant = "Leader"
+        quadrant_desc = "Vahva digitaalinen toteutus JA syvä sisältö - alan johtaja"
+    elif your_score['digital_maturity'] >= avg_maturity and your_score['content_depth_score'] < avg_content:
+        quadrant = "Technical Leader"
+        quadrant_desc = "Teknisesti edistyksellinen mutta sisältö ohut - parempi sisältöstrategia tarvitaan"
+    elif your_score['digital_maturity'] < avg_maturity and your_score['content_depth_score'] >= avg_content:
+        quadrant = "Content Leader"
+        quadrant_desc = "Vahva sisältö mutta tekniikka jäljessä - tekninen päivitys tarvitaan"
+    else:
+        quadrant = "Challenger"
+        quadrant_desc = "Sekä tekniikka että sisältö jäljessä - suuri kehityspotentiaali"
+    
+    # Laske kilpailullinen pisteys
+    your_overall = your_score['digital_maturity']
+    comp_avg = sum(s['digital_maturity'] for s in scores if not s['is_you']) / len([s for s in scores if not s['is_you']])
+    
+    competitive_score = int((your_overall / max(1, comp_avg)) * 50)
+    competitive_score = max(0, min(100, competitive_score))
+    
+    return {
+        'competitive_score': competitive_score,
+        'positioning_quadrant': quadrant,
+        'quadrant_description': quadrant_desc,
+        'positioning_coordinates': {
+            'x_digital_maturity': your_score['digital_maturity'],
+            'y_content_depth': your_score['content_depth_score']
+        },
+        'market_averages': {
+            'digital_maturity': int(avg_maturity),
+            'content_depth': int(avg_content)
+        },
+        'all_companies': scores,
+        'competitive_distance': {
+            'from_leader': max(s['digital_maturity'] for s in scores) - your_overall,
+            'from_average': your_overall - comp_avg
+        }
+    }
+
+async def _generate_strategic_recommendations(
+    your_analysis: Dict[str, Any],
+    competitor_analyses: List[Dict[str, Any]],
+    differentiation_matrix: Dict[str, Any],
+    market_gaps: List[Dict[str, Any]],
+    language: str
+) -> List[Dict[str, Any]]:
+    """Generoi strategiset suositukset kilpailullisen aseman parantamiseen"""
+    
+    recommendations = []
+    
+    # === 1. NOPEAT VOITOT (Quick Wins) ===
+    quick_wins = _identify_quick_wins(differentiation_matrix, market_gaps)
+    recommendations.extend(quick_wins)
+    
+    # === 2. STRATEGISET MUUTOKSET (Strategic Moves) ===
+    if openai_client:
+        try:
+            strategic_moves = await _get_ai_strategic_recommendations(
+                your_analysis,
+                competitor_analyses,
+                differentiation_matrix,
+                market_gaps,
+                language
+            )
+            recommendations.extend(strategic_moves)
+        except Exception as e:
+            logger.error(f"AI strategic recommendations failed: {e}")
+    
+    # === 3. PITKÄN TÄHTÄIMEN INVESTOINNIT ===
+    long_term = _identify_long_term_investments(market_gaps)
+    recommendations.extend(long_term)
+    
+    # Priorisoi ja rajoita määrää
+    for r in recommendations:
+        r['priority_score'] = _calculate_recommendation_priority(r)
+    
+    recommendations.sort(key=lambda x: x['priority_score'], reverse=True)
+    
+    return recommendations[:8]
+
+def _identify_quick_wins(matrix: Dict, gaps: List[Dict]) -> List[Dict[str, Any]]:
+    """Tunnista nopeat voitot"""
+    quick_wins = []
+    
+    # Teknisistä puutteista
+    tech_gaps = matrix['technical_execution'].get('technical_gap_analysis', [])
+    for gap in tech_gaps:
+        if 'KRIITTINEN' in gap or 'SSL' in gap:
+            quick_wins.append({
+                'title': 'Asenna SSL-sertifikaatti HETI',
+                'rationale': 'Kriittinen puute joka estää Google-sijoitukset',
+                'timeframe': '1-2 päivää',
+                'effort': 'low',
+                'impact': 'critical',
+                'cost_estimate': '0-50€/vuosi',
+                'expected_result': '+10-15 pistettä, paremmat sijoitukset'
+            })
+        elif 'analytiikka' in gap.lower():
+            quick_wins.append({
+                'title': 'Asenna Google Analytics 4',
+                'rationale': 'Et voi optimoida mitä et mittaa',
+                'timeframe': '2-4 tuntia',
+                'effort': 'low',
+                'impact': 'high',
+                'cost_estimate': '0€',
+                'expected_result': 'Mittauspohja optimoinnille'
+            })
+    
+    # Sisältöaukoista
+    content_insight = matrix['content_strategy'].get('strategic_insight', '')
+    if 'KRIITTINEN' in content_insight:
+        quick_wins.append({
+            'title': 'Kirjoita 3 pilartar tikkelia',
+            'rationale': 'Sisältösi on liian ohut kilpailijoihin nähden',
+            'timeframe': '2-3 viikkoa',
+            'effort': 'medium',
+            'impact': 'high',
+            'cost_estimate': '0-500€ (jos ulkoistetaan)',
+            'expected_result': '+1000-2000 sanaa, paremmat sijoitukset'
+        })
+    
+    # Markkinaaukoista (vain low effort)
+    for gap in gaps:
+        if gap.get('effort') == 'low' and gap.get('impact') in ['high', 'critical']:
+            quick_wins.append({
+                'title': f"Hyödynnä aukko: {gap['gap_title']}",
+                'rationale': gap['description'],
+                'timeframe': '1-2 viikkoa',
+                'effort': 'low',
+                'impact': gap['impact'],
+                'cost_estimate': '0-200€',
+                'expected_result': gap.get('estimated_advantage', 'Merkittävä etu')
+            })
+    
+    return quick_wins[:3]
+
+async def _get_ai_strategic_recommendations(
+    your_analysis: Dict,
+    competitor_analyses: List[Dict],
+    matrix: Dict,
+    gaps: List[Dict],
+    language: str
+) -> List[Dict[str, Any]]:
+    """Pyydä AI:lta strategisia suosituksia"""
+    
+    your_summary = _extract_detailed_summary(your_analysis)
+    positioning = matrix.get('ai_insights', {})
+    
+    top_gaps = [g['gap_title'] + ': ' + g['description'] for g in gaps[:3]]
+    
+    prompt_lang = "fi" if language == "fi" else "en"
+    
+    if prompt_lang == "fi":
+        prompt = f"""Olet digitaalisen liiketoiminnan strateginen neuvonantaja. Analysoi tilanne ja anna 3 strategista suositusta:
+
+YRITYS: {your_summary['company']}
+PISTEET: {your_summary['score']}/100
+ASEMOINTI: {positioning.get('positioning_summary', 'Ei tiedossa')}
+
+MARKKINATILANNE:
+- Kilpailijoita analysoitu: {len(competitor_analyses)}
+- Tunnistetut aukot: {chr(10).join(top_gaps)}
+
+EROTTUVUUS:
+- Vahvuudet: {', '.join(your_summary['key_strengths'])}
+- Heikkoudet: {', '.join(your_summary['key_weaknesses'])}
+
+Anna 3 strategista suositusta JSON-muodossa:
+{{"recommendations": [
+    {
+      "title": "Strateginen suositus 1",
+      "strategic_rationale": "Miksi tämä muuttaa peliä",
+      "action_steps": ["Konkreettinen askel 1", "Askel 2", "Askel 3"],
+      "timeframe": "3-6 kuukautta",
+      "investment_required": "Rahallinen ja aikainvestointi",
+      "expected_outcome": "Mitä saavutetaan",
+      "competitive_impact": "Miten tämä muuttaa kilpailuasetelmaa",
+      "risk_level": "low/medium/high"
+    }
+  ]
+}
+"""
+    else:
+        prompt = f"""You are a digital business strategist. Analyze and provide 3 strategic recommendations:
+
+COMPANY: {your_summary['company']}
+SCORE: {your_summary['score']}/100
+POSITIONING: {positioning.get('positioning_summary', 'Unknown')}
+
+MARKET SITUATION:
+- Competitors analyzed: {len(competitor_analyses)}
+- Identified gaps: {chr(10).join(top_gaps)}
+
+DIFFERENTIATION:
+- Strengths: {', '.join(your_summary['key_strengths'])}
+- Weaknesses: {', '.join(your_summary['key_weaknesses'])}
+
+Provide 3 strategic recommendations in JSON:
+{{
+  "recommendations": [
+    {{
+      "title": "Strategic recommendation 1",
+      "strategic_rationale": "Why this is game-changing",
+      "action_steps": ["Concrete step 1", "Step 2", "Step 3"],
+      "timeframe": "3-6 months",
+      "investment_required": "Financial and time investment",
+      "expected_outcome": "What will be achieved",
+      "competitive_impact": "How this changes competitive landscape",
+      "risk_level": "low/medium/high"
+    }}
+  ]
+}}
+"""
+    
+    response = await openai_client.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=1500,
+        temperature=0.5,
+        response_format={"type": "json_object"}
+    )
+    
+    result = json.loads(response.choices[0].message.content)
+    
+    # Muotoile AI:n suositukset yhtenäiseen muotoon
+    formatted = []
+    for rec in result.get('recommendations', []):
+        formatted.append({
+            'title': rec['title'],
+            'rationale': rec['strategic_rationale'],
+            'action_steps': rec.get('action_steps', []),
+            'timeframe': rec.get('timeframe', '3-6 months'),
+            'effort': 'high' if 'high' in rec.get('risk_level', '').lower() else 'medium',
+            'impact': 'high',
+            'cost_estimate': rec.get('investment_required', 'Määritetään tarkemmin'),
+            'expected_result': rec.get('expected_outcome', ''),
+            'competitive_impact': rec.get('competitive_impact', ''),
+            'risk_level': rec.get('risk_level', 'medium')
+        })
+    
+    return formatted
+
+def _identify_long_term_investments(gaps: List[Dict]) -> List[Dict[str, Any]]:
+    """Tunnista pitkän tähtäimen investoinnit"""
+    long_term = []
+    
+    # Etsi high effort / high impact aukkoja
+    for gap in gaps:
+        if gap.get('effort') == 'high' and gap.get('impact') in ['high', 'critical']:
+            long_term.append({
+                'title': f"Pitkän tähtäimen: {gap['gap_title']}",
+                'rationale': gap['description'],
+                'timeframe': '6-12 kuukautta',
+                'effort': 'high',
+                'impact': gap['impact'],
+                'cost_estimate': '5000-20000€',
+                'expected_result': gap.get('estimated_advantage', 'Merkittävä kilpailuetu'),
+                'strategic_importance': 'Rakentaa kestävää kilpailuetua'
+            })
+    
+    return long_term[:2]
+
+def _calculate_recommendation_priority(rec: Dict) -> int:
+    """Laske suosituksen prioriteettipistemäärä"""
+    score = 0
+    
+    # Vaikutus
+    impact_map = {'critical': 50, 'high': 40, 'medium': 25, 'low': 10}
+    score += impact_map.get(rec.get('impact', 'medium'), 25)
+    
+    # Vaiva (käänteinen - helpompi parempi)
+    effort_map = {'low': 30, 'medium': 20, 'high': 10}
+    score += effort_map.get(rec.get('effort', 'medium'), 20)
+    
+    # Aikaikkuna (nopeampi parempi)
+    timeframe = rec.get('timeframe', '').lower()
+    if any(word in timeframe for word in ['päivä', 'viikko', 'day', 'week']):
+        score += 20
+    elif any(word in timeframe for word in ['kuukau', 'month']):
+        score += 10
+    
+    return score
+
+
+# ============================================================================
 # MAIN APPLICATION ENTRY POINT
 # ============================================================================
 
@@ -5066,7 +6334,7 @@ if __name__ == "__main__":
     logger.info(f"📊 Scoring System: Configurable weights {SCORING_CONFIG.weights}")
     logger.info(f"🎭 Playwright: {'available and enabled' if PLAYWRIGHT_AVAILABLE and PLAYWRIGHT_ENABLED else 'disabled'}")
     logger.info(f"🕸️  SPA Detection: enabled with smart rendering")
-    logger.info(f"🔧 Enhanced Features: 9 complete features implemented")
+    logger.info(f"🔧 Enhanced Features: 10 complete features implemented")
     logger.info(f"🤖 OpenAI: {'available' if openai_client else 'not configured'}")
     logger.info(f"🌐 Starting server on {host}:{port}")
     
