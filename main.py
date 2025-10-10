@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Brandista Competitive Intelligence API - Complete Unified Version
-Version: 6.2.2 - Merged Baseline (analysis + robustness)
+Version: 6.2.3 - Merged Baseline (analysis + robustness)
 Author: Brandista Team
 Date: 2025
 Description: Complete production-ready website analysis with configurable scoring system and comprehensive SPA support
@@ -911,6 +911,26 @@ class CompetitorAnalysisRequest(BaseModel):
     include_ai: bool = Field(True)
     include_social: bool = Field(True)
     force_playwright: bool = Field(False, description="Force Playwright rendering even for non-SPAs")
+
+class CompetitorDiscoveryRequest(BaseModel):
+    url: str = Field(..., description="Käyttäjän oma verkkosivu")
+    industry: str = Field(..., max_length=100, description="Toimiala, esim. 'SaaS-palvelu Suomessa'")
+    country_code: str = Field("fi", max_length=2, description="Maa, jossa kilpailijoita haetaan")
+
+class CompetitiveRadarRequest(BaseModel):
+    your_url: str = Field(..., description="Oma verkkosivusi")
+    competitor_urls: List[str] = Field(..., min_items=1, max_items=5, description="Kilpailijoiden URL:t (1-5 kpl)")
+    language: str = Field("fi", pattern="^(en|fi)$")
+    industry_context: Optional[str] = Field(None, description="Toimiala-konteksti (valinnainen)")
+
+class CompetitiveRadarResponse(BaseModel):
+    your_analysis: Dict[str, Any]
+    competitors: List[Dict[str, Any]]
+    differentiation_matrix: Dict[str, Any]
+    market_gaps: List[Dict[str, Any]]
+    competitive_score: int
+    strategic_recommendations: List[Dict[str, Any]]
+    positioning_map: Dict[str, Any]
 
 class ScoreBreakdown(BaseModel):
     # Backend (weighted points)
@@ -4395,20 +4415,7 @@ async def discover_competitors(
     request: CompetitorDiscoveryRequest,
     user: UserInfo = Depends(require_user)
 ):
-    """
-    Discover competitors and analyze them in background using Redis task queue.
-    
-    Process:
-    1. Search Google for competitors in your industry
-    2. Filter out non-competitor domains (social media, news sites)
-    3. Reserve quota for all analyses
-    4. Start background processing
-    5. Return task_id for status tracking
-    
-    Returns:
-        task_id: Use with /api/v1/discovery-status/{task_id}
-        competitors: List of domains being analyzed
-    """
+    """Discover competitors and analyze them in background using Redis task queue."""
     
     if not task_queue:
         raise HTTPException(503, "Task queue not available - Redis required")
@@ -4525,79 +4532,105 @@ async def discover_competitors(
         username=user.username
     )
     
-# === 7. START BACKGROUND PROCESSING ===
+    # === 7. START BACKGROUND PROCESSING ===
     async def process_discovery():
         """Background worker for competitor analyses"""
         
-        task_queue.update_task(task_id, {
-            "status": "running",
-            "started_at": datetime.now().isoformat()
-        })
-        
-        for idx, competitor in enumerate(competitors_to_analyze, 1):
-            competitor_url = competitor["url"]
+        try:
+            task_queue.update_task(task_id, {
+                "status": "running",
+                "started_at": datetime.now().isoformat()
+            })
             
-            try:
-                logger.info(
-                    f"[Task {task_id}] Analyzing {idx}/{required_analyses}: {competitor_url}"
-                )
+            successful_count = 0
+            
+            for idx, competitor in enumerate(competitors_to_analyze, 1):
+                competitor_url = competitor["url"]
                 
-                # Clean and validate URL
-                clean_competitor_url = clean_url(competitor_url)
-                _reject_ssrf(clean_competitor_url)
-                
-                # Perform analysis
-                result = await _perform_comprehensive_analysis_internal(
-                    url=clean_competitor_url,
-                    company_name=competitor["domain"],
-                    language=request.country_code,
-                    force_playwright=False,
-                    user=user
-                )
-                
-                # ✅ Save SUCCESS result with full analysis
-                task_queue.add_result(task_id, {
-                    "url": competitor_url,
-                    "domain": competitor["domain"],
-                    "status": "success",
-                    "score": result["basic_analysis"]["digital_maturity_score"],
-                    "cache_key": get_cache_key(
-                        clean_competitor_url, 
-                        "ai_comprehensive_v6.1.1_complete"
-                    ),
-                    "analyzed_at": datetime.now().isoformat(),
-                    "analysis": result  # ✅ KOKO ANALYYSI!
-                })
-                
-                logger.info(f"✅ [{task_id}] {idx}/{required_analyses} done: {competitor_url}")
-                
-            except Exception as e:
-                logger.error(f"❌ [{task_id}] Failed {competitor_url}: {e}")
-                
-                # ✅ Save FAILURE result
-                task_queue.add_result(task_id, {
-                    "url": competitor_url,
-                    "domain": competitor["domain"],
-                    "status": "failed",
-                    "error": str(e),
-                    "error_type": type(e).__name__
-                })
-                
-                # REFUND credit on error
-                if user.role != "admin":
-                    user_search_counts[user.username] -= 1
-                    logger.info(f"Refunded 1 credit to {user.username} due to error")
-        
-        # Mark task complete
-        task_queue.update_task(task_id, {
-            "status": "completed",
-            "completed_at": datetime.now().isoformat()
-        })
-        
-        logger.info(f"🏁 Discovery task {task_id} completed for {user.username}")
+                try:
+                    logger.info(
+                        f"[Task {task_id}] Analyzing {idx}/{required_analyses}: {competitor_url}"
+                    )
+                    
+                    # Clean and validate URL
+                    clean_competitor_url = clean_url(competitor_url)
+                    _reject_ssrf(clean_competitor_url)
+                    
+                    # Perform analysis
+                    result = await _perform_comprehensive_analysis_internal(
+                        url=clean_competitor_url,
+                        company_name=competitor["domain"],
+                        language=request.country_code,
+                        force_playwright=False,
+                        user=user
+                    )
+                    
+                    # ✅ Save SUCCESS result with full analysis
+                    task_queue.add_result(task_id, {
+                        "url": competitor_url,
+                        "domain": competitor["domain"],
+                        "status": "success",
+                        "score": result["basic_analysis"]["digital_maturity_score"],
+                        "cache_key": get_cache_key(
+                            clean_competitor_url, 
+                            "ai_comprehensive_v6.1.1_complete"
+                        ),
+                        "analyzed_at": datetime.now().isoformat(),
+                        "analysis": result  # ✅ KOKO ANALYYSI!
+                    })
+                    
+                    successful_count += 1
+                    logger.info(f"✅ [{task_id}] {idx}/{required_analyses} done: {competitor_url}")
+                    
+                except HTTPException as e:
+                    logger.error(f"❌ [{task_id}] HTTP error {competitor_url}: {e.detail}")
+                    
+                    task_queue.add_result(task_id, {
+                        "url": competitor_url,
+                        "domain": competitor["domain"],
+                        "status": "failed",
+                        "error": str(e.detail),
+                        "error_type": "HTTPException"
+                    })
+                    
+                    if user.role != "admin":
+                        user_search_counts[user.username] = max(0, user_search_counts.get(user.username, 0) - 1)
+                        logger.info(f"Refunded 1 credit to {user.username} due to HTTP error")
+                        
+                except Exception as e:
+                    logger.error(f"❌ [{task_id}] Failed {competitor_url}: {e}", exc_info=True)
+                    
+                    task_queue.add_result(task_id, {
+                        "url": competitor_url,
+                        "domain": competitor["domain"],
+                        "status": "failed",
+                        "error": str(e),
+                        "error_type": type(e).__name__
+                    })
+                    
+                    if user.role != "admin":
+                        user_search_counts[user.username] = max(0, user_search_counts.get(user.username, 0) - 1)
+                        logger.info(f"Refunded 1 credit to {user.username} due to error")
+            
+            # Mark task complete
+            task_queue.update_task(task_id, {
+                "status": "completed",
+                "completed_at": datetime.now().isoformat(),
+                "successful": successful_count,
+                "failed": required_analyses - successful_count
+            })
+            
+            logger.info(f"🏁 Discovery task {task_id} completed for {user.username}: {successful_count}/{required_analyses} successful")
+            
+        except Exception as e:
+            logger.error(f"💥 Discovery task {task_id} crashed: {e}", exc_info=True)
+            task_queue.update_task(task_id, {
+                "status": "failed",
+                "error": str(e),
+                "failed_at": datetime.now().isoformat()
+            })
     
-    # ✅ TÄRKEÄ: Tämä on ULKONA process_discovery funktiosta!
-    # Start background task (non-blocking)
+    # ✅ KRIITTINEN: Käynnistä taustaprosessi!
     asyncio.create_task(process_discovery())
     
     # === 8. RETURN IMMEDIATE RESPONSE ===
@@ -4606,9 +4639,11 @@ async def discover_competitors(
         "message": f"Competitor discovery started for {required_analyses} competitors",
         "task_id": task_id,
         "status_url": f"/api/v1/discovery-status/{task_id}",
+        "results_url": f"/api/v1/discovery-results/{task_id}",
         "estimated_time_minutes": round(required_analyses * 0.5, 1),
         "competitors": [c["domain"] for c in competitors_to_analyze],
         "credits_reserved": required_analyses if user.role != "admin" else 0
+    }
     }
 
 # ✅ Nämä endpointit ovat ERILLÄÄN discover_competitors funktiosta!
@@ -5040,39 +5075,21 @@ async def admin_delete_user(username: str, user: UserInfo = Depends(require_admi
 # KILPAILUETU-TUTKA ENDPOINT - KAUPALLINEN VERSIO
 # ============================================================================
 
-class CompetitiveRadarRequest(BaseModel):
-    your_url: str = Field(..., description="Oma verkkosivusi")
-    competitor_urls: List[str] = Field(..., min_items=1, max_items=5, description="Kilpailijoiden URL:t (1-5 kpl)")
-    language: str = Field("fi", pattern="^(en|fi)$")
-    industry_context: Optional[str] = Field(None, description="Toimiala-konteksti (valinnainen)")
-
-class CompetitiveRadarResponse(BaseModel):
-    your_analysis: Dict[str, Any]
-    competitors: List[Dict[str, Any]]
-    differentiation_matrix: Dict[str, Any]  # Muutettu: taulukkomuotoinen vertailu
-    market_gaps: List[Dict[str, Any]]
-    competitive_score: int
-    strategic_recommendations: List[Dict[str, Any]]  # UUSI: Strategiset suositukset
-    positioning_map: Dict[str, Any]  # UUSI: Positioning-kartta
-
-@app.post("/api/v1/competitive-radar", tags=["Competitive Intelligence"])
+@app.post("/api/v1/competitive-radar", response_model=CompetitiveRadarResponse)
 async def analyze_competitive_radar(
     request: CompetitiveRadarRequest,
     user: UserInfo = Depends(require_user)
 ):
     """
-    Kilpailuetu-Tutka: Syvällinen kilpailija-analyysi kaupallisilla insighteilla.
+    Kilpailuetu-tutka: Analysoi oma sivu + kilpailijat ja tunnista strategiset mahdollisuudet.
     
     Palauttaa:
-    - Erottuvuusmatriisi (vertailee konkreettisia tekijöitä)
-    - Todelliset markkinaaukot (mitä asiakkaat etsivät mutta eivät löydä)
-    - Strategiset suositukset (mitä tehdä seuraavaksi)
-    - Positioning-kartta (missä olet markkinassa)
+        - Syvällinen erottuvuusanalyysi
+        - Todelliset markkinaaukot
+        - Kilpailullinen asemointi
+        - Strategiset suositukset
     """
-    
     try:
-        logger.info(f"Competitive Radar: {user.username} analyzing {len(request.competitor_urls)} competitors")
-        
         # === QUOTA CHECK ===
         required_analyses = 1 + len(request.competitor_urls)
         
@@ -5085,14 +5102,16 @@ async def analyze_competitive_radar(
                 raise HTTPException(
                     403,
                     f"Competitive Radar requires {required_analyses} analyses. "
-                    f"You have {available} remaining."
+                    f"You have {available} remaining of {user_limit} quota."
                 )
+        
+        logger.info(f"[Radar] Starting analysis for {user.username}: {request.your_url} vs {len(request.competitor_urls)} competitors")
         
         # === 1. ANALYSOI OMA SIVU ===
         your_url = clean_url(request.your_url)
         _reject_ssrf(your_url)
         
-        logger.info(f"[Radar] Deep analysis: {your_url}")
+        logger.info(f"[Radar] Analyzing YOUR site: {your_url}")
         
         your_analysis = await _perform_comprehensive_analysis_internal(
             url=your_url,
@@ -5102,13 +5121,14 @@ async def analyze_competitive_radar(
         
         # === 2. ANALYSOI KILPAILIJAT ===
         competitor_analyses = []
+        failed_competitors = []
         
         for idx, competitor_url in enumerate(request.competitor_urls, 1):
             try:
                 clean_comp_url = clean_url(competitor_url)
                 _reject_ssrf(clean_comp_url)
                 
-                logger.info(f"[Radar] Competitor {idx}/{len(request.competitor_urls)}: {clean_comp_url}")
+                logger.info(f"[Radar] Analyzing competitor {idx}/{len(request.competitor_urls)}: {clean_comp_url}")
                 
                 comp_analysis = await _perform_comprehensive_analysis_internal(
                     url=clean_comp_url,
@@ -5117,21 +5137,72 @@ async def analyze_competitive_radar(
                 )
                 
                 competitor_analyses.append(comp_analysis)
+                logger.info(f"[Radar] ✅ Competitor {idx} done: {comp_analysis['basic_analysis']['company']}")
                 
+            except HTTPException as e:
+                logger.error(f"[Radar] ❌ HTTPException for {competitor_url}: {e.detail}")
+                failed_competitors.append({
+                    'url': competitor_url,
+                    'error': str(e.detail)
+                })
             except Exception as e:
-                logger.error(f"[Radar] Failed {competitor_url}: {e}")
-                continue
+                logger.error(f"[Radar] ❌ Exception for {competitor_url}: {e}", exc_info=True)
+                failed_competitors.append({
+                    'url': competitor_url,
+                    'error': f"Analysis failed: {str(e)}"
+                })
         
+        # === 3. TARKISTA ETTÄ AINAKIN 1 KILPAILIJA ONNISTUI ===
         if not competitor_analyses:
-            raise HTTPException(400, "Yhtään kilpailija-analyysiä ei onnistunut")
+            raise HTTPException(
+                400, 
+                f"Failed to analyze any competitors. Errors: {failed_competitors}"
+            )
         
-        # === 3. UPDATE QUOTA ===
+        logger.info(f"[Radar] Successfully analyzed: 1 your site + {len(competitor_analyses)} competitors ({len(failed_competitors)} failed)")
+        
+        # === 4. UPDATE QUOTA ===
         if user.role != "admin":
             successful_analyses = 1 + len(competitor_analyses)
             user_search_counts[user.username] = current_count + successful_analyses
             logger.info(f"[Radar] Used {successful_analyses} credits for {user.username}")
         
-        # === 4. SYVÄLLINEN EROTTUVUUSANALYYSI ===
+        # === 5. EXTRACT SUMMARIES ===
+        your_summary = _extract_detailed_summary(your_analysis)
+        
+        if your_summary is None:
+            logger.error(f"❌ Failed to extract your_summary for {request.your_url}")
+            raise HTTPException(
+                500, 
+                "Failed to extract analysis data from your website. Please try again."
+            )
+        
+        comp_summaries = []
+        for idx, comp_analysis in enumerate(competitor_analyses, 1):
+            summary = _extract_detailed_summary(comp_analysis)
+            if summary is None:
+                logger.error(
+                    f"❌ Failed to extract competitor {idx}: "
+                    f"{comp_analysis.get('basic_analysis', {}).get('website', 'unknown')}"
+                )
+                continue  # Skip this competitor
+            comp_summaries.append(summary)
+        
+        if not comp_summaries:
+            raise HTTPException(
+                500, 
+                "Failed to extract analysis data from competitors. Please try again."
+            )
+        
+        logger.info(
+            f"✅ Successfully extracted summaries: "
+            f"your_score={your_summary['score']}, "
+            f"competitors={[(c['company'], c['score']) for c in comp_summaries]}"
+        )
+        
+        # === 6. SYVÄLLINEN EROTTUVUUSANALYYSI ===
+        logger.info("[Radar] Building differentiation matrix...")
+        
         differentiation_matrix = await _build_differentiation_matrix(
             your_analysis, 
             competitor_analyses,
@@ -5139,20 +5210,35 @@ async def analyze_competitive_radar(
             request.industry_context
         )
         
-        # === 5. TODELLISET MARKKINAAUKOT (AI-pohjainen) ===
+        logger.info(f"[Radar] ✅ Differentiation matrix built with keys: {list(differentiation_matrix.keys())}")
+        
+        # === 7. TODELLISET MARKKINAAUKOT (AI-pohjainen) ===
+        logger.info("[Radar] Discovering market gaps...")
+        
         market_gaps = await _discover_real_market_gaps(
             your_analysis,
             competitor_analyses,
             request.language
         )
         
-        # === 6. KILPAILULLINEN ASEMOINTI ===
+        logger.info(f"[Radar] ✅ Found {len(market_gaps)} market gaps")
+        
+        # === 8. KILPAILULLINEN ASEMOINTI ===
+        logger.info("[Radar] Calculating market positioning...")
+        
         positioning = await _calculate_market_positioning(
             your_analysis,
             competitor_analyses
         )
         
-        # === 7. STRATEGISET SUOSITUKSET ===
+        logger.info(
+            f"[Radar] ✅ Positioning: {positioning['positioning_quadrant']}, "
+            f"competitive_score={positioning['competitive_score']}"
+        )
+        
+        # === 9. STRATEGISET SUOSITUKSET ===
+        logger.info("[Radar] Generating strategic recommendations...")
+        
         strategic_recommendations = await _generate_strategic_recommendations(
             your_analysis,
             competitor_analyses,
@@ -5161,9 +5247,14 @@ async def analyze_competitive_radar(
             request.language
         )
         
-        return CompetitiveRadarResponse(
+        logger.info(f"[Radar] ✅ Generated {len(strategic_recommendations)} strategic recommendations")
+        
+        # === 10. RAKENNA RESPONSE ===
+        logger.info("[Radar] Building final response...")
+        
+        response = CompetitiveRadarResponse(
             your_analysis=your_analysis,
-            competitors=competitor_analyses,
+            competitors=comp_summaries,  # ✅ Käytä extracted summaries
             differentiation_matrix=differentiation_matrix,
             market_gaps=market_gaps,
             competitive_score=positioning['competitive_score'],
@@ -5171,42 +5262,89 @@ async def analyze_competitive_radar(
             positioning_map=positioning
         )
         
+        logger.info(
+            f"[Radar] 🎯 COMPLETE for {user.username}: "
+            f"Score={positioning['competitive_score']}, "
+            f"Gaps={len(market_gaps)}, "
+            f"Recommendations={len(strategic_recommendations)}"
+        )
+        
+        return response
+        
     except HTTPException:
+        # Re-raise HTTP exceptions as-is
         raise
+        
     except Exception as e:
-        logger.error(f"Competitive Radar failed: {e}", exc_info=True)
-        raise HTTPException(500, "Competitive Radar analysis failed")
+        logger.error(f"[Radar] 💥 FATAL ERROR: {e}", exc_info=True)
+        raise HTTPException(
+            500, 
+            f"Competitive Radar analysis failed: {str(e)}"
+        )
 
 
 # ============================================================================
 # SYVÄLLISET ANALYYSIFUNKTIOT
 # ============================================================================
 
-def _extract_detailed_summary(analysis: Dict[str, Any]) -> Dict[str, Any]:
-    """Pura kaikki oleelliset kilpailutekijät"""
+def _extract_detailed_summary(analysis: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Pura kaikki oleelliset kilpailutekijät.
+    
+    Returns:
+        Dict jos onnistui, None jos data on korruptoitunut
+    """
+    
+    # ✅ VARMISTA ETTÄ DATA ON OLEMASSA
+    if not analysis:
+        logger.error("❌ _extract_detailed_summary: analysis is empty")
+        return None
+    
     basic = analysis.get('basic_analysis', {})
+    
+    # ✅ KRIITTINEN TARKISTUS
+    if not basic or not isinstance(basic, dict):
+        logger.error(f"❌ Missing basic_analysis for URL: {analysis.get('metadata', {}).get('url', 'unknown')}")
+        logger.error(f"Analysis keys: {list(analysis.keys())}")
+        return None
+    
+    # ✅ VARMISTA ETTÄ PISTEET EIVÄT OLE 0 (ellei todella ole)
+    score = basic.get('digital_maturity_score', 0)
+    if score == 0:
+        logger.warning(f"⚠️ Score is 0 for {basic.get('company', 'unknown')} - is this correct?")
+        # Ei blokkaa, mutta logittaa
+    
     ai = analysis.get('ai_analysis', {})
-    content = analysis.get('detailed_analysis', {}).get('content_analysis', {})
-    technical = analysis.get('detailed_analysis', {}).get('technical_audit', {})
-    social = analysis.get('detailed_analysis', {}).get('social_media', {})
+    detailed = analysis.get('detailed_analysis', {})
+    content = detailed.get('content_analysis', {})
+    technical = detailed.get('technical_audit', {})
+    social = detailed.get('social_media', {})
+    
+    # ✅ VARMISTA ETTÄ PAKOLLISET KENTÄT OVAT OLEMASSA
+    if not content or not technical:
+        logger.error(f"❌ Missing detailed_analysis for {basic.get('company', 'unknown')}")
+        return None
+    
+    # ✅ DEBUG LOG
+    logger.info(f"✅ Extracted summary: {basic.get('company', 'unknown')} - Score: {score}, Words: {content.get('word_count', 0)}")
     
     return {
         'url': basic.get('website', ''),
-        'company': basic.get('company', ''),
-        'score': basic.get('digital_maturity_score', 0),
+        'company': basic.get('company', 'Unknown Company'),
+        'score': int(score),  # ✅ Varmista int
         
         # Viestintä
         'messaging': {
-            'title': basic.get('title', ''),
-            'meta_description': basic.get('meta_description', ''),
-            'h1_count': basic.get('h1_count', 0),
+            'title': str(basic.get('title', '')),
+            'meta_description': str(basic.get('meta_description', '')),
+            'h1_count': int(basic.get('h1_count', 0)),
             'tone': _analyze_messaging_tone(content)
         },
         
         # Sisältöstrategia
         'content_strategy': {
-            'word_count': content.get('word_count', 0),
-            'has_blog': content.get('has_blog', False),
+            'word_count': int(content.get('word_count', 0)),  # ✅ int
+            'has_blog': bool(content.get('has_blog', False)),  # ✅ bool
             'content_depth': _categorize_content_depth(content.get('word_count', 0)),
             'media_richness': len(content.get('media_types', [])),
             'interactive_elements': len(content.get('interactive_elements', []))
@@ -5214,26 +5352,26 @@ def _extract_detailed_summary(analysis: Dict[str, Any]) -> Dict[str, Any]:
         
         # Tekninen kypsyys
         'technical_maturity': {
-            'has_ssl': technical.get('has_ssl', False),
-            'page_speed_score': technical.get('page_speed_score', 0),
-            'mobile_optimization': technical.get('has_mobile_optimization', False),
-            'has_analytics': technical.get('has_analytics', False),
-            'spa_detected': basic.get('spa_detected', False),
-            'modernity_score': basic.get('modernity_score', 0)
+            'has_ssl': bool(technical.get('has_ssl', False)),
+            'page_speed_score': int(technical.get('page_speed_score', 0)),
+            'mobile_optimization': bool(technical.get('has_mobile_optimization', False)),
+            'has_analytics': bool(technical.get('has_analytics', False)),
+            'spa_detected': bool(basic.get('spa_detected', False)),
+            'modernity_score': int(basic.get('modernity_score', 0))
         },
         
         # Sosiaalinen läsnäolo
         'social_presence': {
-            'platforms': social.get('platforms', []),
+            'platforms': list(social.get('platforms', [])),
             'platform_count': len(social.get('platforms', [])),
-            'has_sharing': social.get('has_sharing_buttons', False),
-            'og_tags': social.get('open_graph_tags', 0)
+            'has_sharing': bool(social.get('has_sharing_buttons', False)),
+            'og_tags': int(social.get('open_graph_tags', 0))
         },
         
         # AI-insightit
-        'key_strengths': ai.get('strengths', [])[:3],
-        'key_weaknesses': ai.get('weaknesses', [])[:3],
-        'opportunities': ai.get('opportunities', [])[:3]
+        'key_strengths': list(ai.get('strengths', []))[:3],
+        'key_weaknesses': list(ai.get('weaknesses', []))[:3],
+        'opportunities': list(ai.get('opportunities', []))[:3]
     }
 
 def _analyze_messaging_tone(content: Dict[str, Any]) -> str:
