@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Brandista Competitive Intelligence API - Complete Unified Version
-Version: 6.2.0 - Merged Baseline (analysis + robustness)
+Version: 6.2.2 - Merged Baseline (analysis + robustness)
 Author: Brandista Team
 Date: 2025
 Description: Complete production-ready website analysis with configurable scoring system and comprehensive SPA support
@@ -5580,7 +5580,7 @@ DATAPOHJAISET LÖYDÖKSET:
 - Tekninen: {', '.join(comparison_matrix['technical_execution']['technical_gap_analysis'][:2])}
 
 Vastaa JSON-muodossa:
-{{
+{{{{
   "positioning_summary": "Yksi virke joka kuvaa kilpailuaseman",
   "unique_selling_points": ["2-3 konkreettista USP:tä jotka erottavat kilpailijoista"],
   "target_customer_profile": "Kenelle tämä yritys TODELLA puhuu (tarkka kuvaus)",
@@ -5588,7 +5588,7 @@ Vastaa JSON-muodossa:
   "immediate_opportunities": ["3 nopeaa taktiikkaa joilla voi ohittaa kilpailijoita"],
   "strategic_vulnerabilities": ["2 isoa riskiä/heikkoutta verrattuna kilpailijoihin"],
   "12_month_roadmap": ["3-5 strategista askelta jotka muuttavat kilpailuasetelmaa"]
-}}
+}}}}
 """
     else:
         prompt = f"""{industry_str}
@@ -5612,7 +5612,7 @@ DATA INSIGHTS:
 - Technical: {', '.join(comparison_matrix['technical_execution']['technical_gap_analysis'][:2])}
 
 Respond in JSON:
-{{
+{{{{
   "positioning_summary": "One sentence describing competitive position",
   "unique_selling_points": ["2-3 concrete USPs that differentiate from competitors"],
   "target_customer_profile": "Who this company REALLY speaks to (precise description)",
@@ -5620,7 +5620,7 @@ Respond in JSON:
   "immediate_opportunities": ["3 quick tactics to outmaneuver competitors"],
   "strategic_vulnerabilities": ["2 major risks/weaknesses vs competitors"],
   "12_month_roadmap": ["3-5 strategic steps that change competitive landscape"]
-}}
+}}}}
 """
     
     response = await openai_client.chat.completions.create(
@@ -5922,18 +5922,18 @@ async def _find_service_gaps_with_ai(summaries: List[Dict], language: str) -> Li
 Etsi TODELLISIA markkinaaukkoja - ei yleisiä puutteita vaan konkreettisia asiakastarte ita joita kukaan ei täytä.
 
 Vastaa JSON-muodossa (max 3 aukkoa):
-{{
+{{{{
   "gaps": [
-    {{
+    {{{{
       "gap_title": "Lyhyt otsikko aukosta",
       "customer_pain_point": "Mikä ongelma asiakkaalla on",
       "why_unfulfilled": "Miksi kukaan ei vastaa tähän",
       "opportunity": "Miten tähän voi vastata",
       "revenue_potential": "Arvio liikevaih tovaikutuksesta",
       "competitive_moat": "Miten tämä suojaa kilpailijoilta"
-    }}
+    }}}}
   ]
-}}
+}}}}
 """
     else:
         prompt = f"""Analyze these {len(summaries)} companies to find what CUSTOMERS need but nobody provides:
@@ -5943,18 +5943,18 @@ Vastaa JSON-muodossa (max 3 aukkoa):
 Find REAL market gaps - not generic weaknesses but concrete customer needs nobody fulfills.
 
 Respond in JSON (max 3 gaps):
-{{
+{{{{
   "gaps": [
-    {{
+    {{{{
       "gap_title": "Short gap title",
       "customer_pain_point": "What problem does customer have",
       "why_unfulfilled": "Why nobody addresses this",
       "opportunity": "How to address this",
       "revenue_potential": "Estimated revenue impact",
       "competitive_moat": "How this protects from competitors"
-    }}
+    }}}}
   ]
-}}
+}}}}
 """
     
     response = await openai_client.chat.completions.create(
@@ -6204,8 +6204,9 @@ EROTTUVUUS:
 - Heikkoudet: {', '.join(your_summary['key_weaknesses'])}
 
 Anna 3 strategista suositusta JSON-muodossa:
-{{"recommendations": [
-    {
+{{{{
+  "recommendations": [
+    {{{{
       "title": "Strateginen suositus 1",
       "strategic_rationale": "Miksi tämä muuttaa peliä",
       "action_steps": ["Konkreettinen askel 1", "Askel 2", "Askel 3"],
@@ -6214,9 +6215,9 @@ Anna 3 strategista suositusta JSON-muodossa:
       "expected_outcome": "Mitä saavutetaan",
       "competitive_impact": "Miten tämä muuttaa kilpailuasetelmaa",
       "risk_level": "low/medium/high"
-    }
+    }}}}
   ]
-}
+}}}}
 """
     else:
         prompt = f"""You are a digital business strategist. Analyze and provide 3 strategic recommendations:
@@ -6234,9 +6235,9 @@ DIFFERENTIATION:
 - Weaknesses: {', '.join(your_summary['key_weaknesses'])}
 
 Provide 3 strategic recommendations in JSON:
-{{
+{{{{
   "recommendations": [
-    {{
+    {{{{
       "title": "Strategic recommendation 1",
       "strategic_rationale": "Why this is game-changing",
       "action_steps": ["Concrete step 1", "Step 2", "Step 3"],
@@ -6245,9 +6246,9 @@ Provide 3 strategic recommendations in JSON:
       "expected_outcome": "What will be achieved",
       "competitive_impact": "How this changes competitive landscape",
       "risk_level": "low/medium/high"
-    }}
+    }}}}
   ]
-}}
+}}}}
 """
     
     response = await openai_client.chat.completions.create(
@@ -6270,7 +6271,7 @@ Provide 3 strategic recommendations in JSON:
             'timeframe': rec.get('timeframe', '3-6 months'),
             'effort': 'high' if 'high' in rec.get('risk_level', '').lower() else 'medium',
             'impact': 'high',
-            'cost_estimate': rec.get('investment_required', 'Määritetään tarkemmin'),
+            'cost_estimate': rec.get('investment_required', 'Määritettään tarkemmin'),
             'expected_result': rec.get('expected_outcome', ''),
             'competitive_impact': rec.get('competitive_impact', ''),
             'risk_level': rec.get('risk_level', 'medium')
