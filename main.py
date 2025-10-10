@@ -5162,8 +5162,8 @@ async def analyze_competitive_radar(
         )
         
         return CompetitiveRadarResponse(
-            your_analysis=_extract_detailed_summary(your_analysis),
-            competitors=[_extract_detailed_summary(c) for c in competitor_analyses],
+            your_analysis=your_analysis,
+            competitors=competitor_analyses,
             differentiation_matrix=differentiation_matrix,
             market_gaps=market_gaps,
             competitive_score=positioning['competitive_score'],
