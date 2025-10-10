@@ -4644,7 +4644,7 @@ async def discover_competitors(
         "competitors": [c["domain"] for c in competitors_to_analyze],
         "credits_reserved": required_analyses if user.role != "admin" else 0
     }
-    }
+    
 
 # ✅ Nämä endpointit ovat ERILLÄÄN discover_competitors funktiosta!
 @app.get("/api/v1/discovery-status/{task_id}")
