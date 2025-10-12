@@ -5817,16 +5817,23 @@ def _calculate_differentiation_scores(comparison_matrix: Dict) -> Dict[str, int]
         tech_score = min(100, tech_score + 15)
     scores['technical'] = tech_score
     
+    
     # Sosiaalinen (0-100)
     social = comparison_matrix['social_engagement']
     social_score = social['platform_coverage']['coverage_percentage']
-    if social['social_maturity']['has_og_tags'] and social['social_maturity']['has_sharing_buttons']:
-        social_score = min(100, social_score + 20)
-    scores['social'] = social_score
-    
+
+    # Lisää bonukset OG-tageista ja sharing-napeista
+    if social['social_maturity']['has_og_tags']:
+        social_score += 10
+    if social['social_maturity']['has_sharing_buttons']:
+        social_score += 10
+
+    # ✅ KRIITTINEN: Rajaa AINA 0-100
+    scores['social'] = min(100, max(0, social_score))
+
     # Kokonais-erottuvuus
     scores['overall'] = int(sum(scores.values()) / len(scores))
-    
+
     return scores
 
 def _identify_unique_strengths(your: Dict, competitors: List[Dict], matrix: Dict) -> List[str]:
