@@ -5186,6 +5186,7 @@ async def analyze_competitive_radar(
                     f"{comp_analysis.get('basic_analysis', {}).get('website', 'unknown')}"
                 )
                 continue  # Skip this competitor
+            summary['analysis'] = comp_analysis
             comp_summaries.append(summary)
         
         if not comp_summaries:
@@ -5199,7 +5200,11 @@ async def analyze_competitive_radar(
             f"your_score={your_summary['score']}, "
             f"competitors={[(c['company'], c['score']) for c in comp_summaries]}"
         )
-        
+        # ✅ LISÄÄ TÄMÄ - Yhtenäistä your_analysis samaan muotoon kuin competitors
+        your_analysis_unified = {
+                **your_summary,  # company, score, content_strategy, technical_maturity...
+                'analysis': your_analysis  # full analysis detailed view:tä varten
+            }
         # === 6. SYVÄLLINEN EROTTUVUUSANALYYSI ===
         logger.info("[Radar] Building differentiation matrix...")
         
@@ -5249,38 +5254,43 @@ async def analyze_competitive_radar(
         
         logger.info(f"[Radar] ✅ Generated {len(strategic_recommendations)} strategic recommendations")
         
-        # === 10. RAKENNA RESPONSE ===
+       # === 10. RAKENNA RESPONSE ===
         logger.info("[Radar] Building final response...")
-        
+
+        # ✅ KORJAUS: Yhdenmukaista your_analysis summary-muotoon
+        # Rakenna unified structure jossa on sekä summary että täysi analyysi
+        your_analysis_unified = {
+            **your_summary,           # ✅ Summary-kentät (company, score, messaging...)
+            'analysis': your_analysis # ✅ Täysi analyysi sisällä (jos frontend tarvitsee)
+        }
+
+        # ✅ Lisää sama rakenne kilpailijoille
+        comp_summaries_unified = []
+        for idx, comp_summary in enumerate(comp_summaries):
+            comp_summaries_unified.append({
+                **comp_summary,                    # ✅ Summary-kentät
+                'analysis': competitor_analyses[idx] # ✅ Täysi analyysi sisällä
+            })
+
+        # ✅ Rakenna response yhdenmukaisen datan kanssa
         response = CompetitiveRadarResponse(
-            your_analysis=your_analysis,
-            competitors=comp_summaries,  # ✅ Käytä extracted summaries
+            your_analysis=your_analysis_unified,  # ✅ Unified rakenne
+            competitors=comp_summaries_unified,   # ✅ Unified rakenne
             differentiation_matrix=differentiation_matrix,
             market_gaps=market_gaps,
             competitive_score=positioning['competitive_score'],
             strategic_recommendations=strategic_recommendations,
             positioning_map=positioning
         )
-        
+
         logger.info(
             f"[Radar] 🎯 COMPLETE for {user.username}: "
             f"Score={positioning['competitive_score']}, "
             f"Gaps={len(market_gaps)}, "
             f"Recommendations={len(strategic_recommendations)}"
         )
-        
+
         return response
-        
-    except HTTPException:
-        # Re-raise HTTP exceptions as-is
-        raise
-        
-    except Exception as e:
-        logger.error(f"[Radar] 💥 FATAL ERROR: {e}", exc_info=True)
-        raise HTTPException(
-            500, 
-            f"Competitive Radar analysis failed: {str(e)}"
-        )
 
 
 # ============================================================================
