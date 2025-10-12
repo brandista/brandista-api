@@ -5291,6 +5291,17 @@ async def analyze_competitive_radar(
         )
 
         return response
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+        
+    except Exception as e:
+        logger.error(f"[Radar] 💥 FATAL ERROR: {e}", exc_info=True)
+        raise HTTPException(
+            500, 
+            f"Competitive Radar analysis failed: {str(e)}"
+        )
 
 
 # ============================================================================
