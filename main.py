@@ -4313,33 +4313,54 @@ def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], c
 async def login(request: LoginRequest):
     logger.info(f"🔐 LOGIN ATTEMPT: username={request.username}")
     
-    # Hae käyttäjä
-    user = USERS_DB.get(request.username)
+    # ✅ PARANNETTU HAKU: Etsi sekä email:lla ETTÄ username-kentällä
+    user = None
+    user_key = None
     
+    # 1. Yritä suoraa email-hakua
+    if request.username in USERS_DB:
+        user = USERS_DB[request.username]
+        user_key = request.username
+        logger.info(f"✅ Found user by email key: {user_key}")
+    
+    # 2. Etsi username-kentällä
     if not user:
-        logger.info(f"🔍 User not found by direct lookup, searching by username field...")
         for email, user_data in USERS_DB.items():
             if user_data.get("username") == request.username:
                 user = user_data
-                logger.info(f"✅ Found user via email: {email}")
+                user_key = email
+                logger.info(f"✅ Found user by username field: {request.username} (email: {email})")
+                break
+    
+    # 3. Yritä myös email-kentällä (jos käyttäjä syötti emailin)
+    if not user:
+        for email, user_data in USERS_DB.items():
+            if user_data.get("email") == request.username:
+                user = user_data
+                user_key = email
+                logger.info(f"✅ Found user by email field: {request.username}")
                 break
     
     if not user:
         logger.warning(f"❌ USER NOT FOUND: {request.username}")
-        logger.info(f"Available users: {list(USERS_DB.keys())}")
+        logger.info(f"📋 Available users:")
+        for key, val in USERS_DB.items():
+            logger.info(f"  - Key: {key}, Username: {val.get('username')}, Email: {val.get('email')}")
         raise HTTPException(401, "Invalid credentials")
     
-    logger.info(f"🔐 Verifying password for: {request.username}")
-    logger.info(f"Stored hash starts with: {user['hashed_password'][:10]}...")
+    # ✅ VERIFY PASSWORD
+    logger.info(f"🔐 Verifying password for: {user.get('username')} (key: {user_key})")
     
     if not verify_password(request.password, user["hashed_password"]):
-        logger.warning(f"❌ INVALID PASSWORD for: {request.username}")
+        logger.error(f"❌ INVALID PASSWORD for: {request.username}")
         raise HTTPException(401, "Invalid credentials")
     
-    logger.info(f"✅ LOGIN SUCCESS: {request.username}, role={user['role']}")
+    logger.info(f"✅ LOGIN SUCCESS: {user.get('username')}, role={user['role']}")
     
-    sub = user.get("email", user.get("username", request.username))
-    access_token = create_access_token(data={"sub": sub, "role": user["role"]})
+    # ✅ CREATE TOKEN (käytä user_key:tä joka on email)
+    access_token = create_access_token(
+        data={"sub": user_key, "role": user["role"]}
+    )
     
     return TokenResponse(access_token=access_token, role=user["role"])
 # ============================================================================
