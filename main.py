@@ -961,44 +961,59 @@ class SimplePasswordContext:
 pwd_context = SimplePasswordContext()
 security = HTTPBearer()
 
-# ✅ HARDCODED USERS - SHA256 hashit generoidaan dynaamisesti
-USERS_DB = {
-    "user@example.com": {
-        "username": "user",
-        "email": "user@example.com",
-        "hashed_password": pwd_context.hash("user123"),
-        "role": "user", 
-        "search_limit": DEFAULT_USER_LIMIT
-    },
-    "admin@brandista.eu": {
-        "username": "admin",
-        "email": "admin@brandista.eu", 
-        "hashed_password": pwd_context.hash("kaikka123"),
-        "role": "admin", 
-        "search_limit": -1
-    },
-    "super@brandista.eu": {
-        "username": "super_user",
-        "email": "super@brandista.eu",
-        "hashed_password": pwd_context.hash("superpower123"),
-        "role": "super_user",
-        "search_limit": -1
-    }
-}
+# ✅ PLACEHOLDER - Täytetään init_users() funktiossa
+USERS_DB = {}
 
-# ✅ DATABASE SYNC
+def init_users():
+    """Initialize users with hashed passwords"""
+    global USERS_DB
+    
+    USERS_DB = {
+        "user@example.com": {
+            "username": "user",
+            "email": "user@example.com",
+            "hashed_password": pwd_context.hash("user123"),
+            "role": "user", 
+            "search_limit": DEFAULT_USER_LIMIT
+        },
+        "admin@brandista.eu": {
+            "username": "admin",
+            "email": "admin@brandista.eu", 
+            "hashed_password": pwd_context.hash("kaikka123"),
+            "role": "admin", 
+            "search_limit": -1
+        },
+        "super@brandista.eu": {
+            "username": "super_user",
+            "email": "super@brandista.eu",
+            "hashed_password": pwd_context.hash("superpower123"),
+            "role": "super_user",
+            "search_limit": -1
+        }
+    }
+    
+    logger.info("🔐 User passwords hashed:")
+    for email, user_data in USERS_DB.items():
+        username = user_data.get('username')
+        hash_preview = user_data.get('hashed_password')[:20]
+        logger.info(f"  {username}: {hash_preview}...")
+    
+    return USERS_DB
+
+# ✅ KUTSU HETI
+init_users()
+
+# ✅ DATABASE SYNC (sama kuin ennenkin)
 if DATABASE_ENABLED:
     try:
         init_database()
         sync_hardcoded_users_to_db(USERS_DB)
         logger.info("✅ Database initialized and users synced")
         
-        # ✅ Load additional users from database
         db_users = get_all_users_from_db()
         for db_user in db_users:
             username = db_user['username']
             if username not in USERS_DB:
-                # ✅ Try both possible hash field names
                 hashed_pwd = db_user.get('password_hash') or db_user.get('hashed_password', '')
                 
                 if not hashed_pwd:
@@ -1017,6 +1032,9 @@ if DATABASE_ENABLED:
     except Exception as e:
         logger.error(f"❌ Database initialization failed: {e}")
         logger.info("⚠️ Continuing with hardcoded users only")
+
+logger.info(f"👥 Total users loaded: {len(USERS_DB)}")
+logger.info(f"📋 Users: {', '.join(USERS_DB.keys())}")
 
 # ✅ LOG FINAL USER COUNT
 logger.info(f"👥 Total users loaded: {len(USERS_DB)}")
