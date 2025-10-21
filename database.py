@@ -1,4 +1,4 @@
-
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Database module for Brandista API - Handles PostgreSQL user management"""
 
@@ -176,6 +176,3 @@ def sync_hardcoded_users_to_db(users_dict):
             logger.error(f"Failed to sync user {username}: {e}")
     if synced > 0:
         logger.info(f"✅ Synced {synced} users to database")
-PYTHON_CODE
-
-echo "✅ OIKEA database.py luotu"
