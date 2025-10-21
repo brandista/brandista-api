@@ -3,6 +3,4 @@
 .env.local
 *.pyc
 __pycache__/
-git add auth_magic_link.py
-git commit -m "Add Magic Link authentication module"
-git push origin main
+
