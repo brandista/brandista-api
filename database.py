@@ -5034,64 +5034,7 @@ async def ai_analyze_comprehensive(
             detail="Analysis failed due to internal error. Please try again or contact support."
         )
 #=============================================================================
-@app.get("/api/v1/my-discoveries")
-async def get_my_discoveries(
-    user: UserInfo = Depends(require_user)
-):
-    """Get user's recent discovery tasks (last 5)"""
-    
-    if not task_queue:
-        raise HTTPException(503, "Task queue not available")
-    
-    try:
-        # Hae käyttäjän taskit Redis:stä
-        all_tasks = []
-        
-        # Redis key pattern: "task:{task_id}"
-        # Käytään SCAN:ia kaikkien taskien läpikäyntiin
-        cursor = 0
-        while True:
-            cursor, keys = redis_client.scan(cursor, match="task:*", count=100)
-            
-            for key in keys:
-                task_data = redis_client.get(key)
-                if task_data:
-                    task = json.loads(task_data)
-                    
-                    # Suodata käyttäjän taskit
-                    if task.get("username") == user.username:
-                        task_id = key.split(":")[-1]
-                        
-                        # Hae task status
-                        status = task_queue.get_task_status(task_id)
-                        
-                        if status.get("status") != "not_found":
-                            all_tasks.append({
-                                "task_id": task_id,
-                                "status": status.get("status"),
-                                "created_at": status.get("created_at"),
-                                "completed_at": status.get("completed_at"),
-                                "total": status.get("total", 0),
-                                "progress": status.get("progress", 0),
-                                "data": task.get("data", {})
-                            })
-            
-            if cursor == 0:
-                break
-        
-        # Järjestä uusimmasta vanhimpaan (created_at)
-        all_tasks.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-        
-        # Palauta 5 viimeisintä
-        return {
-            "success": True,
-            "discoveries": all_tasks[:5],
-            "total_found": len(all_tasks)
-        }
-        
-    except Exception as e:
-        logger.error(f"Failed to fetch discoveries: {e}")
-        raise HTTPException(500, f"Failed to fetch discoveries: {str(e)}")
+
 
 # ============================================================================
 # ANALYSIS CORE - INTERNAL HELPER
