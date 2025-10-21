@@ -1,9 +1,4 @@
-# 1. Poista väärä
-rm database.py
 
-# 2. Luo OIKEA (yhtenäinen sarakkenimi)
-cat > database.py << 'EOF'
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Database module for Brandista API - Handles PostgreSQL user management"""
 
@@ -13,43 +8,31 @@ from typing import Optional, Dict, List, Any
 import logging
 
 logger = logging.getLogger(__name__)
-
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 def connect_db():
-    """Create database connection"""
     if not DATABASE_URL:
         return None
     try:
-        conn = psycopg2.connect(DATABASE_URL)
-        return conn
+        return psycopg2.connect(DATABASE_URL)
     except Exception as e:
         logger.error(f"Database connection failed: {e}")
         return None
 
 def init_database():
-    """Initialize database tables"""
     conn = connect_db()
     if not conn:
         logger.warning("No database connection - skipping init")
         return
-    
     try:
         cursor = conn.cursor()
-        
-        # AUTO-FIX: Rename password_hash -> hashed_password
         try:
-            cursor.execute("""
-                SELECT column_name FROM information_schema.columns 
-                WHERE table_name='users' AND column_name='password_hash'
-            """)
+            cursor.execute("SELECT column_name FROM information_schema.columns WHERE table_name='users' AND column_name='password_hash'")
             if cursor.fetchone():
                 cursor.execute("ALTER TABLE users RENAME COLUMN password_hash TO hashed_password")
                 logger.info("🔧 Auto-fixed: Renamed password_hash to hashed_password")
         except Exception as e:
             logger.warning(f"Column rename check: {e}")
-        
-        # Create table if not exists
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 username VARCHAR(100) PRIMARY KEY,
@@ -61,10 +44,8 @@ def init_database():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        
         conn.commit()
         logger.info("✅ Database tables initialized")
-        
     except Exception as e:
         logger.error(f"Database init failed: {e}")
         conn.rollback()
@@ -72,34 +53,23 @@ def init_database():
         cursor.close()
         conn.close()
 
-def is_database_available() -> bool:
-    """Check if database is available"""
+def is_database_available():
     conn = connect_db()
     if conn:
         conn.close()
         return True
     return False
 
-def get_user_from_db(username: str) -> Optional[Dict[str, Any]]:
-    """Get user from database"""
+def get_user_from_db(username: str):
     conn = connect_db()
     if not conn:
         return None
     try:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT username, hashed_password, role, search_limit, searches_used FROM users WHERE username = %s",
-            (username,)
-        )
+        cursor.execute("SELECT username, hashed_password, role, search_limit, searches_used FROM users WHERE username = %s", (username,))
         row = cursor.fetchone()
         if row:
-            return {
-                'username': row[0],
-                'hashed_password': row[1],
-                'role': row[2],
-                'search_limit': row[3],
-                'searches_used': row[4]
-            }
+            return {'username': row[0], 'hashed_password': row[1], 'role': row[2], 'search_limit': row[3], 'searches_used': row[4]}
         return None
     except Exception as e:
         logger.error(f"Failed to get user {username}: {e}")
@@ -108,27 +78,14 @@ def get_user_from_db(username: str) -> Optional[Dict[str, Any]]:
         cursor.close()
         conn.close()
 
-def get_all_users_from_db() -> List[Dict[str, Any]]:
-    """Get all users from database"""
+def get_all_users_from_db():
     conn = connect_db()
     if not conn:
         return []
     try:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT username, hashed_password, role, search_limit, searches_used FROM users"
-        )
-        rows = cursor.fetchall()
-        users = []
-        for row in rows:
-            users.append({
-                'username': row[0],
-                'hashed_password': row[1],
-                'role': row[2],
-                'search_limit': row[3],
-                'searches_used': row[4]
-            })
-        return users
+        cursor.execute("SELECT username, hashed_password, role, search_limit, searches_used FROM users")
+        return [{'username': r[0], 'hashed_password': r[1], 'role': r[2], 'search_limit': r[3], 'searches_used': r[4]} for r in cursor.fetchall()]
     except Exception as e:
         logger.error(f"Failed to get all users: {e}")
         return []
@@ -136,21 +93,13 @@ def get_all_users_from_db() -> List[Dict[str, Any]]:
         cursor.close()
         conn.close()
 
-def create_user_in_db(username: str, hashed_password: str, role: str = 'user', search_limit: int = 3) -> bool:
-    """Create new user in database"""
+def create_user_in_db(username: str, hashed_password: str, role: str = 'user', search_limit: int = 3):
     conn = connect_db()
     if not conn:
         return False
     try:
         cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO users (username, hashed_password, role, search_limit, searches_used)
-            VALUES (%s, %s, %s, %s, 0)
-            ON CONFLICT (username) DO NOTHING
-            """,
-            (username, hashed_password, role, search_limit)
-        )
+        cursor.execute("INSERT INTO users (username, hashed_password, role, search_limit, searches_used) VALUES (%s, %s, %s, %s, 0) ON CONFLICT (username) DO NOTHING", (username, hashed_password, role, search_limit))
         conn.commit()
         success = cursor.rowcount > 0
         if success:
@@ -164,30 +113,22 @@ def create_user_in_db(username: str, hashed_password: str, role: str = 'user', s
         cursor.close()
         conn.close()
 
-def update_user_in_db(username: str, **kwargs) -> bool:
-    """Update user in database"""
+def update_user_in_db(username: str, **kwargs):
     conn = connect_db()
     if not conn:
         return False
     try:
         cursor = conn.cursor()
-        fields = []
-        values = []
-        if 'search_limit' in kwargs:
-            fields.append("search_limit = %s")
-            values.append(kwargs['search_limit'])
-        if 'searches_used' in kwargs:
-            fields.append("searches_used = %s")
-            values.append(kwargs['searches_used'])
-        if 'role' in kwargs:
-            fields.append("role = %s")
-            values.append(kwargs['role'])
+        fields, values = [], []
+        for k in ['search_limit', 'searches_used', 'role']:
+            if k in kwargs:
+                fields.append(f"{k} = %s")
+                values.append(kwargs[k])
         if not fields:
             return False
         fields.append("updated_at = CURRENT_TIMESTAMP")
         values.append(username)
-        query = f"UPDATE users SET {', '.join(fields)} WHERE username = %s"
-        cursor.execute(query, values)
+        cursor.execute(f"UPDATE users SET {', '.join(fields)} WHERE username = %s", values)
         conn.commit()
         success = cursor.rowcount > 0
         if success:
@@ -201,8 +142,7 @@ def update_user_in_db(username: str, **kwargs) -> bool:
         cursor.close()
         conn.close()
 
-def delete_user_from_db(username: str) -> bool:
-    """Delete user from database"""
+def delete_user_from_db(username: str):
     conn = connect_db()
     if not conn:
         return False
@@ -222,8 +162,7 @@ def delete_user_from_db(username: str) -> bool:
         cursor.close()
         conn.close()
 
-def sync_hardcoded_users_to_db(users_dict: Dict[str, Dict]) -> None:
-    """Sync hardcoded users from USERS_DB to database"""
+def sync_hardcoded_users_to_db(users_dict):
     conn = connect_db()
     if not conn:
         logger.info("No database - skipping user sync")
@@ -231,17 +170,12 @@ def sync_hardcoded_users_to_db(users_dict: Dict[str, Dict]) -> None:
     synced = 0
     for username, user_data in users_dict.items():
         try:
-            if create_user_in_db(
-                username=username,
-                hashed_password=user_data['hashed_password'],
-                role=user_data['role'],
-                search_limit=user_data['search_limit']
-            ):
+            if create_user_in_db(username, user_data['hashed_password'], user_data['role'], user_data['search_limit']):
                 synced += 1
         except Exception as e:
             logger.error(f"Failed to sync user {username}: {e}")
     if synced > 0:
         logger.info(f"✅ Synced {synced} users to database")
-EOF
+PYTHON_CODE
 
-echo "✅ KORJATTU database.py luotu"
+echo "✅ OIKEA database.py luotu"
