@@ -891,6 +891,7 @@ app.add_middleware(
         "https://brandista.eu",
         "https://www.brandista.eu",
         "https://fastapi-production-51f9.up.railway.app"
+        "https://3000-ip92lxeccquecaiidxzl0-6aa4782a.manusvm.computer"
     ],
     allow_credentials=True,
     allow_methods=["*"],
