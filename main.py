@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Brandista Competitive Intelligence API - Complete Unified Version
-Version: 6.2.3 - Merged Baseline (analysis + robustness)
+Version: 6.2.4 - Merged Baseline (analysis + robustness)
 Author: Brandista Team
 Date: 2025
 Description: Complete production-ready website analysis with configurable scoring system and comprehensive SPA support
@@ -13,6 +13,13 @@ Description: Complete production-ready website analysis with configurable scorin
 # and main_fixed.py (usability/error tolerance). Version bumped to 6.2.0-merged.
 # Subsequent passes can selectively port retry logic or other utilities.
 
+# Magic Link authentication
+from auth_magic_link import (
+    create_magic_link_auth, 
+    MagicLinkRequest as MLRequest, 
+    MagicLinkVerify as MLVerify,
+    MagicLinkConfig
+)
 
 # ============================================================================
 # IMPORTS
@@ -37,6 +44,8 @@ import socket
 import ipaddress
 import redis
 import json
+
+
 # main.py (tiedoston alussa)
 
 
@@ -63,7 +72,7 @@ SPA_WAIT_FOR_SELECTOR = os.getenv("SPA_WAIT_FOR_SELECTOR", "")  # e.g. "#app" or
 
 import httpx
 from bs4 import BeautifulSoup
-
+from auth_magic_link import create_magic_link_auth, MagicLinkRequest, MagicLinkVerify
 
 def summarize_mobile_readiness(technical: Dict[str, Any]) -> Tuple[str, list]:
     """
@@ -399,6 +408,7 @@ except ImportError as e:
 
 analysis_cache: Dict[str, Dict[str, Any]] = {}
 user_search_counts: Dict[str, int] = {}
+magic_link_auth = None
 # ============================================================================
 # OPENAI SETUP
 # ============================================================================
@@ -761,6 +771,34 @@ app = FastAPI(
     docs_url="/docs", redoc_url="/redoc", openapi_url="/openapi.json"
 )
 
+# Add the startup event handler here:
+@app.on_event("startup")
+async def startup_event():
+    global magic_link_auth
+    
+    # Initialize database if enabled
+    if DATABASE_ENABLED:
+        init_database()
+        sync_hardcoded_users_to_db(USERS_DB)
+        logger.info("✅ Database initialized and users synced")
+    
+    # Initialize Magic Link authentication
+    try:
+        magic_link_auth = create_magic_link_auth(
+            redis_client=redis_client,
+            postgres_conn=None  # Add your postgres connection if available
+        )
+        logger.info("✅ Magic Link authentication initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ Magic Link authentication failed to initialize: {e}")
+        magic_link_auth = None
+    
+    # Log other startup information
+    logger.info(f"🚀 {APP_NAME} v{APP_VERSION} started")
+    logger.info(f"📊 Scoring weights: {SCORING_CONFIG.weights}")
+    logger.info(f"🎭 Playwright: {'enabled' if PLAYWRIGHT_AVAILABLE and PLAYWRIGHT_ENABLED else 'disabled'}")
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -844,20 +882,23 @@ pwd_context = SimplePasswordContext()
 security = HTTPBearer()
 
 USERS_DB = {
-    "user": {
-        "username": "user", 
+    "user@example.com": {
+        "username": "user",
+        "email": "user@example.com",
         "hashed_password": pwd_context.hash("user123"),
         "role": "user", 
         "search_limit": DEFAULT_USER_LIMIT
     },
-    "admin": {
-        "username": "admin", 
+    "admin@brandista.eu": {
+        "username": "admin",
+        "email": "admin@brandista.eu", 
         "hashed_password": pwd_context.hash("kaikka123"),
         "role": "admin", 
         "search_limit": -1
     },
-    "super_user": {
+    "super@brandista.eu": {
         "username": "super_user",
+        "email": "super@brandista.eu",
         "hashed_password": pwd_context.hash("superpower123"),
         "role": "super_user",
         "search_limit": -1
@@ -1013,6 +1054,8 @@ class CompetitiveAnalysis(BaseModel):
     industry_comparison: Dict[str, Any] = {}
 
     # main.py (Pydantic-mallien sekaan)
+
+
 
 class CompetitorDiscoveryRequest(BaseModel):
     url: str = Field(..., description="Käyttäjän oma verkkosivu")
@@ -4165,16 +4208,107 @@ def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], c
 
 @app.post("/auth/login", response_model=TokenResponse)
 async def login(request: LoginRequest):
+    # Tarkista ensin suoraan (jos käyttäjä antoi sähköpostin)
     user = USERS_DB.get(request.username)
+    
+    # Jos ei löydy, etsi käyttäjä jolla on tämä username
+    if not user:
+        for email, user_data in USERS_DB.items():
+            if user_data.get("username") == request.username:
+                user = user_data
+                break
+    
     if not user or not verify_password(request.password, user["hashed_password"]):
         raise HTTPException(401, "Invalid credentials")
-    access_token = create_access_token(data={"sub": request.username, "role": user["role"]})
+    
+    # Käytä email-osoitetta tokenissa jos saatavilla
+    sub = user.get("email", user.get("username", request.username))
+    
+    access_token = create_access_token(
+        data={"sub": sub, "role": user["role"]}
+    )
     return TokenResponse(access_token=access_token, role=user["role"])
+# ============================================================================
+# MAGIC LINK ENDPOINTS
+# ============================================================================
 
-@app.get("/auth/me", response_model=UserInfo)
-async def get_me(user: UserInfo = Depends(require_user)):
-    return user
+@app.post("/auth/magic-link/request")
+async def request_magic_link(
+    request: MLRequest,  # ✅ Käytä importattua
+    background_tasks: BackgroundTasks,
+    req: Request
+):
+    """Request a magic link via email"""
+    if not magic_link_auth:
+        raise HTTPException(503, "Magic Link authentication not available")
+    
+    try:
+        result = await magic_link_auth.send_magic_link(
+            email=request.email,
+            request=req,
+            background_tasks=background_tasks,
+            redirect_url=request.redirect_url
+        )
+        
+        logger.info(f"Magic link requested for {request.email}")
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Magic link request failed: {e}")
+        raise HTTPException(500, "Failed to process magic link request")
 
+@app.post("/auth/magic-link/verify")
+async def verify_magic_link(
+    request: MLVerify,  # ✅ Käytä importattua
+    req: Request
+):
+    """Verify magic link token and return JWT"""
+    if not magic_link_auth:
+        raise HTTPException(503, "Magic Link authentication not available")
+    
+    try:
+        # Verify magic link
+        result = await magic_link_auth.verify_magic_link(
+            token=request.token,
+            request=req
+        )
+        
+        # Get user from result
+        user_data = result.get('user', {})
+        email = user_data.get('email')
+        role = user_data.get('role', 'user')
+        
+        if not email:
+            raise HTTPException(400, "Invalid magic link response")
+        
+        # Create JWT token
+        access_token = create_access_token(
+            data={"sub": email, "role": role}
+        )
+        
+        logger.info(f"Magic link login successful for {email}")
+        
+        return TokenResponse(
+            access_token=access_token,
+            role=role
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Magic link verification failed: {e}")
+        raise HTTPException(500, "Failed to verify magic link")
+
+@app.get("/auth/magic-link/verify")
+async def verify_magic_link_get(token: str, email: str):
+    """Handle GET request from email link click - redirect to frontend"""
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
+    redirect_url = f"{frontend_url}/auth/magic-link?token={token}&email={email}"
+    
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url=redirect_url)
 # ============================================================================
 # REVENUE INPUT ENDPOINTS
 # ============================================================================
