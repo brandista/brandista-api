@@ -4879,7 +4879,7 @@ async def discover_competitors(
     
 
 # ✅ Nämä endpointit ovat ERILLÄÄN discover_competitors funktiosta!
-@app.get("/api/v1/discovery-status/{task_id}")
+
 async def get_discovery_status(
     task_id: str,
     user: UserInfo = Depends(require_user)
