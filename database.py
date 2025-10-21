@@ -1,14 +1,11 @@
-# 1. Poista väärä database.py
+# 1. Poista väärä
 rm database.py
 
-# 2. Luo uusi oikea database.py
+# 2. Luo OIKEA (yhtenäinen sarakkenimi)
 cat > database.py << 'EOF'
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Database module for Brandista API
-Handles PostgreSQL user management
-"""
+"""Database module for Brandista API - Handles PostgreSQL user management"""
 
 import psycopg2
 import os
@@ -88,25 +85,22 @@ def get_user_from_db(username: str) -> Optional[Dict[str, Any]]:
     conn = connect_db()
     if not conn:
         return None
-    
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT username, password_hash, role, search_limit, searches_used FROM users WHERE username = %s",
+            "SELECT username, hashed_password, role, search_limit, searches_used FROM users WHERE username = %s",
             (username,)
         )
         row = cursor.fetchone()
-        
         if row:
             return {
                 'username': row[0],
-                'password_hash': row[1],
+                'hashed_password': row[1],
                 'role': row[2],
                 'search_limit': row[3],
                 'searches_used': row[4]
             }
         return None
-        
     except Exception as e:
         logger.error(f"Failed to get user {username}: {e}")
         return None
@@ -119,25 +113,22 @@ def get_all_users_from_db() -> List[Dict[str, Any]]:
     conn = connect_db()
     if not conn:
         return []
-    
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT username, password_hash, role, search_limit, searches_used FROM users"
+            "SELECT username, hashed_password, role, search_limit, searches_used FROM users"
         )
         rows = cursor.fetchall()
-        
         users = []
         for row in rows:
             users.append({
                 'username': row[0],
-                'password_hash': row[1],
+                'hashed_password': row[1],
                 'role': row[2],
                 'search_limit': row[3],
                 'searches_used': row[4]
             })
         return users
-        
     except Exception as e:
         logger.error(f"Failed to get all users: {e}")
         return []
@@ -150,12 +141,11 @@ def create_user_in_db(username: str, hashed_password: str, role: str = 'user', s
     conn = connect_db()
     if not conn:
         return False
-    
     try:
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO users (username, password_hash, role, search_limit, searches_used)
+            INSERT INTO users (username, hashed_password, role, search_limit, searches_used)
             VALUES (%s, %s, %s, %s, 0)
             ON CONFLICT (username) DO NOTHING
             """,
@@ -163,12 +153,9 @@ def create_user_in_db(username: str, hashed_password: str, role: str = 'user', s
         )
         conn.commit()
         success = cursor.rowcount > 0
-        
         if success:
             logger.info(f"✅ Created user in DB: {username}")
-        
         return success
-        
     except Exception as e:
         logger.error(f"Failed to create user {username}: {e}")
         conn.rollback()
@@ -182,43 +169,30 @@ def update_user_in_db(username: str, **kwargs) -> bool:
     conn = connect_db()
     if not conn:
         return False
-    
     try:
         cursor = conn.cursor()
-        
-        # Build dynamic UPDATE query
         fields = []
         values = []
-        
         if 'search_limit' in kwargs:
             fields.append("search_limit = %s")
             values.append(kwargs['search_limit'])
-        
         if 'searches_used' in kwargs:
             fields.append("searches_used = %s")
             values.append(kwargs['searches_used'])
-        
         if 'role' in kwargs:
             fields.append("role = %s")
             values.append(kwargs['role'])
-        
         if not fields:
             return False
-        
         fields.append("updated_at = CURRENT_TIMESTAMP")
         values.append(username)
-        
         query = f"UPDATE users SET {', '.join(fields)} WHERE username = %s"
-        
         cursor.execute(query, values)
         conn.commit()
         success = cursor.rowcount > 0
-        
         if success:
             logger.info(f"✅ Updated user in DB: {username}")
-        
         return success
-        
     except Exception as e:
         logger.error(f"Failed to update user {username}: {e}")
         conn.rollback()
@@ -232,18 +206,14 @@ def delete_user_from_db(username: str) -> bool:
     conn = connect_db()
     if not conn:
         return False
-    
     try:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM users WHERE username = %s", (username,))
         conn.commit()
         success = cursor.rowcount > 0
-        
         if success:
             logger.info(f"✅ Deleted user from DB: {username}")
-        
         return success
-        
     except Exception as e:
         logger.error(f"Failed to delete user {username}: {e}")
         conn.rollback()
@@ -258,7 +228,6 @@ def sync_hardcoded_users_to_db(users_dict: Dict[str, Dict]) -> None:
     if not conn:
         logger.info("No database - skipping user sync")
         return
-    
     synced = 0
     for username, user_data in users_dict.items():
         try:
@@ -271,9 +240,8 @@ def sync_hardcoded_users_to_db(users_dict: Dict[str, Dict]) -> None:
                 synced += 1
         except Exception as e:
             logger.error(f"Failed to sync user {username}: {e}")
-    
     if synced > 0:
         logger.info(f"✅ Synced {synced} users to database")
 EOF
 
-echo "✅ Uusi database.py luotu"
+echo "✅ KORJATTU database.py luotu"
