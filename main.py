@@ -1433,60 +1433,61 @@ class UserQuotaView(BaseModel):
 # ============================================================================
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """
-    Verify password against hash with comprehensive logging.
-    Supports both bcrypt and legacy SHA256 hashes.
-    """
+    return pwd_context.verify(plain_password, hashed_password)
+
+def create_access_token(data: dict) -> str:
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire, "iat": datetime.utcnow()})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+def verify_token(token: str) -> Optional[dict]:
     try:
-        logger.info(f"🔐 verify_password() called")
-        logger.info(f"   📝 Input password length: {len(plain_password)}")
-        logger.info(f"   📝 Hash length: {len(hashed_password)}")
-        logger.info(f"   📝 Hash starts with: {hashed_password[:20]}...")
-        
-        # Detect hash type
-        if hashed_password.startswith("$2b$") or hashed_password.startswith("$2a$"):
-            logger.info(f"   🔒 Hash type: BCRYPT")
-            
-            try:
-                # Bcrypt verification
-                result = bcrypt.checkpw(
-                    plain_password.encode('utf-8'), 
-                    hashed_password.encode('utf-8')
-                )
-                
-                if result:
-                    logger.info(f"   ✅ Bcrypt verification: SUCCESS")
-                else:
-                    logger.warning(f"   ❌ Bcrypt verification: FAILED")
-                
-                return result
-                
-            except Exception as bcrypt_error:
-                logger.error(f"   💥 Bcrypt error: {bcrypt_error}")
-                return False
-        
-        else:
-            logger.info(f"   🔒 Hash type: SHA256 (legacy)")
-            
-            # SHA256 verification (legacy)
-            computed_hash = hashlib.sha256(
-                f"brandista_{plain_password}_salt".encode('utf-8')
-            ).hexdigest()
-            
-            result = computed_hash == hashed_password
-            
-            if result:
-                logger.info(f"   ✅ SHA256 verification: SUCCESS")
-            else:
-                logger.warning(f"   ❌ SHA256 verification: FAILED")
-                logger.info(f"   📝 Expected hash: {hashed_password[:20]}...")
-                logger.info(f"   📝 Computed hash: {computed_hash[:20]}...")
-            
-            return result
-    
+        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except ExpiredSignatureError:
+        logger.warning("Token expired")
+        return None
+    except InvalidTokenError as e:
+        logger.warning(f"JWT error: {e}")
+        return None
+
+async def get_current_user(authorization: Optional[str] = Header(None)) -> Optional[UserInfo]:
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    try:
+        token = authorization.split(" ")[1]
+        payload = verify_token(token)
+        if not payload:
+            return None
+        username = payload.get("sub")
+        role = payload.get("role", "user")
+        if not username or username not in USERS_DB:
+            return None
+        user_data = USERS_DB[username]
+        return UserInfo(
+            username=username, role=role,
+            search_limit=user_data["search_limit"],
+            searches_used=user_search_counts.get(username, 0)
+        )
     except Exception as e:
-        logger.error(f"   💥 verify_password() exception: {e}", exc_info=True)
-        return False
+        logger.warning(f"Error getting current user: {e}")
+        return None
+
+async def require_user(user: Optional[UserInfo] = Depends(get_current_user)) -> UserInfo:
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    return user
+
+async def require_admin(user: UserInfo = Depends(require_user)) -> UserInfo:
+    if user.role != "admin":
+        raise HTTPException(403, "Admin access required")
+    return user
+
+def require_admin_or_super(user: UserInfo = Depends(get_current_user)):
+    """Require admin OR super_user role"""
+    if user.role not in ["admin", "super_user"]:
+        raise HTTPException(403, "Admin or Super User access required")
+    return user
 
 # ============================================================================
 # UTILITIES
