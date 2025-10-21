@@ -65,7 +65,7 @@ SPA_WAIT_FOR_SELECTOR = os.getenv("SPA_WAIT_FOR_SELECTOR", "")  # e.g. "#app" or
 
 import httpx
 from bs4 import BeautifulSoup
-from auth_magic_link import create_magic_link_auth, MagicLinkRequest, MagicLinkVerify
+
 
 def summarize_mobile_readiness(technical: Dict[str, Any]) -> Tuple[str, list]:
     """
