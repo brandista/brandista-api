@@ -13,13 +13,6 @@ Description: Complete production-ready website analysis with configurable scorin
 # and main_fixed.py (usability/error tolerance). Version bumped to 6.2.0-merged.
 # Subsequent passes can selectively port retry logic or other utilities.
 
-# Magic Link authentication
-from auth_magic_link import (
-    create_magic_link_auth, 
-    MagicLinkRequest as MLRequest, 
-    MagicLinkVerify as MLVerify,
-    MagicLinkConfig
-)
 
 # ============================================================================
 # IMPORTS
@@ -231,7 +224,96 @@ def load_scoring_config() -> ScoringConfig:
 
 # Global scoring configuration
 SCORING_CONFIG = load_scoring_config()
+# ============================================================================
+# MAGIC LINK AUTHENTICATION (INLINE)
+# ============================================================================
 
+from dataclasses import dataclass
+import secrets
+import hashlib
+
+@dataclass
+class MagicLinkConfig:
+    """Configuration for Magic Link authentication"""
+    token_expiry: int = int(os.getenv("MAGIC_LINK_EXPIRY", "900"))
+    rate_limit_per_hour: int = int(os.getenv("MAGIC_LINK_RATE_LIMIT", "3"))
+    email_from: str = os.getenv("EMAIL_FROM", "noreply@brandista.eu")
+
+class MagicLinkRequest(BaseModel):
+    email: str = Field(..., description="User email address")
+    redirect_url: Optional[str] = None
+
+class MagicLinkVerify(BaseModel):
+    token: str = Field(..., description="Magic link token")
+
+class MagicLinkAuth:
+    def __init__(self, redis_client=None, postgres_conn=None, config: Optional[MagicLinkConfig] = None):
+        self.redis = redis_client
+        self.postgres = postgres_conn
+        self.config = config or MagicLinkConfig()
+    
+    async def send_magic_link(self, email: str, request: Request, background_tasks: BackgroundTasks, redirect_url: Optional[str] = None):
+        if not self.redis:
+            raise HTTPException(503, "Magic Link service unavailable")
+        
+        rate_key = f"magic_link_rate:{email}"
+        current_count = self.redis.get(rate_key)
+        
+        if current_count and int(current_count) >= self.config.rate_limit_per_hour:
+            raise HTTPException(429, f"Too many requests. Max {self.config.rate_limit_per_hour}/hour")
+        
+        token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        
+        token_data = {
+            'email': email,
+            'created_at': datetime.utcnow().isoformat(),
+            'redirect_url': redirect_url or os.getenv("FRONTEND_URL", "http://localhost:5173"),
+            'ip': request.client.host if request.client else "unknown"
+        }
+        
+        self.redis.setex(f"magic_link:{token_hash}", self.config.token_expiry, json.dumps(token_data))
+        
+        if not current_count:
+            self.redis.setex(rate_key, 3600, 1)
+        else:
+            self.redis.incr(rate_key)
+        
+        backend_url = os.getenv('BACKEND_URL', 'http://localhost:8000')
+        magic_url = f"{backend_url}/auth/magic-link/verify?token={token}&email={email}"
+        
+        logger.info(f"🔗 Magic link: {magic_url}")
+        
+        return {
+            "message": f"Magic link sent to {email}",
+            "expires_in": self.config.token_expiry,
+            "dev_link": magic_url if os.getenv("ENV") == "development" else None
+        }
+    
+    async def verify_magic_link(self, token: str, request: Request):
+        if not self.redis:
+            raise HTTPException(503, "Magic Link service unavailable")
+        
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        token_data = self.redis.get(f"magic_link:{token_hash}")
+        
+        if not token_data:
+            raise HTTPException(400, "Invalid or expired magic link")
+        
+        data = json.loads(token_data)
+        email = data.get('email')
+        
+        self.redis.delete(f"magic_link:{token_hash}")
+        
+        logger.info(f"✅ Magic link verified: {email}")
+        
+        return {
+            "user": {"email": email, "role": "user"},
+            "redirect_url": data.get('redirect_url')
+        }
+
+def create_magic_link_auth(redis_client=None, postgres_conn=None, config=None):
+    return MagicLinkAuth(redis_client, postgres_conn, config)
 # ============================================================================
 # CONSTANTS
 # ============================================================================
@@ -4234,7 +4316,7 @@ async def login(request: LoginRequest):
 
 @app.post("/auth/magic-link/request")
 async def request_magic_link(
-    request: MLRequest,  # ✅ Käytä importattua
+    request: MagicLinkRequest,  # ✅ Muutettu
     background_tasks: BackgroundTasks,
     req: Request
 ):
@@ -4261,7 +4343,7 @@ async def request_magic_link(
 
 @app.post("/auth/magic-link/verify")
 async def verify_magic_link(
-    request: MLVerify,  # ✅ Käytä importattua
+    request: MagicLinkVerify,  # ✅ Muutettu
     req: Request
 ):
     """Verify magic link token and return JWT"""
