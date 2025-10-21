@@ -943,26 +943,25 @@ if RATE_LIMIT_ENABLED:
 
 import hashlib
 
+# ============================================================================
+# AUTHENTICATION
+# ============================================================================
+
+import hashlib
+
 class SimplePasswordContext:
     def hash(self, password: str) -> str:
+        """Generate SHA256 hash with salt"""
         return hashlib.sha256(f"brandista_{password}_salt".encode()).hexdigest()
     
     def verify(self, plain_password: str, hashed_password: str) -> bool:
-        # Handle both old bcrypt and new sha256 hashes
-        if hashed_password.startswith("$2b$"):
-            # Old bcrypt hash - use hardcoded check
-            if plain_password == "user123" and "KIXxPfAK3nukvPR9N2Yfme" in hashed_password:
-                return True
-            if plain_password == "kaikka123" and "8HJxqX4X.0qysVqbHrFene" in hashed_password:
-                return True
-            return False
-        else:
-            # New sha256 hash
-            return self.hash(plain_password) == hashed_password
+        """Verify password - simple SHA256 comparison"""
+        return self.hash(plain_password) == hashed_password
 
 pwd_context = SimplePasswordContext()
 security = HTTPBearer()
 
+# ✅ HARDCODED USERS - SHA256 hashit generoidaan dynaamisesti
 USERS_DB = {
     "user@example.com": {
         "username": "user",
@@ -986,26 +985,42 @@ USERS_DB = {
         "search_limit": -1
     }
 }
+
+# ✅ DATABASE SYNC
 if DATABASE_ENABLED:
-    init_database()
-    sync_hardcoded_users_to_db(USERS_DB)
-    logger.info("✅ Database initialized and users synced")
-    
-   # ✅ UUSI (KORJATTU)
-try:
-    db_users = get_all_users_from_db()
-    for db_user in db_users:
-        username = db_user['username']
-        if username not in USERS_DB:
-            USERS_DB[username] = {
-                'username': username,
-                'hashed_password': db_user.get('password_hash') or db_user.get('hashed_password', ''),  # ✅ Kokeilee molempia
-                'role': db_user['role'],
-                'search_limit': db_user['search_limit']
-            }
-            logger.info(f"🔥 Loaded user from DB: {username}")
-except Exception as e:
-    logger.error(f"Failed to load users from database: {e}")
+    try:
+        init_database()
+        sync_hardcoded_users_to_db(USERS_DB)
+        logger.info("✅ Database initialized and users synced")
+        
+        # ✅ Load additional users from database
+        db_users = get_all_users_from_db()
+        for db_user in db_users:
+            username = db_user['username']
+            if username not in USERS_DB:
+                # ✅ Try both possible hash field names
+                hashed_pwd = db_user.get('password_hash') or db_user.get('hashed_password', '')
+                
+                if not hashed_pwd:
+                    logger.warning(f"⚠️ User {username} from DB has no password hash, skipping")
+                    continue
+                
+                USERS_DB[username] = {
+                    'username': username,
+                    'email': db_user.get('email', f"{username}@unknown.com"),
+                    'hashed_password': hashed_pwd,
+                    'role': db_user['role'],
+                    'search_limit': db_user['search_limit']
+                }
+                logger.info(f"🔥 Loaded user from DB: {username}")
+                
+    except Exception as e:
+        logger.error(f"❌ Database initialization failed: {e}")
+        logger.info("⚠️ Continuing with hardcoded users only")
+
+# ✅ LOG FINAL USER COUNT
+logger.info(f"👥 Total users loaded: {len(USERS_DB)}")
+logger.info(f"📋 Users: {', '.join(USERS_DB.keys())}")
 
 # ============================================================================
 # COMPLETE PYDANTIC MODELS
@@ -1418,55 +1433,60 @@ class UserQuotaView(BaseModel):
 # ============================================================================
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
-
-def create_access_token(data: dict) -> str:
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire, "iat": datetime.utcnow()})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-
-def verify_token(token: str) -> Optional[dict]:
+    """
+    Verify password against hash with comprehensive logging.
+    Supports both bcrypt and legacy SHA256 hashes.
+    """
     try:
-        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-    except ExpiredSignatureError:
-        logger.warning("Token expired")
-        return None
-    except InvalidTokenError as e:
-        logger.warning(f"JWT error: {e}")
-        return None
-
-async def get_current_user(authorization: Optional[str] = Header(None)) -> Optional[UserInfo]:
-    if not authorization or not authorization.startswith("Bearer "):
-        return None
-    try:
-        token = authorization.split(" ")[1]
-        payload = verify_token(token)
-        if not payload:
-            return None
-        username = payload.get("sub")
-        role = payload.get("role", "user")
-        if not username or username not in USERS_DB:
-            return None
-        user_data = USERS_DB[username]
-        return UserInfo(
-            username=username, role=role,
-            search_limit=user_data["search_limit"],
-            searches_used=user_search_counts.get(username, 0)
-        )
+        logger.info(f"🔐 verify_password() called")
+        logger.info(f"   📝 Input password length: {len(plain_password)}")
+        logger.info(f"   📝 Hash length: {len(hashed_password)}")
+        logger.info(f"   📝 Hash starts with: {hashed_password[:20]}...")
+        
+        # Detect hash type
+        if hashed_password.startswith("$2b$") or hashed_password.startswith("$2a$"):
+            logger.info(f"   🔒 Hash type: BCRYPT")
+            
+            try:
+                # Bcrypt verification
+                result = bcrypt.checkpw(
+                    plain_password.encode('utf-8'), 
+                    hashed_password.encode('utf-8')
+                )
+                
+                if result:
+                    logger.info(f"   ✅ Bcrypt verification: SUCCESS")
+                else:
+                    logger.warning(f"   ❌ Bcrypt verification: FAILED")
+                
+                return result
+                
+            except Exception as bcrypt_error:
+                logger.error(f"   💥 Bcrypt error: {bcrypt_error}")
+                return False
+        
+        else:
+            logger.info(f"   🔒 Hash type: SHA256 (legacy)")
+            
+            # SHA256 verification (legacy)
+            computed_hash = hashlib.sha256(
+                f"brandista_{plain_password}_salt".encode('utf-8')
+            ).hexdigest()
+            
+            result = computed_hash == hashed_password
+            
+            if result:
+                logger.info(f"   ✅ SHA256 verification: SUCCESS")
+            else:
+                logger.warning(f"   ❌ SHA256 verification: FAILED")
+                logger.info(f"   📝 Expected hash: {hashed_password[:20]}...")
+                logger.info(f"   📝 Computed hash: {computed_hash[:20]}...")
+            
+            return result
+    
     except Exception as e:
-        logger.warning(f"Error getting current user: {e}")
-        return None
-
-async def require_user(user: Optional[UserInfo] = Depends(get_current_user)) -> UserInfo:
-    if not user:
-        raise HTTPException(401, "Authentication required")
-    return user
-
-async def require_admin(user: UserInfo = Depends(require_user)) -> UserInfo:
-    if user.role != "admin":
-        raise HTTPException(403, "Admin access required")
-    return user
+        logger.error(f"   💥 verify_password() exception: {e}", exc_info=True)
+        return False
 
 # ============================================================================
 # UTILITIES
@@ -4290,25 +4310,36 @@ def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], c
 
 @app.post("/auth/login", response_model=TokenResponse)
 async def login(request: LoginRequest):
-    # Tarkista ensin suoraan (jos käyttäjä antoi sähköpostin)
+    logger.info(f"🔐 LOGIN ATTEMPT: username={request.username}")
+    
+    # Hae käyttäjä
     user = USERS_DB.get(request.username)
     
-    # Jos ei löydy, etsi käyttäjä jolla on tämä username
     if not user:
+        logger.info(f"🔍 User not found by direct lookup, searching by username field...")
         for email, user_data in USERS_DB.items():
             if user_data.get("username") == request.username:
                 user = user_data
+                logger.info(f"✅ Found user via email: {email}")
                 break
     
-    if not user or not verify_password(request.password, user["hashed_password"]):
+    if not user:
+        logger.warning(f"❌ USER NOT FOUND: {request.username}")
+        logger.info(f"Available users: {list(USERS_DB.keys())}")
         raise HTTPException(401, "Invalid credentials")
     
-    # Käytä email-osoitetta tokenissa jos saatavilla
-    sub = user.get("email", user.get("username", request.username))
+    logger.info(f"🔐 Verifying password for: {request.username}")
+    logger.info(f"Stored hash starts with: {user['hashed_password'][:10]}...")
     
-    access_token = create_access_token(
-        data={"sub": sub, "role": user["role"]}
-    )
+    if not verify_password(request.password, user["hashed_password"]):
+        logger.warning(f"❌ INVALID PASSWORD for: {request.username}")
+        raise HTTPException(401, "Invalid credentials")
+    
+    logger.info(f"✅ LOGIN SUCCESS: {request.username}, role={user['role']}")
+    
+    sub = user.get("email", user.get("username", request.username))
+    access_token = create_access_token(data={"sub": sub, "role": user["role"]})
+    
     return TokenResponse(access_token=access_token, role=user["role"])
 # ============================================================================
 # MAGIC LINK ENDPOINTS
