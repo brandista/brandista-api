@@ -144,7 +144,8 @@ from pydantic import BaseModel, Field
 # main.py (tiedoston alussa)
 # ...
 from fastapi import FastAPI, HTTPException, Header, Depends, BackgroundTasks, Request
-# ...
+from auth_magic_link import create_magic_link_auth, MagicLinkRequest, MagicLinkVerify
+
 
 
 # Playwright imports (optional for SPA support)
@@ -225,95 +226,7 @@ def load_scoring_config() -> ScoringConfig:
 # Global scoring configuration
 SCORING_CONFIG = load_scoring_config()
 # ============================================================================
-# MAGIC LINK AUTHENTICATION (INLINE)
-# ============================================================================
 
-from dataclasses import dataclass
-import secrets
-import hashlib
-
-@dataclass
-class MagicLinkConfig:
-    """Configuration for Magic Link authentication"""
-    token_expiry: int = int(os.getenv("MAGIC_LINK_EXPIRY", "900"))
-    rate_limit_per_hour: int = int(os.getenv("MAGIC_LINK_RATE_LIMIT", "3"))
-    email_from: str = os.getenv("EMAIL_FROM", "noreply@brandista.eu")
-
-class MagicLinkRequest(BaseModel):
-    email: str = Field(..., description="User email address")
-    redirect_url: Optional[str] = None
-
-class MagicLinkVerify(BaseModel):
-    token: str = Field(..., description="Magic link token")
-
-class MagicLinkAuth:
-    def __init__(self, redis_client=None, postgres_conn=None, config: Optional[MagicLinkConfig] = None):
-        self.redis = redis_client
-        self.postgres = postgres_conn
-        self.config = config or MagicLinkConfig()
-    
-    async def send_magic_link(self, email: str, request: Request, background_tasks: BackgroundTasks, redirect_url: Optional[str] = None):
-        if not self.redis:
-            raise HTTPException(503, "Magic Link service unavailable")
-        
-        rate_key = f"magic_link_rate:{email}"
-        current_count = self.redis.get(rate_key)
-        
-        if current_count and int(current_count) >= self.config.rate_limit_per_hour:
-            raise HTTPException(429, f"Too many requests. Max {self.config.rate_limit_per_hour}/hour")
-        
-        token = secrets.token_urlsafe(32)
-        token_hash = hashlib.sha256(token.encode()).hexdigest()
-        
-        token_data = {
-            'email': email,
-            'created_at': datetime.utcnow().isoformat(),
-            'redirect_url': redirect_url or os.getenv("FRONTEND_URL", "http://localhost:5173"),
-            'ip': request.client.host if request.client else "unknown"
-        }
-        
-        self.redis.setex(f"magic_link:{token_hash}", self.config.token_expiry, json.dumps(token_data))
-        
-        if not current_count:
-            self.redis.setex(rate_key, 3600, 1)
-        else:
-            self.redis.incr(rate_key)
-        
-        backend_url = os.getenv('BACKEND_URL', 'http://localhost:8000')
-        magic_url = f"{backend_url}/auth/magic-link/verify?token={token}&email={email}"
-        
-        logger.info(f"🔗 Magic link: {magic_url}")
-        
-        return {
-            "message": f"Magic link sent to {email}",
-            "expires_in": self.config.token_expiry,
-            "dev_link": magic_url if os.getenv("ENV") == "development" else None
-        }
-    
-    async def verify_magic_link(self, token: str, request: Request):
-        if not self.redis:
-            raise HTTPException(503, "Magic Link service unavailable")
-        
-        token_hash = hashlib.sha256(token.encode()).hexdigest()
-        token_data = self.redis.get(f"magic_link:{token_hash}")
-        
-        if not token_data:
-            raise HTTPException(400, "Invalid or expired magic link")
-        
-        data = json.loads(token_data)
-        email = data.get('email')
-        
-        self.redis.delete(f"magic_link:{token_hash}")
-        
-        logger.info(f"✅ Magic link verified: {email}")
-        
-        return {
-            "user": {"email": email, "role": "user"},
-            "redirect_url": data.get('redirect_url')
-        }
-
-def create_magic_link_auth(redis_client=None, postgres_conn=None, config=None):
-    return MagicLinkAuth(redis_client, postgres_conn, config)
 # ============================================================================
 # CONSTANTS
 # ============================================================================
@@ -856,29 +769,112 @@ app = FastAPI(
 # Add the startup event handler here:
 @app.on_event("startup")
 async def startup_event():
-    global magic_link_auth
+    """Initialize all services on application startup"""
+    global magic_link_auth, redis_client, task_queue
     
-    # Initialize database if enabled
+    # 1. Initialize database if enabled
     if DATABASE_ENABLED:
-        init_database()
-        sync_hardcoded_users_to_db(USERS_DB)
-        logger.info("✅ Database initialized and users synced")
+        try:
+            init_database()
+            sync_hardcoded_users_to_db(USERS_DB)
+            logger.info("✅ Database initialized and users synced")
+            
+            # Load users from database
+            db_users = get_all_users_from_db()
+            for db_user in db_users:
+                username = db_user['username']
+                if username not in USERS_DB:
+                    hashed_pwd = db_user.get('password_hash') or db_user.get('hashed_password', '')
+                    
+                    if not hashed_pwd:
+                        logger.warning(f"⚠️ User {username} from DB has no password hash, skipping")
+                        continue
+                    
+                    USERS_DB[username] = {
+                        'username': username,
+                        'email': db_user.get('email', f"{username}@unknown.com"),
+                        'hashed_password': hashed_pwd,
+                        'role': db_user['role'],
+                        'search_limit': db_user['search_limit']
+                    }
+                    logger.info(f"🔥 Loaded user from DB: {username}")
+                    
+        except Exception as e:
+            logger.error(f"❌ Database initialization failed: {e}")
+            logger.info("⚠️ Continuing with hardcoded users only")
     
-    # Initialize Magic Link authentication
+    # 2. Initialize Redis and task queue (already done globally but verify)
+    if REDIS_URL and not redis_client:
+        try:
+            redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+            redis_client.ping()
+            logger.info("✅ Redis connected successfully")
+            
+            from redis_tasks import RedisTaskQueue
+            task_queue = RedisTaskQueue(redis_client)
+            logger.info("✅ Redis task queue initialized")
+        except Exception as e:
+            logger.warning(f"⚠️ Redis connection failed: {e}")
+            redis_client = None
+            task_queue = None
+    
+    # 3. Initialize Magic Link authentication
     try:
+        # Import from separate module
+        from auth_magic_link import create_magic_link_auth
+        
+        # Get postgres connection if available
+        postgres_conn = None
+        if DATABASE_ENABLED:
+            try:
+                # If you have a get_postgres_connection function
+                # postgres_conn = get_postgres_connection()
+                pass
+            except Exception:
+                pass
+        
+        # Create magic link auth with proper dependencies
         magic_link_auth = create_magic_link_auth(
             redis_client=redis_client,
-            postgres_conn=None  # Add your postgres connection if available
+            postgres_conn=postgres_conn
         )
+        
         logger.info("✅ Magic Link authentication initialized")
+        
+        # Log configuration status
+        email_provider = os.getenv("EMAIL_PROVIDER", "not set")
+        has_sendgrid = bool(os.getenv("SENDGRID_API_KEY"))
+        has_smtp = bool(os.getenv("SMTP_USER") and os.getenv("SMTP_PASS"))
+        
+        if email_provider == "sendgrid" and has_sendgrid:
+            logger.info("📧 Email provider: SendGrid (configured)")
+        elif email_provider == "smtp" and has_smtp:
+            logger.info("📧 Email provider: SMTP (configured)")
+        else:
+            logger.warning("⚠️ Email provider not properly configured - magic links will log to console")
+            
+    except ImportError as e:
+        logger.error(f"❌ Failed to import magic link module: {e}")
+        logger.error("Make sure auth_magic_link.py is in the same directory")
+        magic_link_auth = None
     except Exception as e:
-        logger.warning(f"⚠️ Magic Link authentication failed to initialize: {e}")
+        logger.error(f"❌ Magic Link authentication failed to initialize: {e}")
         magic_link_auth = None
     
-    # Log other startup information
+    # 4. Log startup summary
     logger.info(f"🚀 {APP_NAME} v{APP_VERSION} started")
     logger.info(f"📊 Scoring weights: {SCORING_CONFIG.weights}")
     logger.info(f"🎭 Playwright: {'enabled' if PLAYWRIGHT_AVAILABLE and PLAYWRIGHT_ENABLED else 'disabled'}")
+    logger.info(f"🤖 OpenAI: {'configured' if openai_client else 'not configured'}")
+    logger.info(f"📧 Magic Link: {'ready' if magic_link_auth else 'not available'}")
+    logger.info(f"🗄️ Redis: {'connected' if redis_client else 'not connected'}")
+    logger.info(f"🗃️ Database: {'connected' if DATABASE_ENABLED else 'not connected'}")
+    
+    # 5. Environment warnings
+    
+    
+    if SECRET_KEY.startswith("brandista-key-"):
+        logger.warning("⚠️ Using default SECRET_KEY - set custom SECRET_KEY in production!")
 
 
 app.add_middleware(
