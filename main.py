@@ -5086,64 +5086,172 @@ async def ai_analyze_comprehensive(
             detail="Analysis failed due to internal error. Please try again or contact support."
         )
 #=============================================================================
+# ============================================================================
+# KORJATTU MY-DISCOVERIES ENDPOINT
+# ============================================================================
+# Korvaa rivit 5089-5146 tiedostossa main_merged.py
+
 @app.get("/api/v1/my-discoveries")
 async def get_my_discoveries(
     user: UserInfo = Depends(require_user)
 ):
-    """Get user's recent discovery tasks (last 5)"""
+    """
+    Get user's recent discovery tasks
+    Returns list of discovery sessions with full details
+    """
+    
+    if not redis_client:
+        # Fallback: palauta tyhjä lista jos Redis ei ole käytössä
+        logger.warning("Redis not available, returning empty discoveries")
+        return []
+    
+    try:
+        logger.info(f"Fetching discoveries for user: {user.username}")
+        all_tasks = []
+        
+        # Redis key pattern: "task:{task_id}"
+        # Käytetään SCAN:ia kaikkien taskien läpikäyntiin
+        cursor = 0
+        scanned_count = 0
+        
+        while True:
+            cursor, keys = redis_client.scan(cursor, match="task:*", count=100)
+            scanned_count += len(keys)
+            
+            for key in keys:
+                try:
+                    task_data = redis_client.get(key)
+                    if not task_data:
+                        continue
+                    
+                    task = json.loads(task_data)
+                    
+                    # Suodata käyttäjän taskit
+                    if task.get("username") != user.username:
+                        continue
+                    
+                    task_id = key.decode('utf-8').split(":")[-1] if isinstance(key, bytes) else key.split(":")[-1]
+                    
+                    # Hae task status
+                    if not task_queue:
+                        continue
+                        
+                    status = task_queue.get_task_status(task_id)
+                    
+                    if status.get("status") == "not_found":
+                        continue
+                    
+                    # Rakenna discovery-objekti frontendille
+                    discovery_data = task.get("data", {})
+                    results = status.get("results", [])
+                    
+                    discovery = {
+                        "id": task_id,
+                        "task_id": task_id,
+                        "url": discovery_data.get("url", ""),
+                        "domain": discovery_data.get("url", "").replace("https://", "").replace("http://", "").split("/")[0],
+                        "industry": discovery_data.get("industry"),
+                        "status": status.get("status", "unknown"),
+                        "competitors_found": len([r for r in results if r.get("status") == "success"]),
+                        "total": status.get("total", 0),
+                        "progress": status.get("progress", 0),
+                        "results": results[:10],  # Max 10 tulosta per discovery
+                        "created_at": status.get("created_at", ""),
+                        "updated_at": status.get("completed_at") or status.get("updated_at", ""),
+                        "completed_at": status.get("completed_at")
+                    }
+                    
+                    all_tasks.append(discovery)
+                    
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to decode task {key}: {e}")
+                    continue
+                except Exception as e:
+                    logger.warning(f"Error processing task {key}: {e}")
+                    continue
+            
+            if cursor == 0:
+                break
+        
+        logger.info(f"Scanned {scanned_count} tasks, found {len(all_tasks)} for user {user.username}")
+        
+        # Järjestä uusimmasta vanhimpaan
+        all_tasks.sort(
+            key=lambda x: x.get("created_at", "1970-01-01T00:00:00Z"), 
+            reverse=True
+        )
+        
+        # Palauta max 50 viimeisintä (frontend rajaa 50:een)
+        discoveries = all_tasks[:50]
+        
+        logger.info(f"Returning {len(discoveries)} discoveries for {user.username}")
+        
+        # TÄRKEÄ: Palauta LISTA, ei dict!
+        # Frontend odottaa: Array<Discovery>
+        return discoveries
+        
+    except Exception as e:
+        logger.error(f"Failed to fetch discoveries for {user.username}: {e}", exc_info=True)
+        # Palauta tyhjä lista virheen sijaan
+        # Frontend näyttää "No discoveries yet" -viestin
+        return []
+
+
+# ============================================================================
+# LISÄYS: Discovery results endpoint
+# ============================================================================
+# Lisää tämä heti get_my_discoveries jälkeen
+
+@app.get("/api/v1/discovery-results/{task_id}")
+async def get_discovery_results(
+    task_id: str,
+    user: UserInfo = Depends(require_user)
+):
+    """
+    Get full results for a specific discovery task
+    Allows user to view detailed analysis of a past discovery
+    """
     
     if not task_queue:
         raise HTTPException(503, "Task queue not available")
     
     try:
-        # Hae käyttäjän taskit Redis:stä
-        all_tasks = []
+        # Tarkista että task kuuluu käyttäjälle
+        task_key = f"task:{task_id}"
+        task_data = redis_client.get(task_key)
         
-        # Redis key pattern: "task:{task_id}"
-        # Käytään SCAN:ia kaikkien taskien läpikäyntiin
-        cursor = 0
-        while True:
-            cursor, keys = redis_client.scan(cursor, match="task:*", count=100)
-            
-            for key in keys:
-                task_data = redis_client.get(key)
-                if task_data:
-                    task = json.loads(task_data)
-                    
-                    # Suodata käyttäjän taskit
-                    if task.get("username") == user.username:
-                        task_id = key.split(":")[-1]
-                        
-                        # Hae task status
-                        status = task_queue.get_task_status(task_id)
-                        
-                        if status.get("status") != "not_found":
-                            all_tasks.append({
-                                "task_id": task_id,
-                                "status": status.get("status"),
-                                "created_at": status.get("created_at"),
-                                "completed_at": status.get("completed_at"),
-                                "total": status.get("total", 0),
-                                "progress": status.get("progress", 0),
-                                "data": task.get("data", {})
-                            })
-            
-            if cursor == 0:
-                break
+        if not task_data:
+            raise HTTPException(404, "Discovery not found")
         
-        # Järjestä uusimmasta vanhimpaan (created_at)
-        all_tasks.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+        task = json.loads(task_data)
         
-        # Palauta 5 viimeisintä
+        if task.get("username") != user.username:
+            raise HTTPException(403, "Access denied")
+        
+        # Hae task status ja tulokset
+        status = task_queue.get_task_status(task_id)
+        
+        if status.get("status") == "not_found":
+            raise HTTPException(404, "Discovery not found")
+        
         return {
-            "success": True,
-            "discoveries": all_tasks[:5],
-            "total_found": len(all_tasks)
+            "task_id": task_id,
+            "status": status.get("status"),
+            "url": task.get("data", {}).get("url"),
+            "industry": task.get("data", {}).get("industry"),
+            "total": status.get("total", 0),
+            "progress": status.get("progress", 0),
+            "results": status.get("results", []),
+            "analyses": status.get("analyses", []),  # Full analysis data
+            "created_at": status.get("created_at"),
+            "completed_at": status.get("completed_at")
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Failed to fetch discoveries: {e}")
-        raise HTTPException(500, f"Failed to fetch discoveries: {str(e)}")
+        logger.error(f"Failed to fetch discovery results: {e}")
+        raise HTTPException(500, f"Failed to fetch discovery results: {str(e)}")
 
 # ============================================================================
 # ANALYSIS CORE - INTERNAL HELPER
