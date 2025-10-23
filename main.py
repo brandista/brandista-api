@@ -4412,46 +4412,52 @@ async def request_magic_link(
 
 
 @app.get("/auth/magic-link/verify")
-async def verify_magic_link_get(token: str):
+async def verify_magic_link_get(token: str, req: Request):  # ← Lisää req: Request
     """Verify magic link and return access token"""
     try:
-        # Verify token (token sisältää jo emailin!)
         if not magic_link_auth:
             raise HTTPException(503, "Magic link authentication not available")
         
-        # Verify token
-        user_data = await magic_link_auth.verify_token(token)
+        # ✅ KORJAUS: Käytä verify_magic_link (ei verify_token!)
+        result = await magic_link_auth.verify_magic_link(
+            token=token,
+            request=req
+        )
         
-        if not user_data:
+        if not result or not result.get('valid'):
             raise HTTPException(400, "Invalid or expired token")
         
+        # Get user data from result
+        user_data = result.get('user', {})
         email = user_data.get('email')
+        role = user_data.get('role', 'user')
+        username = user_data.get('username')
         
-        # Get user from database
-        user = await get_user_by_email(email)
-        if not user:
-            raise HTTPException(404, "User not found")
+        if not email:
+            raise HTTPException(400, "Invalid magic link response")
         
         # Create access token
         access_token = create_access_token({
             "sub": email,
-            "role": user.role
+            "role": role
         })
+        
+        logger.info(f"✅ Magic link login successful for {email}")
         
         return {
             "success": True,
             "access_token": access_token,
             "user": {
-                "email": user.email,
-                "username": user.username,
-                "role": user.role
+                "email": email,
+                "username": username or email.split('@')[0],
+                "role": role
             }
         }
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Magic link verification failed: {e}")
-        raise HTTPException(500, "Verification failed")
+        logger.error(f"❌ Magic link verification failed: {e}")
+        raise HTTPException(500, f"Verification failed: {str(e)}")
 # ============================================================================
 # REVENUE INPUT ENDPOINTS
 # ============================================================================
