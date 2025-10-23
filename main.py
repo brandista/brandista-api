@@ -4389,6 +4389,17 @@ async def login(request: LoginRequest):
     )
     
     return TokenResponse(access_token=access_token, role=user["role"])
+
+@app.get("/auth/me")
+async def get_current_user_info(user: UserInfo = Depends(get_current_user)):
+    """Get current authenticated user information"""
+    return {
+        "username": user.username,
+        "email": user.email,
+        "role": user.role,
+        "authenticated": True
+    }
+
 # ============================================================================
 # MAGIC LINK ENDPOINTS
 # ============================================================================
