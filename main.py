@@ -4458,6 +4458,14 @@ async def verify_magic_link_get(token: str, req: Request):  # ← Lisää req: R
     except Exception as e:
         logger.error(f"❌ Magic link verification failed: {e}")
         raise HTTPException(500, f"Verification failed: {str(e)}")
+
+        # Reitti 2: Shortcut (sama toiminnallisuus)
+@app.get("/auth/verify")
+async def verify_shortcut(token: str, req: Request):
+    """Shortcut for /auth/magic-link/verify"""
+    return await verify_magic_link_get(token, req)
+
+    
 # ============================================================================
 # REVENUE INPUT ENDPOINTS
 # ============================================================================
