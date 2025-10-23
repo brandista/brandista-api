@@ -4409,47 +4409,7 @@ async def request_magic_link(
         logger.error(f"Magic link request failed: {e}")
         raise HTTPException(500, "Failed to process magic link request")
 
-@app.post("/auth/magic-link/verify")
-async def verify_magic_link(
-    request: MagicLinkVerify,  # ✅ Muutettu
-    req: Request
-):
-    """Verify magic link token and return JWT"""
-    if not magic_link_auth:
-        raise HTTPException(503, "Magic Link authentication not available")
-    
-    try:
-        # Verify magic link
-        result = await magic_link_auth.verify_magic_link(
-            token=request.token,
-            request=req
-        )
-        
-        # Get user from result
-        user_data = result.get('user', {})
-        email = user_data.get('email')
-        role = user_data.get('role', 'user')
-        
-        if not email:
-            raise HTTPException(400, "Invalid magic link response")
-        
-        # Create JWT token
-        access_token = create_access_token(
-            data={"sub": email, "role": role}
-        )
-        
-        logger.info(f"Magic link login successful for {email}")
-        
-        return TokenResponse(
-            access_token=access_token,
-            role=role
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Magic link verification failed: {e}")
-        raise HTTPException(500, "Failed to verify magic link")
+
 
 @app.get("/auth/magic-link/verify")
 async def verify_magic_link_get(token: str):
