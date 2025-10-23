@@ -1055,6 +1055,7 @@ class TokenResponse(BaseModel):
 
 class UserInfo(BaseModel):
     username: str
+    email: Optional[str] = None
     role: str
     search_limit: int = 0
     searches_used: int = 0
@@ -1477,15 +1478,51 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> Optio
         payload = verify_token(token)
         if not payload:
             return None
-        username = payload.get("sub")
+        
+        sub = payload.get("sub")  # Can be email OR username
         role = payload.get("role", "user")
-        if not username or username not in USERS_DB:
+        
+        if not sub:
             return None
-        user_data = USERS_DB[username]
+        
+        # 🔍 Try to find user by sub (which can be email OR username)
+        user_data = None
+        user_key = None
+        
+        # 1. Direct key lookup (fastest)
+        if sub in USERS_DB:
+            user_data = USERS_DB[sub]
+            user_key = sub
+        
+        # 2. Search by username field (for old tokens with username as sub)
+        if not user_data:
+            for key, data in USERS_DB.items():
+                if data.get("username") == sub:
+                    user_data = data
+                    user_key = key
+                    logger.info(f"🔍 Found user by username: {sub} → {key}")
+                    break
+        
+        # 3. Search by email field
+        if not user_data:
+            for key, data in USERS_DB.items():
+                if data.get("email") == sub:
+                    user_data = data
+                    user_key = key
+                    logger.info(f"🔍 Found user by email: {sub} → {key}")
+                    break
+        
+        if not user_data:
+            logger.warning(f"❌ User not found for sub: {sub}")
+            return None
+        
+        # Use the role from token (it's already correct)
         return UserInfo(
-            username=username, role=role,
-            search_limit=user_data["search_limit"],
-            searches_used=user_search_counts.get(username, 0)
+            username=user_data.get("username", user_key),
+            email=user_data.get("email", user_key),
+            role=role,  # Use role from token
+            search_limit=user_data.get("search_limit", 10),
+            searches_used=user_search_counts.get(user_key, 0)
         )
     except Exception as e:
         logger.warning(f"Error getting current user: {e}")
