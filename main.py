@@ -4446,6 +4446,22 @@ async def verify_magic_link_get(token: str, req: Request):
         if not email:
             raise HTTPException(400, "Invalid magic link response")
         
+        # 🔍 HELPER: Find existing user by email in USERS_DB (keys are usernames, not emails)
+        existing_user = None
+        existing_username = None
+        for uname, udata in USERS_DB.items():
+            if udata.get("email") == email:
+                existing_user = udata
+                existing_username = uname
+                logger.info(f"🔍 Found existing user by email: {uname} with role: {udata.get('role')}")
+                break
+        
+        # If user exists in USERS_DB (created by admin), use their role
+        if existing_user:
+            role = existing_user.get("role", "user")
+            username = existing_username
+            logger.info(f"✅ Using existing user's role: {role} for {email}")
+        
         # ✅ CRITICAL FIX: Add user to user_store AND USERS_DB
         if email not in user_store:
             user_store[email] = {
@@ -4457,20 +4473,24 @@ async def verify_magic_link_get(token: str, req: Request):
                 "used": 0,
                 "created_at": datetime.now().isoformat()
             }
-            logger.info(f"✅ Added magic link user to user_store: {email}")
+            logger.info(f"✅ Added magic link user to user_store: {email} with role: {role}")
         else:
             logger.info(f"ℹ️ Magic link user already exists in user_store: {email}")
         
         # ✅ CRITICAL: Also add to USERS_DB for JWT validation
         if email not in USERS_DB:
-            USERS_DB[email] = {
-                "username": username or email.split('@')[0],
-                "email": email,
-                "hashed_password": "",  # No password for magic link users
-                "role": role,
-                "search_limit": 10  # Default limit for magic link users
-            }
-            logger.info(f"✅ Added magic link user to USERS_DB: {email}")
+            # Only create new user if email is not found (we already checked by email above)
+            if not existing_user:
+                USERS_DB[email] = {
+                    "username": username or email.split('@')[0],
+                    "email": email,
+                    "hashed_password": "",  # No password for magic link users
+                    "role": role,
+                    "search_limit": 10  # Default limit for magic link users
+                }
+                logger.info(f"✅ Added NEW magic link user to USERS_DB: {email} with role: {role}")
+            else:
+                logger.info(f"ℹ️ User already exists in USERS_DB under username: {existing_username}")
         else:
             logger.info(f"ℹ️ Magic link user already exists in USERS_DB: {email}")
         
@@ -4480,7 +4500,7 @@ async def verify_magic_link_get(token: str, req: Request):
             "role": role
         })
         
-        logger.info(f"✅ Magic link login successful for {email}")
+        logger.info(f"✅ Magic link login successful for {email} with role: {role}")
         
         return {
             "success": True,
