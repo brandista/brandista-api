@@ -606,7 +606,8 @@ class MagicLinkAuth:
         logger.info(f"User {email} logged in via magic link from IP {request.client.host}")
         
         return {
-            "success": True,
+            "valid": True,      # Backend expects 'valid' field
+            "success": True,    # Keep for compatibility
             "user": user.dict(),
             "redirect_url": link_data.get("metadata", {}).get("redirect_url")
         }
