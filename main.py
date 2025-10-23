@@ -4412,13 +4412,12 @@ async def request_magic_link(
 
 
 @app.get("/auth/magic-link/verify")
-async def verify_magic_link_get(token: str, req: Request):  # ← Lisää req: Request
+async def verify_magic_link_get(token: str, req: Request):
     """Verify magic link and return access token"""
     try:
         if not magic_link_auth:
             raise HTTPException(503, "Magic link authentication not available")
         
-        # ✅ KORJAUS: Käytä verify_magic_link (ei verify_token!)
         result = await magic_link_auth.verify_magic_link(
             token=token,
             request=req
@@ -4435,6 +4434,21 @@ async def verify_magic_link_get(token: str, req: Request):  # ← Lisää req: R
         
         if not email:
             raise HTTPException(400, "Invalid magic link response")
+        
+        # ✅ CRITICAL FIX: Add user to user_store
+        if email not in user_store:
+            user_store[email] = {
+                "username": username or email.split('@')[0],
+                "email": email,
+                "password_hash": "",
+                "role": role,
+                "quota": 10,
+                "used": 0,
+                "created_at": datetime.now().isoformat()
+            }
+            logger.info(f"✅ Added magic link user to user_store: {email}")
+        else:
+            logger.info(f"ℹ️ Magic link user already exists in user_store: {email}")
         
         # Create access token
         access_token = create_access_token({
