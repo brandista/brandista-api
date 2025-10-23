@@ -18,5 +18,12 @@ GOOGLE_SEARCH_ENGINE_ID=171a60959e6cb4d76
 # Magic Link Configuration
 MAGIC_LINK_ENABLED=true
 MAGIC_LINK_TOKEN_EXPIRY=15
-FRONTEND_URL=https://brandista.eu
+
 DEBUG=false
+# backend/.env
+FRONTEND_URL=http://localhost:3000
+```
+
+#### Railway (production):
+```
+FRONTEND_URL=https://brandista.eu/growthengine
