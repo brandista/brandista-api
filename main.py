@@ -961,6 +961,9 @@ security = HTTPBearer()
 # ✅ PLACEHOLDER - Täytetään init_users() funktiossa
 USERS_DB = {}
 
+# ✅ User storage for email verification
+user_store = {}
+
 def init_users():
     """Initialize users with hashed passwords"""
     global USERS_DB
@@ -4371,6 +4374,14 @@ async def login(request: LoginRequest):
         raise HTTPException(401, "Invalid credentials")
     
     logger.info(f"✅ LOGIN SUCCESS: {user.get('username')}, role={user['role']}")
+    
+    # ✅ Store user in user_store for email verification
+    user_store[user_key] = {
+        "username": user.get('username'),
+        "email": user.get('email'),
+        "role": user['role'],
+        "verified": True  # Users from USERS_DB are already verified
+    }
     
     # ✅ CREATE TOKEN (käytä user_key:tä joka on email)
     access_token = create_access_token(
