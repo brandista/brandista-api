@@ -4446,7 +4446,7 @@ async def verify_magic_link_get(token: str, req: Request):
         if not email:
             raise HTTPException(400, "Invalid magic link response")
         
-        # ✅ CRITICAL FIX: Add user to user_store
+        # ✅ CRITICAL FIX: Add user to user_store AND USERS_DB
         if email not in user_store:
             user_store[email] = {
                 "username": username or email.split('@')[0],
@@ -4460,6 +4460,19 @@ async def verify_magic_link_get(token: str, req: Request):
             logger.info(f"✅ Added magic link user to user_store: {email}")
         else:
             logger.info(f"ℹ️ Magic link user already exists in user_store: {email}")
+        
+        # ✅ CRITICAL: Also add to USERS_DB for JWT validation
+        if email not in USERS_DB:
+            USERS_DB[email] = {
+                "username": username or email.split('@')[0],
+                "email": email,
+                "hashed_password": "",  # No password for magic link users
+                "role": role,
+                "search_limit": 10  # Default limit for magic link users
+            }
+            logger.info(f"✅ Added magic link user to USERS_DB: {email}")
+        else:
+            logger.info(f"ℹ️ Magic link user already exists in USERS_DB: {email}")
         
         # Create access token
         access_token = create_access_token({
