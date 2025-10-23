@@ -4452,13 +4452,46 @@ async def verify_magic_link(
         raise HTTPException(500, "Failed to verify magic link")
 
 @app.get("/auth/magic-link/verify")
-async def verify_magic_link_get(token: str, email: str):
-    """Handle GET request from email link click - redirect to frontend"""
-    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
-    redirect_url = f"{frontend_url}/auth/magic-link?token={token}&email={email}"
-    
-    from fastapi.responses import RedirectResponse
-    return RedirectResponse(url=redirect_url)
+async def verify_magic_link_get(token: str):
+    """Verify magic link and return access token"""
+    try:
+        # Verify token (token sisältää jo emailin!)
+        if not magic_link_auth:
+            raise HTTPException(503, "Magic link authentication not available")
+        
+        # Verify token
+        user_data = await magic_link_auth.verify_token(token)
+        
+        if not user_data:
+            raise HTTPException(400, "Invalid or expired token")
+        
+        email = user_data.get('email')
+        
+        # Get user from database
+        user = await get_user_by_email(email)
+        if not user:
+            raise HTTPException(404, "User not found")
+        
+        # Create access token
+        access_token = create_access_token({
+            "sub": email,
+            "role": user.role
+        })
+        
+        return {
+            "success": True,
+            "access_token": access_token,
+            "user": {
+                "email": user.email,
+                "username": user.username,
+                "role": user.role
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Magic link verification failed: {e}")
+        raise HTTPException(500, "Verification failed")
 # ============================================================================
 # REVENUE INPUT ENDPOINTS
 # ============================================================================
