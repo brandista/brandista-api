@@ -5253,11 +5253,14 @@ async def get_my_discoveries(
                     discovery_data = task.get("data", {})
                     results = status.get("results", [])
                     
+                    # ✅ KORJATTU: Lue user_url discovery_data:sta
+                    user_url = discovery_data.get("user_url", "")
+                    
                     discovery = {
                         "id": task_id,
                         "task_id": task_id,
-                        "url": discovery_data.get("url", ""),
-                        "domain": discovery_data.get("url", "").replace("https://", "").replace("http://", "").split("/")[0],
+                        "url": user_url,  # ✅ KORJAUS!
+                        "domain": user_url.replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0] if user_url else "",
                         "industry": discovery_data.get("industry"),
                         "status": status.get("status", "unknown"),
                         "competitors_found": len([r for r in results if r.get("status") == "success"]),
