@@ -5130,6 +5130,50 @@ async def get_discovery_results(
     }
 
 # ============================================================================
+# CACHED ANALYSIS ENDPOINT
+# ============================================================================
+
+@app.get("/api/v1/cached-analysis", tags=["Analysis"])
+async def get_cached_analysis(
+    cache_key: str,
+    user: UserInfo = Depends(require_user)
+):
+    """
+    Get a previously cached analysis by cache_key.
+    Used when navigating from discovery results to view a competitor's full analysis.
+    """
+    
+    if not cache_key:
+        raise HTTPException(400, "cache_key parameter is required")
+    
+    logger.info(f"Fetching cached analysis: {user.username} | cache_key: {cache_key}")
+    
+    try:
+        # Try to get from cache
+        cached_data = await get_from_cache(cache_key)
+        
+        if not cached_data:
+            logger.warning(f"Cache miss for key: {cache_key}")
+            raise HTTPException(
+                404, 
+                "Analysis not found in cache. It may have expired or never existed."
+            )
+        
+        logger.info(f"✅ Cache hit for key: {cache_key}")
+        
+        # Return the cached analysis
+        return cached_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching cached analysis: {e}", exc_info=True)
+        raise HTTPException(
+            500,
+            "Failed to retrieve analysis from cache"
+        )
+
+# ============================================================================
 # MAIN ANALYSIS ENDPOINT
 # ============================================================================
 
