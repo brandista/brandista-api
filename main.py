@@ -5251,7 +5251,11 @@ async def get_my_discoveries(
                     
                     # Rakenna discovery-objekti frontendille
                     discovery_data = task.get("data", {})
-                    results = status.get("results", [])
+                    
+                    # ✅ KORJATTU: Hae results ERILLISELLÄ kutsulla!
+                    results = []
+                    if status.get("status") in ["running", "completed"]:
+                        results = task_queue.get_results(task_id)
                     
                     # ✅ KORJATTU: Lue user_url discovery_data:sta
                     user_url = discovery_data.get("user_url", "")
@@ -5266,7 +5270,7 @@ async def get_my_discoveries(
                         "competitors_found": len([r for r in results if r.get("status") == "success"]),
                         "total": status.get("total", 0),
                         "progress": status.get("progress", 0),
-                        "results": results[:10],  # Max 10 tulosta per discovery
+                        "results": results[:10],  # ✅ NYT TÄYTETTY!
                         "created_at": status.get("created_at", ""),
                         "updated_at": status.get("completed_at") or status.get("updated_at", ""),
                         "completed_at": status.get("completed_at")
