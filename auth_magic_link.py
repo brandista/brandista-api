@@ -426,77 +426,111 @@ class MagicLinkStorage:
 class MagicLinkUserManager:
     """User management for magic link authentication"""
     
-    def __init__(self, storage: MagicLinkStorage):
+    def __init__(self, storage):
         self.storage = storage
-        self._memory_users: Dict[str, UserProfile] = {}
+        self._memory_users: Dict[str, MagicLinkUser] = {}
     
-    async def get_or_create_user(self, email: str, metadata: Dict[str, Any] = None) -> UserProfile:
-        """Get existing user or create new one"""
+    async def get_user_by_email(self, email: str) -> Optional[MagicLinkUser]:
+        """Get user from PostgreSQL or memory - WITH ROLE"""
         
-        user_id = hashlib.sha256(email.encode()).hexdigest()[:16]
-        
-        # Check PostgreSQL
+        # Try PostgreSQL first
         if self.storage.postgres_conn:
             try:
-                import psycopg2.extras
-                cursor = self.storage.postgres_conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-                
-                # Try to get existing user
-                cursor.execute("SELECT * FROM user_profiles WHERE email = %s", (email,))
-                user = cursor.fetchone()
-                
-                if user:
-                    # Update last login
-                    cursor.execute(
-                        "UPDATE user_profiles SET last_login = NOW() WHERE email = %s",
-                        (email,)
-                    )
-                    self.storage.postgres_conn.commit()
-                    cursor.close()
-                    
-                    return UserProfile(**dict(user))
-                
-                # Create new user
+                cursor = self.storage.postgres_conn.cursor()
                 cursor.execute("""
-                    INSERT INTO user_profiles (
-                        user_id, email, subscription_tier, search_limit, 
-                        created_at, last_login, email_verified
-                    ) VALUES (%s, %s, %s, %s, NOW(), NOW(), TRUE)
-                    RETURNING *
-                """, (
-                    user_id, email, "free",
-                    config.SUBSCRIPTION_TIERS["free"]["search_limit"]
-                ))
+                    SELECT user_id, email, full_name, company, subscription_tier, 
+                           search_limit, searches_used, last_login, email_verified,
+                           role, username
+                    FROM user_profiles 
+                    WHERE email = %s
+                """, (email,))
                 
-                new_user = cursor.fetchone()
-                self.storage.postgres_conn.commit()
+                row = cursor.fetchone()
                 cursor.close()
                 
-                logger.info(f"Created new user profile for {email}")
-                return UserProfile(**dict(new_user))
-                
+                if row:
+                    return MagicLinkUser(
+                        user_id=row[0],
+                        email=row[1],
+                        full_name=row[2],
+                        company=row[3],
+                        subscription_tier=row[4],
+                        search_limit=row[5],
+                        searches_used=row[6],
+                        last_login=row[7],
+                        email_verified=row[8],
+                        role=row[9] or "user",  # ✅ LUE ROOLI TIETOKANNASTA!
+                        username=row[10]
+                    )
             except Exception as e:
-                logger.error(f"Database user operation failed: {e}")
+                logger.error(f"Failed to get user from PostgreSQL: {e}")
         
-        # Check memory
-        if email in self._memory_users:
-            user = self._memory_users[email]
-            user.last_login = datetime.now()
+        # Fallback to memory
+        return self._memory_users.get(email)
+    
+    async def get_or_create_user(self, email: str, metadata: Dict = None) -> MagicLinkUser:
+        """Get existing user or create new one - RESPECTS ROLE FROM DB"""
+        
+        # ✅ TÄRKEÄ: Hae käyttäjä tietokannasta ENSIN
+        user = await self.get_user_by_email(email)
+        
+        if user:
+            # ✅ Löytyi - päivitä vain last_login
+            if self.storage.postgres_conn:
+                try:
+                    cursor = self.storage.postgres_conn.cursor()
+                    cursor.execute("""
+                        UPDATE user_profiles 
+                        SET last_login = %s 
+                        WHERE email = %s
+                    """, (datetime.now(), email))
+                    self.storage.postgres_conn.commit()
+                    cursor.close()
+                    logger.info(f"Updated last_login for existing user {email} with role {user.role}")
+                except Exception as e:
+                    logger.error(f"Failed to update last_login: {e}")
+            
+            # Update memory cache
+            self._memory_users[email] = user
             return user
         
-        # Create in memory
-        user = UserProfile(
-            user_id=user_id,
+        # ❌ EI löytynyt - luo uusi käyttäjä (oletus: user)
+        logger.info(f"Creating NEW user for {email} (not found in database)")
+        
+        user = MagicLinkUser(
+            user_id=hashlib.sha256(email.encode()).hexdigest()[:16],
             email=email,
+            full_name=metadata.get("full_name") if metadata else None,
+            company=metadata.get("company") if metadata else None,
+            role="user",  # Uudet käyttäjät ovat "user" - admin täytyy asettaa manuaalisesti
             subscription_tier="free",
             search_limit=config.SUBSCRIPTION_TIERS["free"]["search_limit"],
             email_verified=True,
             last_login=datetime.now()
         )
         
-        self._memory_users[email] = user
-        logger.info(f"Created new user in memory for {email}")
+        # ✅ Tallenna uusi käyttäjä PostgreSQL:ään
+        if self.storage.postgres_conn:
+            try:
+                cursor = self.storage.postgres_conn.cursor()
+                cursor.execute("""
+                    INSERT INTO user_profiles 
+                    (user_id, email, full_name, company, subscription_tier, search_limit, 
+                     email_verified, last_login, role, username, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (email) DO UPDATE SET last_login = EXCLUDED.last_login
+                """, (
+                    user.user_id, user.email, user.full_name, user.company,
+                    user.subscription_tier, user.search_limit, user.email_verified,
+                    user.last_login, user.role, user.username
+                ))
+                self.storage.postgres_conn.commit()
+                cursor.close()
+                logger.info(f"Inserted new user {email} to PostgreSQL with role '{user.role}'")
+            except Exception as e:
+                logger.error(f"Failed to insert new user to PostgreSQL: {e}")
         
+        self._memory_users[email] = user
         return user
     
     async def update_subscription(self, email: str, tier: str) -> bool:
