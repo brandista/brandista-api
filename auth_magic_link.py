@@ -169,7 +169,9 @@ class MagicLinkEmailService:
     async def send_magic_link(email: str, token: str, metadata: Dict[str, Any] = None) -> bool:
         """Send magic link email"""
         
-        magic_link = f"{config.FRONTEND_URL}/auth/magic-link/verify?token={token}"
+        # Remove trailing slash to avoid double slashes
+        frontend_url = config.FRONTEND_URL.rstrip('/')
+        magic_link = f"{frontend_url}/auth/magic-link/verify?token={token}"
         html = MagicLinkEmailService.generate_email_html(email, magic_link, metadata)
         subject = "🚀 Sign in to Brandista"
         
