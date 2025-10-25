@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Magic Link Authentication Module for Brandista
-Standalone module that can be imported into main application
+Magic Link Authentication Module for Brandista - FIXED
+Includes MagicLinkUser class definition with role support
 """
 
 import os
@@ -216,17 +216,17 @@ class MagicLinkEmailService:
                 logger.info(f"Magic link sent via SMTP to {email}")
                 return True
             
-            # Development mode - just log
             else:
-                logger.info(f"[DEV MODE] Magic link for {email}: {magic_link}")
-                return True
+                logger.warning(f"No email provider configured - magic link not sent to {email}")
+                logger.info(f"Magic link URL: {magic_link}")
+                return False
                 
         except Exception as e:
-            logger.error(f"Email send failed: {e}")
+            logger.error(f"Failed to send magic link to {email}: {e}")
             return False
 
 # ============================================================================
-# PYDANTIC MODELS
+# DATA MODELS
 # ============================================================================
 
 class MagicLinkRequest(BaseModel):
@@ -251,6 +251,21 @@ class UserProfile(BaseModel):
     last_login: Optional[datetime] = None
     email_verified: bool = False
     onboarding_completed: bool = False
+
+# ✅ TÄRKEÄ: MagicLinkUser luokka määritelty ENNEN MagicLinkUserManager luokkaa!
+class MagicLinkUser(BaseModel):
+    """User model for magic link authentication with role support"""
+    user_id: str
+    email: str
+    username: Optional[str] = None
+    full_name: Optional[str] = None
+    company: Optional[str] = None
+    role: str = "user"  # user, admin, super_user
+    subscription_tier: str = "free"
+    search_limit: int = 1
+    searches_used: int = 0
+    last_login: Optional[datetime] = None
+    email_verified: bool = False
 
 # ============================================================================
 # STORAGE BACKENDS
@@ -420,7 +435,7 @@ class MagicLinkStorage:
 
 
 # ============================================================================
-# USER MANAGEMENT
+# USER MANAGEMENT - WITH ROLE SUPPORT
 # ============================================================================
 
 class MagicLinkUserManager:
@@ -718,7 +733,9 @@ CREATE TABLE IF NOT EXISTS user_profiles (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_login TIMESTAMP,
     email_verified BOOLEAN DEFAULT FALSE,
-    onboarding_completed BOOLEAN DEFAULT FALSE
+    onboarding_completed BOOLEAN DEFAULT FALSE,
+    role VARCHAR(50) DEFAULT 'user',
+    username VARCHAR(255)
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_profiles_email ON user_profiles(email);
