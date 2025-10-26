@@ -6992,20 +6992,20 @@ from pathlib import Path
 # Static files directory
 STATIC_DIR = Path(__file__).parent / "dist" / "public"
 
-# Serve static files from /growthengine/
+# Serve static files from ROOT (frontend handles /growthengine/ via Vite base)
 if STATIC_DIR.exists():
-    # Mount static assets FIRST
-    app.mount("/growthengine/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="static-assets")
-    logger.info(f"✅ Static assets mounted at /growthengine/assets")
+    # Mount static assets at /assets (Vite will prepend /growthengine/)
+    app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="static-assets")
+    logger.info(f"✅ Static assets mounted at /assets")
     
-    # Catch-all route for React Router
-    # IMPORTANT: This catches everything EXCEPT /api and /auth routes
-    @app.get("/growthengine/{full_path:path}")
+    # Catch-all route for React Router - handles ALL routes except API
+    @app.get("/{full_path:path}")
     async def serve_react_app(full_path: str):
-        """Serve React app for all /growthengine/* routes (except API routes)"""
+        """Serve React app for all routes (except API routes)"""
         
-        # DON'T serve React for API routes - let them be handled by FastAPI
-        if full_path.startswith("api/") or full_path.startswith("auth/"):
+        # Exclude API routes - let FastAPI handle them
+        api_prefixes = ["api/", "auth/", "admin/", "health", "docs", "redoc", "openapi.json"]
+        if any(full_path.startswith(prefix) for prefix in api_prefixes) or full_path in api_prefixes:
             raise HTTPException(404, "API endpoint not found")
         
         # If requesting a specific file that exists, serve it
@@ -7027,7 +7027,7 @@ if STATIC_DIR.exists():
         else:
             raise HTTPException(404, "React app not found - build frontend first")
     
-    logger.info(f"✅ React app catch-all route configured at /growthengine/*")
+    logger.info(f"✅ React app catch-all route configured at /*")
 else:
     logger.warning(f"⚠️ Static directory not found: {STATIC_DIR}")
     logger.warning("Frontend will not be served - build it first with 'npm run build'")
