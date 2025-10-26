@@ -6983,6 +6983,7 @@ def _calculate_recommendation_priority(rec: Dict) -> int:
 
 # ============================================================================
 # STATIC FILES SERVING FOR REACT APP
+# 
 # ============================================================================
 
 from fastapi.staticfiles import StaticFiles
@@ -6992,13 +6993,16 @@ from pathlib import Path
 # Static files directory
 STATIC_DIR = Path(__file__).parent / "dist" / "public"
 
-# Serve static files from ROOT (frontend handles /growthengine/ via Vite base)
+# Serve static files
 if STATIC_DIR.exists():
-    # Mount static assets at /assets (Vite will prepend /growthengine/)
-    app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="static-assets")
-    logger.info(f"✅ Static assets mounted at /assets")
+    # ✅ CRITICAL: Mount /assets FIRST before catch-all route!
+    # This ensures JS/CSS files are served correctly
+    assets_dir = STATIC_DIR / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="static-assets")
+        logger.info(f"✅ Static assets mounted at /assets from {assets_dir}")
     
-    # Catch-all route for React Router - handles ALL routes except API
+    # ✅ Catch-all route for React Router - MUST be AFTER assets mount!
     @app.get("/{full_path:path}")
     async def serve_react_app(full_path: str):
         """Serve React app for all routes (except API routes)"""
@@ -7008,9 +7012,13 @@ if STATIC_DIR.exists():
         if any(full_path.startswith(prefix) for prefix in api_prefixes) or full_path in api_prefixes:
             raise HTTPException(404, "API endpoint not found")
         
+        # Don't serve React for assets - they should be handled by StaticFiles mount above
+        if full_path.startswith("assets/"):
+            raise HTTPException(404, "Asset not found")
+        
         # If requesting a specific file that exists, serve it
         file_path = STATIC_DIR / full_path
-        if file_path.is_file():
+        if file_path.is_file() and not full_path.startswith("assets/"):
             return FileResponse(file_path)
         
         # Otherwise serve index.html for React Router
