@@ -6983,7 +6983,6 @@ def _calculate_recommendation_priority(rec: Dict) -> int:
 
 # ============================================================================
 # STATIC FILES SERVING FOR REACT APP
-# 
 # ============================================================================
 
 from fastapi.staticfiles import StaticFiles
@@ -6995,31 +6994,35 @@ STATIC_DIR = Path(__file__).parent / "dist" / "public"
 
 # Serve static files
 if STATIC_DIR.exists():
-    # ✅ CRITICAL: Mount /assets FIRST before catch-all route!
-    # This ensures JS/CSS files are served correctly
+    # ✅ CRITICAL: Mount /growthengine/assets FIRST before catch-all route!
+    # This ensures JS/CSS files are served correctly with /growthengine prefix
     assets_dir = STATIC_DIR / "assets"
     if assets_dir.exists():
-        app.mount("/assets", StaticFiles(directory=assets_dir), name="static-assets")
-        logger.info(f"✅ Static assets mounted at /assets from {assets_dir}")
+        app.mount("/growthengine/assets", StaticFiles(directory=assets_dir), name="static-assets")
+        logger.info(f"✅ Static assets mounted at /growthengine/assets from {assets_dir}")
+    
+    # ✅ Serve brandista-logo.png at /growthengine/brandista-logo.png
+    logo_path = STATIC_DIR / "brandista-logo.png"
+    if logo_path.exists():
+        @app.get("/growthengine/brandista-logo.png")
+        async def serve_logo():
+            return FileResponse(logo_path)
+        logger.info(f"✅ Logo mounted at /growthengine/brandista-logo.png")
     
     # ✅ Catch-all route for React Router - MUST be AFTER assets mount!
-    @app.get("/{full_path:path}")
-    async def serve_react_app(full_path: str):
-        """Serve React app for all routes (except API routes)"""
-        
-        # Exclude API routes - let FastAPI handle them
-        api_prefixes = ["api/", "auth/", "admin/", "health", "docs", "redoc", "openapi.json"]
-        if any(full_path.startswith(prefix) for prefix in api_prefixes) or full_path in api_prefixes:
-            raise HTTPException(404, "API endpoint not found")
+    @app.get("/growthengine/{full_path:path}")
+    async def serve_react_app(full_path: str = ""):
+        """Serve React app for all /growthengine routes"""
         
         # Don't serve React for assets - they should be handled by StaticFiles mount above
         if full_path.startswith("assets/"):
             raise HTTPException(404, "Asset not found")
         
         # If requesting a specific file that exists, serve it
-        file_path = STATIC_DIR / full_path
-        if file_path.is_file() and not full_path.startswith("assets/"):
-            return FileResponse(file_path)
+        if full_path:
+            file_path = STATIC_DIR / full_path
+            if file_path.is_file() and not full_path.startswith("assets/"):
+                return FileResponse(file_path)
         
         # Otherwise serve index.html for React Router
         index_path = STATIC_DIR / "index.html"
@@ -7035,7 +7038,13 @@ if STATIC_DIR.exists():
         else:
             raise HTTPException(404, "React app not found - build frontend first")
     
-    logger.info(f"✅ React app catch-all route configured at /*")
+    # ✅ Redirect /growthengine to /growthengine/ (with trailing slash)
+    @app.get("/growthengine")
+    async def redirect_growthengine():
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url="/growthengine/", status_code=301)
+    
+    logger.info(f"✅ React app catch-all route configured at /growthengine/*")
 else:
     logger.warning(f"⚠️ Static directory not found: {STATIC_DIR}")
     logger.warning("Frontend will not be served - build it first with 'npm run build'")
