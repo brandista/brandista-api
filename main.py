@@ -4694,9 +4694,12 @@ async def google_callback(request: Request):
         
         logger.info(f"✅ Google OAuth login successful for {email} with role: {role}")
         
-        # Redirect to frontend with token
+        # ✅ REDIRECT TO DASHBOARD WITH HASH (not query params)
+        # Hash fragments are NOT sent to server and bypass routing issues
         frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')
-        redirect_url = f"{frontend_url}/auth/google/callback?token={access_token}&email={email}&username={username}&role={role}"
+        redirect_url = f"{frontend_url}/dashboard#token={access_token}&email={email}&username={username}&role={role}"
+        
+        logger.info(f"🎯 Redirecting to: {redirect_url[:80]}...")
         
         return RedirectResponse(url=redirect_url)
         
@@ -4707,9 +4710,6 @@ async def google_callback(request: Request):
         # Redirect to frontend with error
         frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')
         return RedirectResponse(url=f"{frontend_url}/login?error=google_auth_failed")
-
-
-
 # ============================================================================
 # REVENUE INPUT ENDPOINTS
 # ============================================================================
