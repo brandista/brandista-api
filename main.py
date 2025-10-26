@@ -4609,9 +4609,8 @@ async def google_login(request: Request):
     if not os.getenv('GOOGLE_CLIENT_ID'):
         raise HTTPException(503, "Google OAuth not configured")
     
-    # Construct redirect URI
-    redirect_uri = str(request.url_for('google_callback'))
-    
+    # Hardcode HTTPS redirect URI for production
+    redirect_uri = "https://fastapi-production-51f9.up.railway.app/auth/google/callback"
     logger.info(f"🔐 Initiating Google OAuth login, redirect_uri: {redirect_uri}")
     
     return await oauth.google.authorize_redirect(request, redirect_uri)
