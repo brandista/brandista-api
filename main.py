@@ -927,7 +927,20 @@ app.add_middleware(
     expose_headers=["*"],
     max_age=600
 )
+
+from starlette.middleware.sessions import SessionMiddleware
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SECRET_KEY,
+    session_cookie="brandista_session",
+    max_age=3600,
+    same_site="lax",
+    https_only=True
+)
+
+
 from starlette.middleware.base import BaseHTTPMiddleware
+
 
 class UTF8Middleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
