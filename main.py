@@ -5130,50 +5130,6 @@ async def get_discovery_results(
     }
 
 # ============================================================================
-# CACHED ANALYSIS ENDPOINT
-# ============================================================================
-
-@app.get("/api/v1/cached-analysis", tags=["Analysis"])
-async def get_cached_analysis(
-    cache_key: str,
-    user: UserInfo = Depends(require_user)
-):
-    """
-    Get a previously cached analysis by cache_key.
-    Used when navigating from discovery results to view a competitor's full analysis.
-    """
-    
-    if not cache_key:
-        raise HTTPException(400, "cache_key parameter is required")
-    
-    logger.info(f"Fetching cached analysis: {user.username} | cache_key: {cache_key}")
-    
-    try:
-        # Try to get from cache
-        cached_data = await get_from_cache(cache_key)
-        
-        if not cached_data:
-            logger.warning(f"Cache miss for key: {cache_key}")
-            raise HTTPException(
-                404, 
-                "Analysis not found in cache. It may have expired or never existed."
-            )
-        
-        logger.info(f"✅ Cache hit for key: {cache_key}")
-        
-        # Return the cached analysis
-        return cached_data
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error fetching cached analysis: {e}", exc_info=True)
-        raise HTTPException(
-            500,
-            "Failed to retrieve analysis from cache"
-        )
-
-# ============================================================================
 # MAIN ANALYSIS ENDPOINT
 # ============================================================================
 
@@ -5295,26 +5251,19 @@ async def get_my_discoveries(
                     
                     # Rakenna discovery-objekti frontendille
                     discovery_data = task.get("data", {})
-                    
-                    # ✅ KORJATTU: Hae results ERILLISELLÄ kutsulla!
-                    results = []
-                    if status.get("status") in ["running", "completed"]:
-                        results = task_queue.get_results(task_id)
-                    
-                    # ✅ KORJATTU: Lue user_url discovery_data:sta
-                    user_url = discovery_data.get("user_url", "")
+                    results = status.get("results", [])
                     
                     discovery = {
                         "id": task_id,
                         "task_id": task_id,
-                        "url": user_url,  # ✅ KORJAUS!
-                        "domain": user_url.replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0] if user_url else "",
+                        "url": discovery_data.get("url", ""),
+                        "domain": discovery_data.get("url", "").replace("https://", "").replace("http://", "").split("/")[0],
                         "industry": discovery_data.get("industry"),
                         "status": status.get("status", "unknown"),
                         "competitors_found": len([r for r in results if r.get("status") == "success"]),
                         "total": status.get("total", 0),
                         "progress": status.get("progress", 0),
-                        "results": results[:10],  # ✅ NYT TÄYTETTY!
+                        "results": results[:10],  # Max 10 tulosta per discovery
                         "created_at": status.get("created_at", ""),
                         "updated_at": status.get("completed_at") or status.get("updated_at", ""),
                         "completed_at": status.get("completed_at")
@@ -7030,6 +6979,58 @@ def _calculate_recommendation_priority(rec: Dict) -> int:
         score += 10
     
     return score
+
+
+# ============================================================================
+# STATIC FILES SERVING FOR REACT APP
+# ============================================================================
+
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from pathlib import Path
+
+# Static files directory
+STATIC_DIR = Path(__file__).parent / "dist" / "public"
+
+# Serve static files from /growthengine/
+if STATIC_DIR.exists():
+    # Mount static assets FIRST
+    app.mount("/growthengine/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="static-assets")
+    logger.info(f"✅ Static assets mounted at /growthengine/assets")
+    
+    # Catch-all route for React Router
+    # IMPORTANT: This catches everything EXCEPT /api and /auth routes
+    @app.get("/growthengine/{full_path:path}")
+    async def serve_react_app(full_path: str):
+        """Serve React app for all /growthengine/* routes (except API routes)"""
+        
+        # DON'T serve React for API routes - let them be handled by FastAPI
+        if full_path.startswith("api/") or full_path.startswith("auth/"):
+            raise HTTPException(404, "API endpoint not found")
+        
+        # If requesting a specific file that exists, serve it
+        file_path = STATIC_DIR / full_path
+        if file_path.is_file():
+            return FileResponse(file_path)
+        
+        # Otherwise serve index.html for React Router
+        index_path = STATIC_DIR / "index.html"
+        if index_path.exists():
+            return FileResponse(
+                index_path,
+                headers={
+                    "Cache-Control": "no-store, no-cache, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0"
+                }
+            )
+        else:
+            raise HTTPException(404, "React app not found - build frontend first")
+    
+    logger.info(f"✅ React app catch-all route configured at /growthengine/*")
+else:
+    logger.warning(f"⚠️ Static directory not found: {STATIC_DIR}")
+    logger.warning("Frontend will not be served - build it first with 'npm run build'")
 
 
 # ============================================================================
