@@ -145,7 +145,8 @@ from pydantic import BaseModel, Field
 # ...
 from fastapi import FastAPI, HTTPException, Header, Depends, BackgroundTasks, Request
 from auth_magic_link import create_magic_link_auth, MagicLinkRequest, MagicLinkVerify
-
+from authlib.integrations.starlette_client import OAuth
+from starlette.config import Config as StarletteConfig
 
 
 # Playwright imports (optional for SPA support)
@@ -770,7 +771,7 @@ app = FastAPI(
 @app.on_event("startup")
 async def startup_event():
     """Initialize all services on application startup"""
-    global magic_link_auth, redis_client, task_queue
+    global magic_link_auth, redis_client, task_queue, oauth
     
     # 1. Initialize database if enabled
     if DATABASE_ENABLED:
@@ -861,7 +862,30 @@ async def startup_event():
         logger.error(f"❌ Magic Link authentication failed to initialize: {e}")
         magic_link_auth = None
     
-    # 4. Log startup summary
+    # 4. Initialize Google OAuth
+    global oauth
+    try:
+        oauth_config = StarletteConfig(environ={
+            'GOOGLE_CLIENT_ID': os.getenv('GOOGLE_CLIENT_ID', ''),
+            'GOOGLE_CLIENT_SECRET': os.getenv('GOOGLE_CLIENT_SECRET', ''),
+        })
+        
+        oauth = OAuth(oauth_config)
+        
+        if os.getenv('GOOGLE_CLIENT_ID'):
+            oauth.register(
+                name='google',
+                server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
+                client_kwargs={'scope': 'openid email profile'},
+            )
+            logger.info("✅ Google OAuth configured")
+        else:
+            logger.warning("⚠️ Google OAuth not configured (set GOOGLE_CLIENT_ID)")
+    except Exception as e:
+        logger.error(f"❌ Google OAuth initialization failed: {e}")
+        oauth = None
+
+    # 5. Log startup summary
     logger.info(f"🚀 {APP_NAME} v{APP_VERSION} started")
     logger.info(f"📊 Scoring weights: {SCORING_CONFIG.weights}")
     logger.info(f"🎭 Playwright: {'enabled' if PLAYWRIGHT_AVAILABLE and PLAYWRIGHT_ENABLED else 'disabled'}")
@@ -870,7 +894,7 @@ async def startup_event():
     logger.info(f"🗄️ Redis: {'connected' if redis_client else 'not connected'}")
     logger.info(f"🗃️ Database: {'connected' if DATABASE_ENABLED else 'not connected'}")
     
-    # 5. Environment warnings
+    # 6. Environment warnings
     
     
     if SECRET_KEY.startswith("brandista-key-"):
@@ -934,11 +958,7 @@ if RATE_LIMIT_ENABLED:
         request_counts[client_ip].append(now)
         return await call_next(request)
 
-# ============================================================================
-# AUTHENTICATION
-# ============================================================================
 
-import hashlib
 
 # ============================================================================
 # AUTHENTICATION
@@ -4566,7 +4586,117 @@ async def verify_magic_link_get(token: str, req: Request):
         raise HTTPException(500, f"Verification failed: {str(e)}")
 
        
+# ============================================================================
+# GOOGLE OAUTH ENDPOINTS (lisää tämä rivin 4567 jälkeen)
+# ============================================================================
+
+@app.get("/auth/google/login")
+async def google_login(request: Request):
+    """Initiate Google OAuth login"""
+    if not os.getenv('GOOGLE_CLIENT_ID'):
+        raise HTTPException(503, "Google OAuth not configured")
     
+    # Construct redirect URI
+    redirect_uri = str(request.url_for('google_callback'))
+    
+    logger.info(f"🔐 Initiating Google OAuth login, redirect_uri: {redirect_uri}")
+    
+    return await oauth.google.authorize_redirect(request, redirect_uri)
+
+
+@app.get("/auth/google/callback")
+async def google_callback(request: Request):
+    """Handle Google OAuth callback"""
+    try:
+        if not os.getenv('GOOGLE_CLIENT_ID'):
+            raise HTTPException(503, "Google OAuth not configured")
+        
+        # Get access token from Google
+        token = await oauth.google.authorize_access_token(request)
+        
+        # Get user info
+        user_info = token.get('userinfo')
+        if not user_info:
+            raise HTTPException(400, "Failed to get user info from Google")
+        
+        email = user_info.get('email')
+        name = user_info.get('name', '')
+        picture = user_info.get('picture', '')
+        
+        logger.info(f"✅ Google OAuth callback successful for: {email}")
+        
+        if not email:
+            raise HTTPException(400, "Email not provided by Google")
+        
+        # Check if user exists
+        existing_user = None
+        existing_username = None
+        for uname, udata in USERS_DB.items():
+            if udata.get("email") == email:
+                existing_user = udata
+                existing_username = uname
+                break
+        
+        # Determine role
+        role = "user"
+        username = email.split('@')[0]
+        
+        if existing_user:
+            role = existing_user.get("role", "user")
+            username = existing_username
+            logger.info(f"📋 Existing user: {username} with role: {role}")
+        
+        # Add to user_store
+        if email not in user_store:
+            user_store[email] = {
+                "username": username,
+                "email": email,
+                "password_hash": "",
+                "role": role,
+                "quota": 10,
+                "used": 0,
+                "created_at": datetime.now().isoformat(),
+                "google_id": user_info.get('sub'),
+                "name": name,
+                "picture": picture
+            }
+            logger.info(f"✅ Added Google OAuth user to user_store: {email}")
+        
+        # Add to USERS_DB if needed
+        if not existing_user:
+            USERS_DB[email] = {
+                "username": username,
+                "email": email,
+                "hashed_password": "",
+                "role": role,
+                "search_limit": 10
+            }
+            logger.info(f"✅ Added Google OAuth user to USERS_DB: {email}")
+        
+        # Create access token
+        access_token = create_access_token({
+            "sub": email,
+            "role": role
+        })
+        
+        logger.info(f"✅ Google OAuth login successful for {email} with role: {role}")
+        
+        # Redirect to frontend with token
+        frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')
+        redirect_url = f"{frontend_url}/auth/google/callback?token={access_token}&email={email}&username={username}&role={role}"
+        
+        return RedirectResponse(url=redirect_url)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Google OAuth callback failed: {e}")
+        # Redirect to frontend with error
+        frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')
+        return RedirectResponse(url=f"{frontend_url}/login?error=google_auth_failed")
+
+
+
 # ============================================================================
 # REVENUE INPUT ENDPOINTS
 # ============================================================================
