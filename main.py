@@ -4697,7 +4697,7 @@ async def google_callback(request: Request):
         # ✅ REDIRECT TO DASHBOARD WITH HASH (not query params)
         # Hash fragments are NOT sent to server and bypass routing issues
         frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')
-        redirect_url = f"{frontend_url}/dashboard#token={access_token}&email={email}&username={username}&role={role}"
+        redirect_url = f"{frontend_url}/dashboard?google_auth=1"
         
         logger.info(f"🎯 Redirecting to: {redirect_url[:80]}...")
         
