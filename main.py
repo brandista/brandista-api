@@ -147,6 +147,7 @@ from fastapi import FastAPI, HTTPException, Header, Depends, BackgroundTasks, Re
 from auth_magic_link import create_magic_link_auth, MagicLinkRequest, MagicLinkVerify
 from authlib.integrations.starlette_client import OAuth
 from starlette.config import Config as StarletteConfig
+from starlette.responses import RedirectResponse
 
 
 # Playwright imports (optional for SPA support)
