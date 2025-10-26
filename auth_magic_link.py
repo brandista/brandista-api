@@ -171,8 +171,8 @@ class MagicLinkEmailService:
         
         # Remove trailing slash to avoid double slashes
         frontend_url = config.FRONTEND_URL.rstrip('/')
-        # FIXED: Add /growthengine prefix for production routing
-        magic_link = f"{frontend_url}/growthengine/auth/magic-link/verify?token={token}"  
+        # ✅ FINAL FIX: No /growthengine prefix - Router handles all routing
+        magic_link = f"{frontend_url}/auth/magic-link/verify?token={token}"  
         html = MagicLinkEmailService.generate_email_html(email, magic_link, metadata)
         subject = "🚀 Sign in to Brandista"
         
