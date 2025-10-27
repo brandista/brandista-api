@@ -4601,7 +4601,7 @@ async def verify_magic_link_get(token: str, req: Request):
 
        
 # ============================================================================
-# GOOGLE OAUTH ENDPOINTS (lisää tämä rivin 4567 jälkeen)
+# GOOGLE OAUTH ENDPOINTS - FIXED VERSION
 # ============================================================================
 
 @app.get("/auth/google/login")
@@ -4686,7 +4686,7 @@ async def google_callback(request: Request):
             }
             logger.info(f"✅ Added Google OAuth user to USERS_DB: {email}")
         
-        # Create access token
+        # Create JWT access token for our API
         access_token = create_access_token({
             "sub": email,
             "role": role
@@ -4694,12 +4694,17 @@ async def google_callback(request: Request):
         
         logger.info(f"✅ Google OAuth login successful for {email} with role: {role}")
         
-        # ✅ REDIRECT TO DASHBOARD WITH HASH (not query params)
-        # Hash fragments are NOT sent to server and bypass routing issues
+        # ✅ SEND TOKEN TO FRONTEND via query parameters
         frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')
-        redirect_url = f"{frontend_url}/dashboard?google_auth=1"
+        redirect_url = (
+            f"{frontend_url}/auth/google/callback"
+            f"?token={access_token}"
+            f"&email={email}"
+            f"&username={username}"
+            f"&role={role}"
+        )
         
-        logger.info(f"🎯 Redirecting to: {redirect_url[:80]}...")
+        logger.info(f"🎯 Redirecting to callback with token: {redirect_url[:80]}...")
         
         return RedirectResponse(url=redirect_url)
         
@@ -4710,6 +4715,8 @@ async def google_callback(request: Request):
         # Redirect to frontend with error
         frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')
         return RedirectResponse(url=f"{frontend_url}/login?error=google_auth_failed")
+
+        
 # ============================================================================
 # REVENUE INPUT ENDPOINTS
 # ============================================================================
