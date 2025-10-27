@@ -11,7 +11,7 @@ Description: Complete production-ready website analysis with configurable scorin
 # ============================================================================
 # STANDARD LIBRARY IMPORTS
 # ============================================================================
-# import os
+import os
 import re
 import hashlib
 import logging
