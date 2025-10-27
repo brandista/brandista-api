@@ -4694,17 +4694,19 @@ async def google_callback(request: Request):
         
         logger.info(f"✅ Google OAuth login successful for {email} with role: {role}")
         
-        # ✅ SEND TOKEN TO FRONTEND via query parameters
+        # ✅ REDIRECT DIRECTLY TO DASHBOARD WITH HASH PARAMETERS
+        # This avoids the callback route and uses the hash handler already in Dashboard.tsx
+        # Hash parameters don't trigger page reload routing issues
         frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')
         redirect_url = (
-            f"{frontend_url}/growthengine/auth/google/callback"
-            f"?token={access_token}"
+            f"{frontend_url}/dashboard"
+            f"#token={access_token}"
             f"&email={email}"
             f"&username={username}"
             f"&role={role}"
         )
         
-        logger.info(f"🎯 Redirecting to callback with token: {redirect_url[:80]}...")
+        logger.info(f"🎯 Redirecting to dashboard with token hash: {redirect_url[:80]}...")
         
         return RedirectResponse(url=redirect_url)
         
@@ -4714,7 +4716,8 @@ async def google_callback(request: Request):
         logger.error(f"❌ Google OAuth callback failed: {e}")
         # Redirect to frontend with error
         frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')
-        return RedirectResponse(url=f"{frontend_url}/growthengine/login?error=google_auth_failed")
+        return RedirectResponse(url=f"{frontend_url}/login?error=google_auth_failed")
+
         
 # ============================================================================
 # REVENUE INPUT ENDPOINTS
