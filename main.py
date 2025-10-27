@@ -4635,6 +4635,7 @@ async def google_callback(request: Request):
         email = user_info.get('email')
         name = user_info.get('name', '')
         picture = user_info.get('picture', '')
+        google_id = user_info.get('sub', '')
         
         logger.info(f"✅ Google OAuth callback successful for: {email}")
         
@@ -4669,7 +4670,7 @@ async def google_callback(request: Request):
                 "quota": 10,
                 "used": 0,
                 "created_at": datetime.now().isoformat(),
-                "google_id": user_info.get('sub'),
+                "google_id": google_id,
                 "name": name,
                 "picture": picture
             }
@@ -4677,10 +4678,21 @@ async def google_callback(request: Request):
         
         # Add to USERS_DB if needed
         if not existing_user:
-            # Hash empty password (Google OAuth users don't have password)
+            # ✅ FIX: Create a safe password for OAuth users
+            # Use google_id instead of empty string, and truncate to 72 bytes for bcrypt
+            safe_password = f"google_oauth_{google_id}"[:72]
+            
+            # Hash the safe password
             from passlib.context import CryptContext
             pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-            hashed_password = pwd_context.hash("")  # Empty password for OAuth users
+            
+            try:
+                hashed_password = pwd_context.hash(safe_password)
+            except Exception as hash_error:
+                logger.error(f"❌ Password hashing failed: {hash_error}")
+                # Fallback: use a shorter, simpler password
+                safe_password = google_id[:50] if google_id else "oauth_user"
+                hashed_password = pwd_context.hash(safe_password)
             
             USERS_DB[username] = {
                 "username": username,
@@ -4750,6 +4762,8 @@ async def google_callback(request: Request):
         raise
     except Exception as e:
         logger.error(f"❌ Google OAuth callback failed: {e}")
+        import traceback
+        logger.error(f"📋 Traceback: {traceback.format_exc()}")
         # Redirect to frontend with error
         frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')
         return RedirectResponse(url=f"{frontend_url}/login?error=google_auth_failed")
