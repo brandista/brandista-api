@@ -4677,14 +4677,48 @@ async def google_callback(request: Request):
         
         # Add to USERS_DB if needed
         if not existing_user:
-            USERS_DB[email] = {
+            # Hash empty password (Google OAuth users don't have password)
+            from passlib.context import CryptContext
+            pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+            hashed_password = pwd_context.hash("")  # Empty password for OAuth users
+            
+            USERS_DB[username] = {
                 "username": username,
                 "email": email,
-                "hashed_password": "",
+                "hashed_password": hashed_password,
                 "role": role,
                 "search_limit": 10
             }
-            logger.info(f"✅ Added Google OAuth user to USERS_DB: {email}")
+            logger.info(f"✅ Added Google OAuth user to USERS_DB: {username}")
+            
+            # ✅ PERSIST TO DATABASE
+            try:
+                # Import database function if available
+                try:
+                    from database import create_user_in_db, DATABASE_ENABLED
+                    
+                    if DATABASE_ENABLED:
+                        success = create_user_in_db(
+                            username=username,
+                            hashed_password=hashed_password,
+                            role=role,
+                            search_limit=10,
+                            email=email
+                        )
+                        if success:
+                            logger.info(f"✅ Persisted Google OAuth user to database: {username}")
+                        else:
+                            logger.warning(f"⚠️ Failed to persist to database: {username}")
+                    else:
+                        logger.info("ℹ️ Database not enabled, user stored in memory only")
+                        
+                except ImportError:
+                    logger.warning("⚠️ Database module not available, user stored in memory only")
+                    
+            except Exception as db_error:
+                logger.error(f"⚠️ Database error: {db_error}")
+                # Continue anyway - user is in memory
+
         
         # Create JWT access token for our API
         access_token = create_access_token({
@@ -4719,7 +4753,6 @@ async def google_callback(request: Request):
         # Redirect to frontend with error
         frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')
         return RedirectResponse(url=f"{frontend_url}/login?error=google_auth_failed")
-        
 # ============================================================================
 # REVENUE INPUT ENDPOINTS
 # ============================================================================
@@ -5694,6 +5727,49 @@ def require_admin_or_super(user: UserInfo = Depends(get_current_user)):
     if user.role not in ["admin", "super_user"]:
         raise HTTPException(403, "Admin or Super User access required")
     return user
+
+# ============================================================================
+# ADMIN ROLE UPDATE ENDPOINT
+# Add this to main.py after the existing admin endpoints (around line 5725)
+# ============================================================================
+
+@app.put("/admin/users/{username}/role")
+async def admin_update_user_role(
+    username: str, 
+    payload: UpdateRoleRequest, 
+    user: UserInfo = Depends(require_admin)
+):
+    """Update user role (admin only)"""
+    
+    # Prevent self-demotion
+    if username == user.username and payload.role != "admin":
+        raise HTTPException(400, "Cannot change your own role")
+    
+    # Check user exists in memory
+    if username not in USERS_DB:
+        # Check database
+        if DATABASE_ENABLED and not get_user_from_db(username):
+            raise HTTPException(404, f"User '{username}' not found")
+    
+    # Update in memory
+    if username in USERS_DB:
+        USERS_DB[username]["role"] = payload.role
+    
+    # Update in database
+    if DATABASE_ENABLED:
+        success = update_user_in_db(username, role=payload.role)
+        if not success:
+            raise HTTPException(500, "Failed to update user in database")
+    
+    logger.info(f"Admin {user.username} updated role for {username} to {payload.role}")
+    
+    return {
+        "username": username,
+        "role": payload.role,
+        "message": f"Role updated to {payload.role}"
+    }
+
+
 
 @app.delete("/admin/users/{username}")
 async def admin_delete_user(username: str, user: UserInfo = Depends(require_admin)):
