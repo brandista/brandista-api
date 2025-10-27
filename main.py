@@ -4697,7 +4697,7 @@ async def google_callback(request: Request):
         # ✅ SEND TOKEN TO FRONTEND via query parameters
         frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')
         redirect_url = (
-            f"{frontend_url}/auth/google/callback"
+            f"{frontend_url}/growthengine/auth/google/callback"
             f"?token={access_token}"
             f"&email={email}"
             f"&username={username}"
@@ -4714,8 +4714,7 @@ async def google_callback(request: Request):
         logger.error(f"❌ Google OAuth callback failed: {e}")
         # Redirect to frontend with error
         frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')
-        return RedirectResponse(url=f"{frontend_url}/login?error=google_auth_failed")
-
+        return RedirectResponse(url=f"{frontend_url}/growthengine/login?error=google_auth_failed")
         
 # ============================================================================
 # REVENUE INPUT ENDPOINTS
