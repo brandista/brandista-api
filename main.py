@@ -4678,21 +4678,39 @@ async def google_callback(request: Request):
         
         # Add to USERS_DB if needed
         if not existing_user:
-            # ✅ FIX: Create a safe password for OAuth users
-            # Use google_id instead of empty string, and truncate to 72 bytes for bcrypt
-            safe_password = f"google_oauth_{google_id}"[:72]
+            # ✅ FINAL FIX: Use SHA256 hash of google_id to create a short, safe password
+            import hashlib
+            # Create a deterministic but short password from google_id
+            password_base = hashlib.sha256(google_id.encode()).hexdigest()[:32]  # 32 chars, well under 72
+            safe_password = f"oauth_{password_base}"  # Total: 38 chars
+            
+            logger.info(f"🔐 Creating password hash for OAuth user (length: {len(safe_password)} bytes)")
             
             # Hash the safe password
             from passlib.context import CryptContext
             pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
             
             try:
-                hashed_password = pwd_context.hash(safe_password)
+                # Ensure password is bytes and under 72 bytes
+                if isinstance(safe_password, str):
+                    safe_password_bytes = safe_password.encode('utf-8')
+                else:
+                    safe_password_bytes = safe_password
+                
+                # Double-check length
+                if len(safe_password_bytes) > 72:
+                    safe_password_bytes = safe_password_bytes[:72]
+                    logger.warning(f"⚠️ Truncated password to 72 bytes")
+                
+                hashed_password = pwd_context.hash(safe_password_bytes)
+                logger.info(f"✅ Password hashed successfully")
+                
             except Exception as hash_error:
                 logger.error(f"❌ Password hashing failed: {hash_error}")
-                # Fallback: use a shorter, simpler password
-                safe_password = google_id[:50] if google_id else "oauth_user"
-                hashed_password = pwd_context.hash(safe_password)
+                # Ultimate fallback: use the simplest possible password
+                fallback_password = "oauth_default"
+                hashed_password = pwd_context.hash(fallback_password)
+                logger.warning(f"⚠️ Used fallback password")
             
             USERS_DB[username] = {
                 "username": username,
@@ -7226,9 +7244,6 @@ def _calculate_recommendation_priority(rec: Dict) -> int:
         score += 10
     
     return score
-
-
-
 
 # ============================================================================
 # MAIN APPLICATION ENTRY POINT
