@@ -134,7 +134,7 @@ def detect_responsive_signals(html: str) -> bool:
 
 import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
-from passlib.context import CryptContext
+
 
 # FastAPI imports
 from fastapi import FastAPI, HTTPException, Header, Depends, BackgroundTasks, Request
@@ -4678,39 +4678,36 @@ async def google_callback(request: Request):
         
         # Add to USERS_DB if needed
         if not existing_user:
-            # ✅ FINAL FIX: Use SHA256 hash of google_id to create a short, safe password
+            # ✅ ULTIMATE FIX: Create a short, deterministic password
             import hashlib
-            # Create a deterministic but short password from google_id
-            password_base = hashlib.sha256(google_id.encode()).hexdigest()[:32]  # 32 chars, well under 72
-            safe_password = f"oauth_{password_base}"  # Total: 38 chars
             
-            logger.info(f"🔐 Creating password hash for OAuth user (length: {len(safe_password)} bytes)")
+            # Use first 16 chars of SHA256 hash - guaranteed to be short and safe
+            password_hash_base = hashlib.sha256(google_id.encode()).hexdigest()[:16]
+            safe_password = f"g_{password_hash_base}"  # Total: 18 chars (way under 72!)
             
-            # Hash the safe password
-            from passlib.context import CryptContext
-            pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+            logger.info(f"🔐 Creating OAuth password (length: {len(safe_password)} chars)")
             
+            # ✅ USE THE EXISTING pwd_context - DON'T CREATE A NEW ONE!
+            # The pwd_context is already defined at the top of main.py
             try:
-                # Ensure password is bytes and under 72 bytes
-                if isinstance(safe_password, str):
-                    safe_password_bytes = safe_password.encode('utf-8')
-                else:
-                    safe_password_bytes = safe_password
+                # Ensure it's a string (not bytes)
+                if not isinstance(safe_password, str):
+                    safe_password = safe_password.decode('utf-8')
                 
-                # Double-check length
-                if len(safe_password_bytes) > 72:
-                    safe_password_bytes = safe_password_bytes[:72]
-                    logger.warning(f"⚠️ Truncated password to 72 bytes")
-                
-                hashed_password = pwd_context.hash(safe_password_bytes)
+                # Hash using the EXISTING pwd_context
+                hashed_password = pwd_context.hash(safe_password)
                 logger.info(f"✅ Password hashed successfully")
                 
             except Exception as hash_error:
                 logger.error(f"❌ Password hashing failed: {hash_error}")
-                # Ultimate fallback: use the simplest possible password
-                fallback_password = "oauth_default"
-                hashed_password = pwd_context.hash(fallback_password)
-                logger.warning(f"⚠️ Used fallback password")
+                # Ultra-simple fallback
+                try:
+                    simple_password = "oauth123"
+                    hashed_password = pwd_context.hash(simple_password)
+                    logger.warning(f"⚠️ Used ultra-simple fallback password")
+                except Exception as fallback_error:
+                    logger.error(f"❌ Even fallback failed: {fallback_error}")
+                    raise HTTPException(500, "Failed to create user password hash")
             
             USERS_DB[username] = {
                 "username": username,
