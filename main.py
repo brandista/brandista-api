@@ -5728,10 +5728,15 @@ def require_admin_or_super(user: UserInfo = Depends(get_current_user)):
         raise HTTPException(403, "Admin or Super User access required")
     return user
 
+
 # ============================================================================
 # ADMIN ROLE UPDATE ENDPOINT
-# Add this to main.py after the existing admin endpoints (around line 5725)
 # ============================================================================
+
+# ✅ UpdateRoleRequest määritellään VAIN KERRAN!
+class UpdateRoleRequest(BaseModel):
+    role: str = Field(..., pattern="^(user|admin|super_user)$")
+
 
 @app.put("/admin/users/{username}/role")
 async def admin_update_user_role(
@@ -5768,7 +5773,6 @@ async def admin_update_user_role(
         "role": payload.role,
         "message": f"Role updated to {payload.role}"
     }
-
 
 
 @app.delete("/admin/users/{username}")
