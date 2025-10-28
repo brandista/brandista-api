@@ -4937,7 +4937,7 @@ async def verify_magic_link_get(token: str, req: Request):
         
         # Create access token
         access_token = create_access_token({
-            "sub": email,
+            "sub": username,
             "role": role
         })
         
