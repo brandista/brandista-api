@@ -3163,6 +3163,7 @@ def compute_business_impact_with_input(
         growth_rate_low = (score_improvement_potential * 0.3) / 100
         growth_rate_high = (score_improvement_potential * 0.5) / 100
     else:
+        pass
         # High score → incremental gains
         growth_rate_low = (score_improvement_potential * 0.2) / 100
         growth_rate_high = (score_improvement_potential * 0.4) / 100
@@ -5291,11 +5292,24 @@ async def _perform_comprehensive_analysis_internal(
         headers=httpx.Headers({})
     )
     
-    if 'modern_features' in basic_analysis.get('details', {}):
-        modern_features = basic_analysis['details']['modern_features']
-        technical_audit['technology_description'] = modern_features.get('technology_description', 'No data')
-        technical_audit['detected_frameworks'] = modern_features.get('detected_frameworks', [])
-        technical_audit['modern_js_features'] = modern_features.get('modern_js_features', 0)
+    if 'modern_features' in result.get('basic_analysis', {}).get('detailed_findings', {}):
+    modern_features = basic_analysis['detailed_findings']['modern_features']
+    logger.info(f"✅ Found modern_features: {len(modern_features.get('detected_frameworks', []))} frameworks")
+    
+    technical_audit['technology_description'] = modern_features.get('technology_description', 'No data')
+    technical_audit['detected_frameworks'] = modern_features.get('detected_frameworks', [])
+    technical_audit['modern_js_features'] = modern_features.get('modern_js_features', 0)
+    
+    logger.info(f"✅ Enriched technical_audit with: {technical_audit['detected_frameworks']}")
+    else:
+    logger.warning(
+        f"⚠️ modern_features NOT FOUND in detailed_findings! "
+        f"Available keys: {list(basic_analysis.get('detailed_findings', {}).keys())}"
+    )
+    # Fallback values
+    technical_audit['technology_description'] = 'Analysis pending'
+    technical_audit['detected_frameworks'] = []
+    technical_audit['modern_js_features'] = 0
 
     content_analysis = await analyze_content_quality(html_content)
     ux_analysis = await analyze_ux_elements(html_content)
