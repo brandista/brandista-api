@@ -4977,7 +4977,7 @@ async def google_login(request: Request):
 
 
 @app.get("/auth/google/callback")
-async def google_callback(request: Request, background_tasks: BackgroundTasks):  # ← Added BackgroundTasks
+async def google_callback(request: Request, background_tasks: BackgroundTasks):
     """Handle Google OAuth callback"""
     try:
         if not os.getenv('GOOGLE_CLIENT_ID'):
@@ -5001,26 +5001,40 @@ async def google_callback(request: Request, background_tasks: BackgroundTasks): 
         if not email:
             raise HTTPException(400, "Email not provided by Google")
         
-        # Check if user exists
+        # ✅ FIX: Check DATABASE FIRST for existing user and role
         existing_user = None
         existing_username = None
-        is_new_user = True  # ← Track if this is a new user
-        
-        for uname, udata in USERS_DB.items():
-            if udata.get("email") == email:
-                existing_user = udata
-                existing_username = uname
-                is_new_user = False  # ← User already exists
-                break
-        
-        # Determine role
-        role = "user"
+        is_new_user = True
+        role = "user"  # Default
         username = email.split('@')[0]
         
-        if existing_user:
-            role = existing_user.get("role", "user")
-            username = existing_username
-            logger.info(f"📋 Existing user: {username} with role: {role}")
+        # Check database first
+        try:
+            from database import get_user_from_db, DATABASE_ENABLED
+            
+            if DATABASE_ENABLED:
+                db_user = get_user_from_db(username)
+                if db_user:
+                    existing_user = db_user
+                    existing_username = db_user['username']
+                    role = db_user.get('role', 'user')  # ✅ Use DB role!
+                    is_new_user = False
+                    logger.info(f"📋 Found user in DB: {username} with role: {role}")
+        except ImportError:
+            logger.warning("⚠️ Database module not available")
+        except Exception as db_error:
+            logger.warning(f"⚠️ Database lookup error: {db_error}")
+        
+        # If not in DB, check memory (USERS_DB)
+        if not existing_user:
+            for uname, udata in USERS_DB.items():
+                if udata.get("email") == email:
+                    existing_user = udata
+                    existing_username = uname
+                    role = udata.get("role", "user")
+                    is_new_user = False
+                    logger.info(f"📋 Found user in memory: {username} with role: {role}")
+                    break
         
         # Add to user_store
         if email not in user_store:
@@ -5121,7 +5135,7 @@ async def google_callback(request: Request, background_tasks: BackgroundTasks): 
         # Create JWT access token for our API
         access_token = create_access_token({
             "sub": email,
-            "role": role
+            "role": role  # ✅ Now uses DB role!
         })
         
         logger.info(f"✅ Google OAuth login successful for {email} with role: {role}")
