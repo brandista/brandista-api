@@ -5358,9 +5358,6 @@ async def _perform_comprehensive_analysis_internal(
             "content_analysis": content_analysis,
             "ux_analysis": ux_analysis,
             "competitive_analysis": competitive_analysis,
-            "technology_description": technical_audit.get('technology_description', 'No data'),
-            "detected_frameworks": technical_audit.get('detected_frameworks', []),
-            "modern_js_features": technical_audit.get('modern_js_features', 0)
             
         },
         "smart": {
