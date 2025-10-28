@@ -23,12 +23,15 @@ def connect_db():
         return None
 
 def init_database():
+    """Initialize database tables and auto-migrate schema if needed"""
     conn = connect_db()
     if not conn:
         logger.warning("No database connection - skipping init")
         return
     try:
         cursor = conn.cursor()
+        
+        # Fix old column name (backward compatibility)
         try:
             cursor.execute("SELECT column_name FROM information_schema.columns WHERE table_name='users' AND column_name='password_hash'")
             if cursor.fetchone():
@@ -36,6 +39,8 @@ def init_database():
                 logger.info("🔧 Auto-fixed: Renamed password_hash to hashed_password")
         except Exception as e:
             logger.warning(f"Column rename check: {e}")
+        
+        # Create table if not exists
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 username VARCHAR(100) PRIMARY KEY,
@@ -48,6 +53,21 @@ def init_database():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        
+        # ✅ FIX: Add email column if it doesn't exist (auto-migration)
+        try:
+            cursor.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name='users' AND column_name='email'
+            """)
+            if not cursor.fetchone():
+                cursor.execute("ALTER TABLE users ADD COLUMN email VARCHAR(255)")
+                logger.info("🔧 Auto-fixed: Added email column to users table")
+                conn.commit()
+        except Exception as e:
+            logger.warning(f"Email column migration check: {e}")
+        
         conn.commit()
         logger.info("✅ Database tables initialized")
     except Exception as e:
@@ -129,7 +149,7 @@ def create_user_in_db(username: str, hashed_password: str, role: str = 'user', s
             logger.info(f"ℹ️ User already exists in DB: {username}")
         return success
     except Exception as e:
-        logger.error(f"Failed to create user {username}: {e}")
+        logger.error(f"❌ Failed to create user {username}: {e}")
         conn.rollback()
         return False
     finally:
@@ -186,6 +206,7 @@ def delete_user_from_db(username: str):
         conn.close()
 
 def sync_hardcoded_users_to_db(users_dict):
+    """Sync hardcoded users to database (called at startup)"""
     conn = connect_db()
     if not conn:
         logger.info("No database - skipping user sync")
@@ -193,7 +214,13 @@ def sync_hardcoded_users_to_db(users_dict):
     synced = 0
     for username, user_data in users_dict.items():
         try:
-            if create_user_in_db(username, user_data['hashed_password'], user_data['role'], user_data['search_limit']):
+            # Don't pass email for hardcoded users (they don't have it)
+            if create_user_in_db(
+                username, 
+                user_data['hashed_password'], 
+                user_data['role'], 
+                user_data['search_limit']
+            ):
                 synced += 1
         except Exception as e:
             logger.error(f"Failed to sync user {username}: {e}")
