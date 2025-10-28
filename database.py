@@ -10,6 +10,9 @@ import logging
 logger = logging.getLogger(__name__)
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+# ✅ FIXED: Add DATABASE_ENABLED flag (main.py tries to import this!)
+DATABASE_ENABLED = bool(DATABASE_URL)
+
 def connect_db():
     if not DATABASE_URL:
         return None
@@ -40,6 +43,7 @@ def init_database():
                 role VARCHAR(50) NOT NULL DEFAULT 'user',
                 search_limit INTEGER NOT NULL DEFAULT 3,
                 searches_used INTEGER NOT NULL DEFAULT 0,
+                email VARCHAR(255),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -93,17 +97,36 @@ def get_all_users_from_db():
         cursor.close()
         conn.close()
 
-def create_user_in_db(username: str, hashed_password: str, role: str = 'user', search_limit: int = 3):
+def create_user_in_db(username: str, hashed_password: str, role: str = 'user', search_limit: int = 3, email: str = None):
+    """
+    Create user in database
+    
+    Args:
+        username: Username
+        hashed_password: Hashed password
+        role: User role (user/admin/super_user)
+        search_limit: Search quota limit
+        email: User email (optional)
+    """
     conn = connect_db()
     if not conn:
         return False
     try:
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO users (username, hashed_password, role, search_limit, searches_used) VALUES (%s, %s, %s, %s, 0) ON CONFLICT (username) DO NOTHING", (username, hashed_password, role, search_limit))
+        
+        # ✅ FIXED: Include email field
+        cursor.execute("""
+            INSERT INTO users (username, hashed_password, role, search_limit, searches_used, email) 
+            VALUES (%s, %s, %s, %s, 0, %s) 
+            ON CONFLICT (username) DO NOTHING
+        """, (username, hashed_password, role, search_limit, email))
+        
         conn.commit()
         success = cursor.rowcount > 0
         if success:
-            logger.info(f"✅ Created user in DB: {username}")
+            logger.info(f"✅ Created user in DB: {username} (email: {email})")
+        else:
+            logger.info(f"ℹ️ User already exists in DB: {username}")
         return success
     except Exception as e:
         logger.error(f"Failed to create user {username}: {e}")
@@ -120,7 +143,7 @@ def update_user_in_db(username: str, **kwargs):
     try:
         cursor = conn.cursor()
         fields, values = [], []
-        for k in ['search_limit', 'searches_used', 'role']:
+        for k in ['search_limit', 'searches_used', 'role', 'email']:
             if k in kwargs:
                 fields.append(f"{k} = %s")
                 values.append(kwargs[k])
