@@ -4937,7 +4937,7 @@ async def verify_magic_link_get(token: str, req: Request):
         
         # Create access token
         access_token = create_access_token({
-            "sub": username,
+            "sub": email,
             "role": role
         })
         
@@ -5134,7 +5134,7 @@ async def google_callback(request: Request, background_tasks: BackgroundTasks):
         
         # Create JWT access token for our API
         access_token = create_access_token({
-            "sub": email,
+            "sub": user,
             "role": role  # ✅ Now uses DB role!
         })
         
