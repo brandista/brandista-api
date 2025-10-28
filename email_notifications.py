@@ -18,8 +18,8 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 # Admin email settings (from environment)
-ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "tuukka@brandista.com")
-FROM_EMAIL = os.getenv("FROM_EMAIL", "tuukka@brandista.com")
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "tuukka@brandista.eu")
+FROM_EMAIL = os.getenv("FROM_EMAIL", "tuukka@brandista.eu")
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY", "")
 
 # Import SendGrid if available
