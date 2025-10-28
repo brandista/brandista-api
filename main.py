@@ -5277,6 +5277,12 @@ async def _perform_comprehensive_analysis_internal(
         headers=httpx.Headers({})
     )
     
+    if 'modern_features' in basic_analysis.get('details', {}):
+        modern_features = basic_analysis['details']['modern_features']
+        technical_audit['technology_description'] = modern_features.get('technology_description', 'No data')
+        technical_audit['detected_frameworks'] = modern_features.get('detected_frameworks', [])
+        technical_audit['modern_js_features'] = modern_features.get('modern_js_features', 0)
+
     content_analysis = await analyze_content_quality(html_content)
     ux_analysis = await analyze_ux_elements(html_content)
     social_analysis = await analyze_social_media_presence(url, html_content)
