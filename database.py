@@ -119,7 +119,7 @@ def get_all_users_from_db():
 
 def create_user_in_db(username: str, hashed_password: str, role: str = 'user', search_limit: int = 3, email: str = None):
     """
-    Create user in database
+    Create or update user in database (UPSERT)
     
     Args:
         username: Username
@@ -127,6 +127,9 @@ def create_user_in_db(username: str, hashed_password: str, role: str = 'user', s
         role: User role (user/admin/super_user)
         search_limit: Search quota limit
         email: User email (optional)
+    
+    Returns:
+        bool: True if created or updated successfully
     """
     conn = connect_db()
     if not conn:
@@ -134,22 +137,31 @@ def create_user_in_db(username: str, hashed_password: str, role: str = 'user', s
     try:
         cursor = conn.cursor()
         
-        # ✅ FIXED: Include email field
+        # ✅ FIX: Use UPSERT to update role/email if user exists
+        # This ensures admin role persists across logins!
         cursor.execute("""
             INSERT INTO users (username, hashed_password, role, search_limit, searches_used, email) 
             VALUES (%s, %s, %s, %s, 0, %s) 
-            ON CONFLICT (username) DO NOTHING
+            ON CONFLICT (username) DO UPDATE SET
+                role = EXCLUDED.role,
+                email = EXCLUDED.email,
+                hashed_password = EXCLUDED.hashed_password,
+                search_limit = EXCLUDED.search_limit,
+                updated_at = CURRENT_TIMESTAMP
         """, (username, hashed_password, role, search_limit, email))
         
         conn.commit()
-        success = cursor.rowcount > 0
-        if success:
-            logger.info(f"✅ Created user in DB: {username} (email: {email})")
+        
+        # Check if it was INSERT or UPDATE
+        if cursor.rowcount > 0:
+            logger.info(f"✅ User saved to DB: {username} (role: {role}, email: {email})")
+            return True
         else:
-            logger.info(f"ℹ️ User already exists in DB: {username}")
-        return success
+            logger.warning(f"⚠️ No changes made for user: {username}")
+            return False
+            
     except Exception as e:
-        logger.error(f"❌ Failed to create user {username}: {e}")
+        logger.error(f"❌ Failed to save user {username}: {e}")
         conn.rollback()
         return False
     finally:
