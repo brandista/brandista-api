@@ -5134,7 +5134,7 @@ async def google_callback(request: Request, background_tasks: BackgroundTasks):
         
         # Create JWT access token for our API
         access_token = create_access_token({
-            "sub": user,
+            "sub": username,
             "role": role  # ✅ Now uses DB role!
         })
         
