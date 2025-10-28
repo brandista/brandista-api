@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Email Notification System for Brandista
+Email Notification System for Brandista - SendGrid Version
 Sends admin notifications on new user registrations
+Fixed: Uses SendGrid API instead of SMTP (Railway compatible)
 """
 
 import os
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 from typing import Optional
 import logging
@@ -21,11 +19,17 @@ logger = logging.getLogger(__name__)
 
 # Admin email settings (from environment)
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@brandista.com")
-SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER = os.getenv("SMTP_USER", "")  # Your email
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")  # App password
 FROM_EMAIL = os.getenv("FROM_EMAIL", "noreply@brandista.com")
+SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY", "")
+
+# Import SendGrid if available
+try:
+    from sendgrid import SendGridAPIClient
+    from sendgrid.helpers.mail import Mail, Email, To, Content
+    SENDGRID_AVAILABLE = True
+except ImportError:
+    SENDGRID_AVAILABLE = False
+    logger.warning("SendGrid not installed. Install with: pip install sendgrid")
 
 # ============================================================================
 # EMAIL FUNCTIONS
@@ -33,7 +37,7 @@ FROM_EMAIL = os.getenv("FROM_EMAIL", "noreply@brandista.com")
 
 def send_email(to_email: str, subject: str, html_body: str, text_body: str = "") -> bool:
     """
-    Send email via SMTP
+    Send email via SendGrid API (Railway compatible)
     
     Args:
         to_email: Recipient email
@@ -44,36 +48,31 @@ def send_email(to_email: str, subject: str, html_body: str, text_body: str = "")
     Returns:
         bool: True if sent successfully
     """
-    if not SMTP_USER or not SMTP_PASSWORD:
-        logger.warning("SMTP credentials not configured, skipping email")
+    if not SENDGRID_AVAILABLE:
+        logger.warning("SendGrid not available, skipping email")
+        return False
+    
+    if not SENDGRID_API_KEY:
+        logger.warning("SENDGRID_API_KEY not configured, skipping email")
         return False
     
     try:
-        # Create message
-        msg = MIMEMultipart('alternative')
-        msg['Subject'] = subject
-        msg['From'] = FROM_EMAIL
-        msg['To'] = to_email
+        message = Mail(
+            from_email=Email(FROM_EMAIL),
+            to_emails=To(to_email),
+            subject=subject,
+            plain_text_content=Content("text/plain", text_body) if text_body else None,
+            html_content=Content("text/html", html_body)
+        )
         
-        # Add text and HTML parts
-        if text_body:
-            part1 = MIMEText(text_body, 'plain', 'utf-8')
-            msg.attach(part1)
+        sg = SendGridAPIClient(SENDGRID_API_KEY)
+        response = sg.send(message)
         
-        part2 = MIMEText(html_body, 'html', 'utf-8')
-        msg.attach(part2)
-        
-        # Send email
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASSWORD)
-            server.send_message(msg)
-        
-        logger.info(f"Email sent successfully to {to_email}")
+        logger.info(f"✅ Email sent successfully to {to_email} (status: {response.status_code})")
         return True
         
     except Exception as e:
-        logger.error(f"Failed to send email to {to_email}: {e}")
+        logger.error(f"❌ Failed to send email to {to_email}: {e}")
         return False
 
 
@@ -306,7 +305,7 @@ def send_welcome_email(user_email: str, user_name: Optional[str] = None) -> bool
             </div>
             
             <p style="text-align: center;">
-                <a href="https://brandista.app" class="button">Aloita analyysi →</a>
+                <a href="https://brandista.eu" class="button">Aloita analyysi →</a>
             </p>
             
             <p>Jos tarvitset apua, vastaa tähän viestiin tai ota yhteyttä tukeen.</p>
@@ -332,7 +331,7 @@ def send_welcome_email(user_email: str, user_name: Optional[str] = None) -> bool
     - Saada AI-avusteisia strategisia suosituksia
     - Seurata kilpailijoiden muutoksia
     
-    Aloita analyysi: https://brandista.app
+    Aloita analyysi: https://brandista.eu
     
     -- 
     Brandista Team
