@@ -1,24 +1,32 @@
-# Use official Playwright Python image which includes browsers pre-installed
-FROM mcr.microsoft.com/playwright/python:v1.40.0-jammy
+# ============================================================================
+# BRANDISTA COMPETITIVE INTELLIGENCE API - DOCKERFILE
+# Production-ready with Python 3.11 + Playwright
+# ============================================================================
 
-# Set working directory
+FROM mcr.microsoft.com/playwright/python:v1.45.0-jammy
+
 WORKDIR /app
 
-# Copy requirements first for better Docker layer caching
-COPY requirements.txt .
-
 # Install Python dependencies
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
 
-# Expose port 8080 (Railway default)
-EXPOSE 8080
+# Install Playwright browsers (if not already in base image)
+RUN playwright install chromium --with-deps || echo "Chromium already installed"
+
+# Create non-root user for security
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+USER appuser
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:8080/health || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD python -c "import httpx; httpx.get('http://localhost:8000/health', timeout=5)" || exit 1
 
-# Start the application
-CMD ["python", "main.py"]
+# Expose port
+EXPOSE 8000
+
+# Run application
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
