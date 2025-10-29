@@ -2520,13 +2520,70 @@ async def analyze_basic_metrics_enhanced(
             score_components['technical'] += bonus
             details['modern_tech_bonus'] = bonus
         
-        # ✅ Extract framework data for later use
-        detected_frameworks = modern_features.get('detected_frameworks', [])
+        # ✅ Extract and filter framework data
+        all_detected = modern_features.get('detected_frameworks', [])
         technology_description = modern_features.get('technology_description', 'Standard')
+        
+        # ✅ FILTER: Exclude non-framework items
+        exclude_list = [
+            'frameworks', 'spa_detected', 'minimal_content', 'content_words',
+            'requires_js_rendering', 'html5', 'css3', 'javascript'
+        ]
+        
+        detected_frameworks = [
+            fw for fw in all_detected 
+            if fw.lower() not in exclude_list
+        ]
+        
+        # ✅ FALLBACK: If no frameworks detected, scan HTML directly
+        if not detected_frameworks:
+            html_lower = html.lower()
+            
+            # Check for React
+            if 'react' in html_lower or '__REACT' in html or 'data-reactroot' in html or 'data-react-helmet' in html:
+                detected_frameworks.append('React')
+            
+            # Check for Next.js (must check before React to avoid duplicate)
+            if '_next' in html or 'next.js' in html_lower or '__NEXT_DATA__' in html:
+                if 'React' in detected_frameworks:
+                    detected_frameworks.remove('React')
+                detected_frameworks.append('Next.js')
+            
+            # Check for Vue
+            if 'vue' in html_lower or 'v-bind' in html or 'v-model' in html or 'v-if' in html:
+                detected_frameworks.append('Vue')
+            
+            # Check for Nuxt (must check before Vue)
+            if '__nuxt' in html_lower or 'nuxt.js' in html_lower:
+                if 'Vue' in detected_frameworks:
+                    detected_frameworks.remove('Vue')
+                detected_frameworks.append('Nuxt')
+            
+            # Check for Angular
+            if 'angular' in html_lower or 'ng-app' in html or 'ng-controller' in html or 'ng-version=' in html:
+                detected_frameworks.append('Angular')
+            
+            # Check for Svelte
+            if 'svelte' in html_lower or 'svelte-' in html:
+                detected_frameworks.append('Svelte')
+            
+            # Check for Gatsby
+            if 'gatsby' in html_lower or '___gatsby' in html:
+                detected_frameworks.append('Gatsby')
+            
+            # Check for TypeScript
+            if 'typescript' in html_lower or '.ts' in html_lower:
+                detected_frameworks.append('TypeScript')
+            
+            # Check for build tools
+            if 'webpack' in html_lower or 'webpackChunk' in html:
+                detected_frameworks.append('Webpack')
+            elif 'vite' in html_lower or 'import.meta' in html:
+                detected_frameworks.append('Vite')
         
         details['analytics'] = analytics['tools']
         details['modern_features'] = modern_features
-        details['detected_frameworks'] = detected_frameworks  # ✅ Store for return
+        details['detected_frameworks'] = detected_frameworks  # ✅ Store filtered frameworks
         
         # MOBILE (enhanced)
         mobile_raw = 0
@@ -2593,7 +2650,7 @@ async def analyze_basic_metrics_enhanced(
         final_score = max(0, min(100, total_score))
         
         logger.info(f"Enhanced analysis for {url}: Score={final_score}, SPA={spa_detected}, Method={rendering_method}")
-        logger.info(f"✅ Detected frameworks: {detected_frameworks}")  # ✅ Debug log
+        logger.info(f"✅ Detected frameworks (filtered): {detected_frameworks}")  # ✅ Debug log
 
         # SPA framework detection (fallback injection)
         try:
@@ -2605,13 +2662,17 @@ async def analyze_basic_metrics_enhanced(
                     extra_txt = ''
             spa_stack = await detect_spa_framework(html + extra_txt if extra_txt else html)
             if spa_stack:
-                # ✅ Merge with detected_frameworks
+                # ✅ Merge with detected_frameworks (but filter here too)
                 for framework in spa_stack:
-                    if framework not in detected_frameworks:
+                    # Only add if not in exclude list and not already present
+                    if framework.lower() not in exclude_list and framework not in detected_frameworks:
                         detected_frameworks.append(framework)
                 logger.info(f"✅ Final frameworks after SPA detection: {detected_frameworks}")
         except Exception as e:
             logger.error(f"SPA framework detection failed: {e}")
+
+        # ✅ Remove duplicates while preserving order
+        detected_frameworks = list(dict.fromkeys(detected_frameworks))
 
         return {
             'digital_maturity_score': final_score,
@@ -2631,7 +2692,7 @@ async def analyze_basic_metrics_enhanced(
             'rendering_method': rendering_method,
             'modernity_score': modern_features.get('modernity_score', 0),
             'technology_level': modern_features.get('technology_level', 'basic'),
-            # ✅ ADD FRAMEWORK DATA
+            # ✅ ADD FRAMEWORK DATA (filtered and deduplicated)
             'detected_frameworks': detected_frameworks,
             'technology_description': technology_description
         }
@@ -2739,13 +2800,75 @@ async def analyze_technical_aspects(url: str, html: str, headers: Optional[httpx
     # ✅ FRAMEWORK DETECTION - Detect frameworks using modern features analysis
     try:
         modern_features = analyze_modern_web_features(html, {'spa_detected': False})
-        detected_frameworks = modern_features.get('detected_frameworks', [])
+        all_detected = modern_features.get('detected_frameworks', [])
         technology_description = modern_features.get('technology_description', 'Standard')
         modern_js_features = modern_features.get('modern_js_features', 0)
         
+        # ✅ FILTER: Exclude non-framework items
+        exclude_list = [
+            'frameworks', 'spa_detected', 'minimal_content', 'content_words',
+            'requires_js_rendering', 'html5', 'css3', 'javascript'
+        ]
+        
+        detected_frameworks = [
+            fw for fw in all_detected 
+            if fw.lower() not in exclude_list
+        ]
+        
+        # ✅ FALLBACK: If no frameworks detected, scan HTML directly
+        if not detected_frameworks:
+            html_lower = html.lower()
+            
+            # Check for React
+            if 'react' in html_lower or '__REACT' in html or 'data-reactroot' in html or 'data-react-helmet' in html:
+                detected_frameworks.append('React')
+            
+            # Check for Next.js (must check before React to avoid duplicate)
+            if '_next' in html or 'next.js' in html_lower or '__NEXT_DATA__' in html:
+                if 'React' in detected_frameworks:
+                    detected_frameworks.remove('React')
+                detected_frameworks.append('Next.js')
+            
+            # Check for Vue
+            if 'vue' in html_lower or 'v-bind' in html or 'v-model' in html or 'v-if' in html:
+                detected_frameworks.append('Vue')
+            
+            # Check for Nuxt (must check before Vue)
+            if '__nuxt' in html_lower or 'nuxt.js' in html_lower:
+                if 'Vue' in detected_frameworks:
+                    detected_frameworks.remove('Vue')
+                detected_frameworks.append('Nuxt')
+            
+            # Check for Angular
+            if 'angular' in html_lower or 'ng-app' in html or 'ng-controller' in html or 'ng-version=' in html:
+                detected_frameworks.append('Angular')
+            
+            # Check for Svelte
+            if 'svelte' in html_lower or 'svelte-' in html:
+                detected_frameworks.append('Svelte')
+            
+            # Check for Gatsby
+            if 'gatsby' in html_lower or '___gatsby' in html:
+                detected_frameworks.append('Gatsby')
+            
+            # Check for TypeScript
+            if 'typescript' in html_lower or '.ts' in html_lower:
+                detected_frameworks.append('TypeScript')
+            
+            # Check for build tools
+            if 'webpack' in html_lower or 'webpackChunk' in html:
+                detected_frameworks.append('Webpack')
+            elif 'vite' in html_lower or 'import.meta' in html:
+                detected_frameworks.append('Vite')
+        
+        # Remove duplicates while preserving order
+        detected_frameworks = list(dict.fromkeys(detected_frameworks))
+        
         # Debug log
-        logger.info(f"✅ Technical audit frameworks: {detected_frameworks}")
+        logger.info(f"✅ Technical audit frameworks (filtered): {detected_frameworks}")
         logger.info(f"✅ Technology description: {technology_description}")
+        logger.info(f"✅ Modern JS features: {modern_js_features}/5")
+        
     except Exception as e:
         logger.error(f"Framework detection failed: {e}")
         detected_frameworks = []
@@ -2765,7 +2888,7 @@ async def analyze_technical_aspects(url: str, html: str, headers: Optional[httpx
         'security_headers': sh,
         'performance_indicators': performance_indicators,
         
-        # ✅ FRAMEWORK DATA
+        # ✅ FRAMEWORK DATA (filtered and validated)
         'detected_frameworks': detected_frameworks,
         'technology_description': technology_description,
         'modern_js_features': modern_js_features
@@ -8333,6 +8456,9 @@ def _calculate_recommendation_priority(rec: Dict) -> int:
         score += 10
     
     return score
+
+
+
 
 # ============================================================================
 # MAIN APPLICATION ENTRY POINT
