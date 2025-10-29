@@ -8178,8 +8178,9 @@ if __name__ == "__main__":
     logger.info(f"🌐 Starting server on {host}:{port}")
     logger.info(f"🔍 Framework detection mode: {'Wappalyzer' if WAPPALYZER_AVAILABLE else 'Regex fallback'}")
     
+    # ⬇️ KORJAUS: Kaikki nämä pitää olla if __name__ blokin sisällä
     if not WAPPALYZER_AVAILABLE:
-    logger.warning("⚠️  Install Wappalyzer for better framework detection: pip install python-Wappalyzer")
+        logger.warning("⚠️  Install Wappalyzer for better framework detection: pip install python-Wappalyzer")
     if SECRET_KEY.startswith("brandista-key-"):
         logger.warning("⚠️  Using default SECRET_KEY - set SECRET_KEY environment variable in production!")
     if PLAYWRIGHT_AVAILABLE and not PLAYWRIGHT_ENABLED:
