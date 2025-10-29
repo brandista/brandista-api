@@ -90,10 +90,17 @@ def get_user_from_db(username: str):
         return None
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT username, hashed_password, role, search_limit, searches_used FROM users WHERE username = %s", (username,))
+        cursor.execute("SELECT username, hashed_password, role, search_limit, searches_used, email FROM users WHERE username = %s", (username,))
         row = cursor.fetchone()
         if row:
-            return {'username': row[0], 'hashed_password': row[1], 'role': row[2], 'search_limit': row[3], 'searches_used': row[4]}
+            return {
+                'username': row[0], 
+                'hashed_password': row[1], 
+                'role': row[2], 
+                'search_limit': row[3], 
+                'searches_used': row[4],
+                'email': row[5]  # ✅ Added email field
+            }
         return None
     except Exception as e:
         logger.error(f"Failed to get user {username}: {e}")
@@ -108,8 +115,17 @@ def get_all_users_from_db():
         return []
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT username, hashed_password, role, search_limit, searches_used FROM users")
-        return [{'username': r[0], 'hashed_password': r[1], 'role': r[2], 'search_limit': r[3], 'searches_used': r[4]} for r in cursor.fetchall()]
+        cursor.execute("SELECT username, hashed_password, role, search_limit, searches_used, email FROM users")
+        return [
+            {
+                'username': r[0], 
+                'hashed_password': r[1], 
+                'role': r[2], 
+                'search_limit': r[3], 
+                'searches_used': r[4],
+                'email': r[5]  # ✅ Added email field
+            } for r in cursor.fetchall()
+        ]
     except Exception as e:
         logger.error(f"Failed to get all users: {e}")
         return []
@@ -144,7 +160,7 @@ def create_user_in_db(username: str, hashed_password: str, role: str = 'user', s
             VALUES (%s, %s, %s, %s, 0, %s) 
             ON CONFLICT (username) DO UPDATE SET
                 role = EXCLUDED.role,
-                email = EXCLUDED.email,
+                email = COALESCE(EXCLUDED.email, users.email),
                 hashed_password = EXCLUDED.hashed_password,
                 search_limit = EXCLUDED.search_limit,
                 updated_at = CURRENT_TIMESTAMP
@@ -226,15 +242,63 @@ def sync_hardcoded_users_to_db(users_dict):
     synced = 0
     for username, user_data in users_dict.items():
         try:
-            # Don't pass email for hardcoded users (they don't have it)
+            # Extract email if present, otherwise None
+            email = user_data.get('email', None)
+            
             if create_user_in_db(
                 username, 
                 user_data['hashed_password'], 
                 user_data['role'], 
-                user_data['search_limit']
+                user_data['search_limit'],
+                email  # ✅ Pass email if available
             ):
                 synced += 1
         except Exception as e:
             logger.error(f"Failed to sync user {username}: {e}")
     if synced > 0:
         logger.info(f"✅ Synced {synced} users to database")
+
+# ✅ NEW FUNCTION: Add the missing function that main.py is trying to import
+def get_user_preferences_from_db(username: str) -> Optional[Dict[str, Any]]:
+    """
+    Get user preferences from database
+    
+    Args:
+        username: Username to get preferences for
+    
+    Returns:
+        Dict with user preferences or None if not found
+    """
+    conn = connect_db()
+    if not conn:
+        return None
+    
+    try:
+        cursor = conn.cursor()
+        
+        # For now, return basic user data as preferences
+        # Later you can add a separate preferences table
+        cursor.execute("""
+            SELECT username, role, search_limit, email 
+            FROM users 
+            WHERE username = %s
+        """, (username,))
+        
+        row = cursor.fetchone()
+        if row:
+            return {
+                'username': row[0],
+                'role': row[1],
+                'search_limit': row[2],
+                'email': row[3],
+                'blacklist_domains': None,  # Can be expanded later
+                'preferences': {}  # Can add more preferences later
+            }
+        return None
+        
+    except Exception as e:
+        logger.error(f"Failed to get preferences for {username}: {e}")
+        return None
+    finally:
+        cursor.close()
+        conn.close()
