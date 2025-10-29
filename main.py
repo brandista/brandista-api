@@ -2244,64 +2244,208 @@ def get_freshness_label(score: int) -> str:
 # ============================================================================
 
 def calculate_content_score_configurable(word_count: int) -> int:
+    """
+    Calculate content score based on word count with smooth scaling.
+    Returns a score between 0 and max_score (from SCORING_CONFIG).
+    """
     thresholds = SCORING_CONFIG.content_thresholds
     max_score = SCORING_CONFIG.weights['content']
-    if word_count >= thresholds['excellent']: return max_score
-    elif word_count >= thresholds['good']: return int(max_score * 0.85)
-    elif word_count >= thresholds['fair']: return int(max_score * 0.65)
-    elif word_count >= thresholds['basic']: return int(max_score * 0.4)
-    elif word_count >= thresholds['minimal']: return int(max_score * 0.2)
-    else: return max(0, int(max_score * (word_count / max(1, thresholds['minimal']) * 0.1)))
+    
+    # Excellent content
+    if word_count >= thresholds['excellent']:
+        return max_score
+    
+    # Good content
+    elif word_count >= thresholds['good']:
+        return int(max_score * 0.85)
+    
+    # Fair content
+    elif word_count >= thresholds['fair']:
+        return int(max_score * 0.65)
+    
+    # Basic content
+    elif word_count >= thresholds['basic']:
+        return int(max_score * 0.4)
+    
+    # Minimal content
+    elif word_count >= thresholds['minimal']:
+        return int(max_score * 0.2)
+    
+    # Very low content - smooth scaling from 0 to minimal threshold
+    else:
+        if thresholds['minimal'] == 0:
+            return 0
+        # Linear interpolation: 0 words = 0 score, minimal words = 20% score
+        ratio = word_count / thresholds['minimal']
+        return max(0, int(max_score * ratio * 0.2))
+
 
 def calculate_seo_score_configurable(soup: BeautifulSoup, url: str) -> Tuple[int, Dict[str, Any]]:
+    """
+    Calculate SEO score based on multiple factors with detailed breakdown.
+    Returns (total_score, details_dict).
+    """
     config = SCORING_CONFIG.seo_thresholds
     scores = config['scores']
     details = {}
     total_score = 0
     
-    # Title analysis
+    # ===== TITLE ANALYSIS =====
     title = soup.find('title')
     if title:
-        title_length = len(title.get_text().strip())
+        title_text = title.get_text().strip()
+        title_length = len(title_text)
         details['title_length'] = title_length
+        details['has_title'] = True
+        
         if config['title_optimal_range'][0] <= title_length <= config['title_optimal_range'][1]:
             total_score += scores['title_optimal']
+            details['title_quality'] = 'optimal'
         elif config['title_acceptable_range'][0] <= title_length <= config['title_acceptable_range'][1]:
             total_score += scores['title_acceptable']
+            details['title_quality'] = 'acceptable'
         elif title_length > 0:
             total_score += scores['title_basic']
+            details['title_quality'] = 'basic'
+        else:
+            details['title_quality'] = 'empty'
+    else:
+        details['has_title'] = False
+        details['title_quality'] = 'missing'
     
-    # Meta description analysis
+    # ===== META DESCRIPTION ANALYSIS =====
     meta_desc = soup.find('meta', attrs={'name': 'description'})
     if meta_desc:
-        desc_length = len(meta_desc.get('content', '').strip())
+        desc_content = meta_desc.get('content', '').strip()
+        desc_length = len(desc_content)
         details['meta_desc_length'] = desc_length
+        details['has_meta_desc'] = True
+        
         if config['meta_desc_optimal_range'][0] <= desc_length <= config['meta_desc_optimal_range'][1]:
             total_score += scores['meta_desc_optimal']
+            details['meta_desc_quality'] = 'optimal'
         elif config['meta_desc_acceptable_range'][0] <= desc_length <= config['meta_desc_acceptable_range'][1]:
             total_score += scores['meta_desc_acceptable']
+            details['meta_desc_quality'] = 'acceptable'
         elif desc_length > 0:
             total_score += scores['meta_desc_basic']
+            details['meta_desc_quality'] = 'basic'
+        else:
+            details['meta_desc_quality'] = 'empty'
+    else:
+        details['has_meta_desc'] = False
+        details['meta_desc_quality'] = 'missing'
     
-    # Header structure analysis
+    # ===== HEADER STRUCTURE ANALYSIS =====
     h1_tags = soup.find_all('h1')
     h2_tags = soup.find_all('h2')
     h3_tags = soup.find_all('h3')
-    if len(h1_tags) == config['h1_optimal_count']: total_score += 3
-    elif len(h1_tags) in [2, 3]: total_score += 1
-    if len(h2_tags) >= 2: total_score += 1
-    if len(h3_tags) >= 1: total_score += 1
     
-    # Technical SEO elements
-    if soup.find('link', {'rel': 'canonical'}): 
+    h1_count = len(h1_tags)
+    h2_count = len(h2_tags)
+    h3_count = len(h3_tags)
+    
+    details['h1_count'] = h1_count
+    details['h2_count'] = h2_count
+    details['h3_count'] = h3_count
+    
+    # H1 scoring
+    if h1_count == config['h1_optimal_count']:
+        total_score += 3
+        details['h1_quality'] = 'optimal'
+    elif h1_count in [2, 3]:
+        total_score += 1
+        details['h1_quality'] = 'acceptable'
+    elif h1_count > 3:
+        details['h1_quality'] = 'too_many'
+    elif h1_count == 0:
+        details['h1_quality'] = 'missing'
+    else:
+        details['h1_quality'] = 'suboptimal'
+    
+    # H2 scoring
+    if h2_count >= 2:
+        total_score += 1
+        details['h2_quality'] = 'good'
+    elif h2_count == 1:
+        details['h2_quality'] = 'minimal'
+    else:
+        details['h2_quality'] = 'missing'
+    
+    # H3 scoring
+    if h3_count >= 1:
+        total_score += 1
+        details['h3_quality'] = 'present'
+    else:
+        details['h3_quality'] = 'missing'
+    
+    # ===== TECHNICAL SEO ELEMENTS =====
+    
+    # Canonical URL
+    canonical = soup.find('link', {'rel': 'canonical'})
+    if canonical:
         total_score += scores['canonical']
         details['has_canonical'] = True
-    if soup.find('link', {'hreflang': True}): 
+        details['canonical_url'] = canonical.get('href', '')
+    else:
+        details['has_canonical'] = False
+    
+    # Hreflang (internationalization)
+    hreflang = soup.find('link', {'hreflang': True})
+    if hreflang:
         total_score += scores['hreflang']
         details['has_hreflang'] = True
-    if check_clean_urls(url): total_score += scores['clean_urls']
+        # Count all hreflang tags
+        hreflang_count = len(soup.find_all('link', {'hreflang': True}))
+        details['hreflang_count'] = hreflang_count
+    else:
+        details['has_hreflang'] = False
     
-    return min(total_score, SCORING_CONFIG.weights['seo_basics']), details
+    # Clean URLs
+    if check_clean_urls(url):
+        total_score += scores['clean_urls']
+        details['has_clean_urls'] = True
+    else:
+        details['has_clean_urls'] = False
+    
+    # ===== ADDITIONAL SEO ELEMENTS (Optional) =====
+    
+    # Open Graph tags (for social sharing)
+    og_title = soup.find('meta', property='og:title')
+    og_description = soup.find('meta', property='og:description')
+    og_image = soup.find('meta', property='og:image')
+    
+    details['has_open_graph'] = bool(og_title or og_description or og_image)
+    if details['has_open_graph']:
+        details['open_graph_completeness'] = sum([
+            bool(og_title),
+            bool(og_description),
+            bool(og_image)
+        ])
+    
+    # Schema.org structured data
+    schema_scripts = soup.find_all('script', type='application/ld+json')
+    details['has_structured_data'] = len(schema_scripts) > 0
+    details['structured_data_count'] = len(schema_scripts)
+    
+    # Alt text for images (accessibility & SEO)
+    images = soup.find_all('img')
+    images_with_alt = [img for img in images if img.get('alt')]
+    details['images_total'] = len(images)
+    details['images_with_alt'] = len(images_with_alt)
+    if len(images) > 0:
+        details['alt_text_coverage'] = round((len(images_with_alt) / len(images)) * 100, 1)
+    
+    # Cap the total score at maximum allowed
+    max_allowed = SCORING_CONFIG.weights['seo_basics']
+    final_score = min(total_score, max_allowed)
+    
+    # Add summary
+    details['raw_score'] = total_score
+    details['final_score'] = final_score
+    details['score_capped'] = total_score > max_allowed
+    
+    return final_score, details
 
 # ============================================================================
 # ENHANCED ANALYSIS FUNCTIONS
@@ -2369,42 +2513,46 @@ async def analyze_basic_metrics_enhanced(
         if check_sitemap_indicators(soup): score_components['technical'] += 1
         if check_robots_indicators(html): score_components['technical'] += 1
         
-        # Modern web features bonus
+        # ✅ MODERN WEB FEATURES & FRAMEWORK DETECTION
         modern_features = analyze_modern_web_features(html, rendering_info.get('spa_info', {}) if rendering_info else {})
         if modern_features['is_modern']:
             bonus = min(5, modern_features['modernity_score'] // 20)
             score_components['technical'] += bonus
             details['modern_tech_bonus'] = bonus
         
+        # ✅ Extract framework data for later use
+        detected_frameworks = modern_features.get('detected_frameworks', [])
+        technology_description = modern_features.get('technology_description', 'Standard')
+        
         details['analytics'] = analytics['tools']
         details['modern_features'] = modern_features
+        details['detected_frameworks'] = detected_frameworks  # ✅ Store for return
         
         # MOBILE (enhanced)
-        
         mobile_raw = 0
         viewport = soup.find('meta', attrs={'name': 'viewport'})
 
         if viewport:
             vc = viewport.get('content', '')
             if 'width=device-width' in vc: 
-                mobile_raw += 40  # ✅ Muutettu 5 → 40
+                mobile_raw += 40
                 details['has_viewport'] = True
             if 'initial-scale=1' in vc: 
-                mobile_raw += 20  # ✅ Muutettu 3 → 20
+                mobile_raw += 20
         else:
             details['has_viewport'] = False
 
-        # Tarkista responsive signaalit (korvaa check_responsive_design)
+        # Tarkista responsive signaalit
         if detect_responsive_signals(html):
-            mobile_raw += 20  # ✅ Uusi
+            mobile_raw += 20
 
         # Tarkista media queries
         if '@media' in html.lower():
-            mobile_raw += 20  # ✅ Uusi
+            mobile_raw += 20
 
-        # SPA mobile bonus (muutettu skaalaus)
-        if spa_detected and mobile_raw >= 80:  # ✅ Muutettu: jos jo vahva responsive
-            mobile_raw = min(100, mobile_raw + 10)  # ✅ Muutettu: +2 → +10 (koska 0-100 skaalassa)
+        # SPA mobile bonus
+        if spa_detected and mobile_raw >= 80:
+            mobile_raw = min(100, mobile_raw + 10)
             details['spa_mobile_bonus'] = True
 
         # Laske 0-100 pistemäärä
@@ -2445,6 +2593,7 @@ async def analyze_basic_metrics_enhanced(
         final_score = max(0, min(100, total_score))
         
         logger.info(f"Enhanced analysis for {url}: Score={final_score}, SPA={spa_detected}, Method={rendering_method}")
+        logger.info(f"✅ Detected frameworks: {detected_frameworks}")  # ✅ Debug log
 
         # SPA framework detection (fallback injection)
         try:
@@ -2455,10 +2604,14 @@ async def analyze_basic_metrics_enhanced(
                 except Exception:
                     extra_txt = ''
             spa_stack = await detect_spa_framework(html + extra_txt if extra_txt else html)
-            if spa_stack and 'technology_stack' in locals():
-                technology_stack.extend([t for t in spa_stack if t not in technology_stack])
-        except Exception:
-            pass
+            if spa_stack:
+                # ✅ Merge with detected_frameworks
+                for framework in spa_stack:
+                    if framework not in detected_frameworks:
+                        detected_frameworks.append(framework)
+                logger.info(f"✅ Final frameworks after SPA detection: {detected_frameworks}")
+        except Exception as e:
+            logger.error(f"SPA framework detection failed: {e}")
 
         return {
             'digital_maturity_score': final_score,
@@ -2477,7 +2630,10 @@ async def analyze_basic_metrics_enhanced(
             'spa_detected': spa_detected,
             'rendering_method': rendering_method,
             'modernity_score': modern_features.get('modernity_score', 0),
-            'technology_level': modern_features.get('technology_level', 'basic')
+            'technology_level': modern_features.get('technology_level', 'basic'),
+            # ✅ ADD FRAMEWORK DATA
+            'detected_frameworks': detected_frameworks,
+            'technology_description': technology_description
         }
     except Exception as e:
         logger.error(f"Error in enhanced analysis for {url}: {e}")
@@ -2496,7 +2652,10 @@ async def analyze_basic_metrics_enhanced(
             'social_platforms': 0,
             'spa_detected': False,
             'rendering_method': 'http',
-            'modernity_score': 0
+            'modernity_score': 0,
+            # ✅ ADD EMPTY FRAMEWORK DATA FOR ERROR CASE
+            'detected_frameworks': [],
+            'technology_description': 'Analysis failed'
         }
 
 async def analyze_technical_aspects(url: str, html: str, headers: Optional[httpx.Headers] = None) -> Dict[str, Any]:
@@ -2523,7 +2682,6 @@ async def analyze_technical_aspects(url: str, html: str, headers: Optional[httpx
             tech_score += 10
 
     # Analytics
-
     analytics = detect_analytics_tools(html) if 'detect_analytics_tools' in globals() else {'has_analytics': ('gtag(' in html or 'analytics.js' in html)}
     if analytics.get('has_analytics'): tech_score += 10
 
@@ -2578,6 +2736,22 @@ async def analyze_technical_aspects(url: str, html: str, headers: Optional[httpx
 
     final = max(0, min(100, tech_score))
     
+    # ✅ FRAMEWORK DETECTION - Detect frameworks using modern features analysis
+    try:
+        modern_features = analyze_modern_web_features(html, {'spa_detected': False})
+        detected_frameworks = modern_features.get('detected_frameworks', [])
+        technology_description = modern_features.get('technology_description', 'Standard')
+        modern_js_features = modern_features.get('modern_js_features', 0)
+        
+        # Debug log
+        logger.info(f"✅ Technical audit frameworks: {detected_frameworks}")
+        logger.info(f"✅ Technology description: {technology_description}")
+    except Exception as e:
+        logger.error(f"Framework detection failed: {e}")
+        detected_frameworks = []
+        technology_description = 'Analysis pending'
+        modern_js_features = 0
+    
     # Return dict
     return {
         'has_ssl': has_ssl,
@@ -2589,7 +2763,12 @@ async def analyze_technical_aspects(url: str, html: str, headers: Optional[httpx
         'meta_tags_score': meta_tags_score,
         'overall_technical_score': final,
         'security_headers': sh,
-        'performance_indicators': performance_indicators
+        'performance_indicators': performance_indicators,
+        
+        # ✅ FRAMEWORK DATA
+        'detected_frameworks': detected_frameworks,
+        'technology_description': technology_description,
+        'modern_js_features': modern_js_features
     }
 
 def is_spa_domain(url: str) -> bool:
@@ -8154,9 +8333,6 @@ def _calculate_recommendation_priority(rec: Dict) -> int:
         score += 10
     
     return score
-
-
-
 
 # ============================================================================
 # MAIN APPLICATION ENTRY POINT
