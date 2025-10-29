@@ -305,14 +305,14 @@ APP_DESCRIPTION = """Production-ready website analysis with configurable scoring
 SECRET_KEY = os.getenv("SECRET_KEY", "brandista-key-" + os.urandom(32).hex())
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "kaikka123")
+
 
 # Performance settings
 CACHE_TTL = int(os.getenv("CACHE_TTL", "3600"))
 MAX_CACHE_SIZE = int(os.getenv("MAX_CACHE_SIZE", "100"))
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "30"))
-DEFAULT_USER_LIMIT = int(os.getenv("DEFAULT_USER_LIMIT", "3"))
+DEFAULT_USER_LIMIT = int(os.getenv("DEFAULT_USER_LIMIT", "1"))
 
 # Playwright settings
 PLAYWRIGHT_ENABLED = os.getenv("PLAYWRIGHT_ENABLED", "false").lower() == "true"
