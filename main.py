@@ -74,7 +74,7 @@ except Exception:
     AsyncOpenAI = None
     OPENAI_AVAILABLE = False
 
-    try:
+try:
     from Wappalyzer import Wappalyzer, WebPage
     WAPPALYZER_AVAILABLE = True
 except ImportError:
