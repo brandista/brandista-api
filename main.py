@@ -574,7 +574,7 @@ SCORING_CONFIG = load_scoring_config()
 # CONSTANTS
 # ============================================================================
 
-APP_VERSION = "6.2.4"
+
 APP_NAME = "Brandista Competitive Intelligence API"
 APP_DESCRIPTION = """Production-ready website analysis with configurable scoring system and comprehensive SPA support."""
 
@@ -8891,7 +8891,6 @@ if __name__ == "__main__":
     logger.info(f"🌐 Starting server on {host}:{port}")
     logger.info(f"🔍 Framework detection mode: {'Wappalyzer' if WAPPALYZER_AVAILABLE else 'Regex fallback'}")
     
-    # ⬇️ KORJAUS: Kaikki nämä pitää olla if __name__ blokin sisällä
     if not WAPPALYZER_AVAILABLE:
         logger.warning("⚠️  Install Wappalyzer for better framework detection: pip install python-Wappalyzer")
     if SECRET_KEY.startswith("brandista-key-"):
