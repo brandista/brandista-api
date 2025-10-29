@@ -26,16 +26,42 @@ from urllib.parse import urlparse
 from dataclasses import dataclass
 from pathlib import Path
 from collections import defaultdict
-from ai_content_generator import generate_full_ai_insights
+from functools import lru_cache
+
+# ============================================================================
+# ENVIRONMENT SETUP (EARLY)
+# ============================================================================
+from dotenv import load_dotenv
+load_dotenv()
+
+# ============================================================================
+# LOGGING SETUP (BEFORE ANY LOGGER USAGE!)
+# ============================================================================
+logging.basicConfig(
+    level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(), 
+        logging.FileHandler('brandista_api.log', encoding='utf-8')
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # ============================================================================
 # THIRD-PARTY IMPORTS
 # ============================================================================
 import httpx
-import redis
 from bs4 import BeautifulSoup
 import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
+
+# Redis (optional)
+try:
+    import redis
+    REDIS_AVAILABLE = True
+except ImportError:
+    redis = None
+    REDIS_AVAILABLE = False
 
 # ============================================================================
 # FASTAPI IMPORTS
@@ -48,12 +74,35 @@ from pydantic import BaseModel, Field
 # ============================================================================
 # AUTH & OAUTH IMPORTS
 # ============================================================================
-from auth_magic_link import create_magic_link_auth, MagicLinkRequest, MagicLinkVerify
-from authlib.integrations.starlette_client import OAuth
-from starlette.config import Config as StarletteConfig
-from starlette.responses import RedirectResponse
+try:
+    from auth_magic_link import create_magic_link_auth, MagicLinkRequest, MagicLinkVerify
+    MAGIC_LINK_AVAILABLE = True
+except ImportError:
+    MAGIC_LINK_AVAILABLE = False
+    logger.warning("Magic link authentication module not available")
 
-from email_notifications import on_user_registered, send_new_user_notification
+try:
+    from authlib.integrations.starlette_client import OAuth
+    from starlette.config import Config as StarletteConfig
+    from starlette.responses import RedirectResponse
+    OAUTH_AVAILABLE = True
+except ImportError:
+    OAUTH_AVAILABLE = False
+    logger.warning("OAuth module not available")
+
+try:
+    from email_notifications import on_user_registered, send_new_user_notification
+    EMAIL_NOTIFICATIONS_AVAILABLE = True
+except ImportError:
+    EMAIL_NOTIFICATIONS_AVAILABLE = False
+    logger.warning("Email notifications module not available")
+
+try:
+    from ai_content_generator import generate_full_ai_insights
+    AI_GENERATOR_AVAILABLE = True
+except ImportError:
+    AI_GENERATOR_AVAILABLE = False
+    logger.warning("AI content generator module not available")
 
 # ============================================================================
 # OPTIONAL DEPENDENCIES
@@ -63,7 +112,7 @@ from email_notifications import on_user_registered, send_new_user_notification
 try:
     from playwright.async_api import async_playwright
     PLAYWRIGHT_AVAILABLE = True
-except Exception:
+except ImportError:
     async_playwright = None
     PLAYWRIGHT_AVAILABLE = False
 
@@ -71,10 +120,11 @@ except Exception:
 try:
     from openai import AsyncOpenAI
     OPENAI_AVAILABLE = True
-except Exception:
+except ImportError:
     AsyncOpenAI = None
     OPENAI_AVAILABLE = False
 
+# Wappalyzer
 try:
     from Wappalyzer import Wappalyzer, WebPage
     WAPPALYZER_AVAILABLE = True
@@ -82,29 +132,77 @@ except ImportError:
     Wappalyzer = None
     WebPage = None
     WAPPALYZER_AVAILABLE = False
-    logger.warning("Wappalyzer not available - install with: pip install python-Wappalyzer")
 
+# Google API
+try:
+    from googleapiclient.discovery import build
+    from googleapiclient.errors import HttpError
+    GOOGLE_API_AVAILABLE = True
+except ImportError:
+    GOOGLE_API_AVAILABLE = False
 
 # ============================================================================
-# ENVIRONMENT SETUP
+# DATABASE INTEGRATION
 # ============================================================================
-from dotenv import load_dotenv
-load_dotenv()
+try:
+    from database import (
+        init_database, 
+        is_database_available,
+        get_user_from_db,
+        get_all_users_from_db,
+        create_user_in_db,
+        update_user_in_db,
+        delete_user_from_db,
+        sync_hardcoded_users_to_db,
+        get_user_preferences_from_db
+    )
+    DATABASE_ENABLED = True
+    logger.info("✅ Database module imported successfully")
+except ImportError as e:
+    logger.warning(f"⚠️ Database module not available: {e}")
+    DATABASE_ENABLED = False
+    # Fallback functions
+    def is_database_available(): return False
+    def get_user_from_db(username): return None
+    def get_all_users_from_db(): return []
+    def create_user_in_db(*args, **kwargs): return False
+    def update_user_in_db(*args, **kwargs): return False
+    def delete_user_from_db(username): return False
+    def sync_hardcoded_users_to_db(users): pass
+    def init_database(): pass
+    def get_user_preferences_from_db(username): return None
+
+# ============================================================================
+# CONSTANTS AND VERSION INFO
+# ============================================================================
+APP_VERSION = "6.3.0"
+APP_NAME = "Brandista Competitive Intelligence API"
+APP_DESCRIPTION = """Production-ready website analysis with configurable scoring system and comprehensive SPA support."""
 
 # ============================================================================
 # CONFIGURATION - ENVIRONMENT VARIABLES
 # ============================================================================
 
+# Security
+SECRET_KEY = os.getenv("SECRET_KEY", "brandista-key-" + os.urandom(32).hex())
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
+
+# Performance settings
+CACHE_TTL = int(os.getenv("CACHE_TTL", "3600"))
+MAX_CACHE_SIZE = int(os.getenv("MAX_CACHE_SIZE", "100"))
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
+REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "30"))
+DEFAULT_USER_LIMIT = int(os.getenv("DEFAULT_USER_LIMIT", "1"))
+
 # SPA Cache Configuration
-SPA_CACHE_TTL = int(os.getenv("SPA_CACHE_TTL", "3600"))  # seconds
+SPA_CACHE_TTL = int(os.getenv("SPA_CACHE_TTL", "3600"))
 content_cache: Dict[str, Dict[str, Any]] = {}
 
 # Content Fetch Configuration
-CONTENT_FETCH_MODE = os.getenv("CONTENT_FETCH_MODE", "aggressive")  # "aggressive" | "balanced" | "light"
-
-# Content Fetch Advanced Toggles
+CONTENT_FETCH_MODE = os.getenv("CONTENT_FETCH_MODE", "aggressive")
 CAPTURE_XHR = os.getenv("CAPTURE_XHR", "1") == "1"
-MAX_XHR_BYTES = int(os.getenv("MAX_XHR_BYTES", "1048576"))  # 1 MB cap per response
+MAX_XHR_BYTES = int(os.getenv("MAX_XHR_BYTES", "1048576"))
 BLOCK_HEAVY_RESOURCES = os.getenv("BLOCK_HEAVY_RESOURCES", "1") == "1"
 COOKIE_AUTO_DISMISS = os.getenv("COOKIE_AUTO_DISMISS", "1") == "1"
 COOKIE_SELECTORS = os.getenv(
@@ -116,7 +214,190 @@ COOKIE_SELECTORS = os.getenv(
 SPA_MAX_SCROLL_STEPS = int(os.getenv("SPA_MAX_SCROLL_STEPS", "15"))  
 SPA_SCROLL_PAUSE_MS = int(os.getenv("SPA_SCROLL_PAUSE_MS", "1000"))  
 SPA_EXTRA_WAIT_MS = int(os.getenv("SPA_EXTRA_WAIT_MS", "5000"))      
-SPA_WAIT_FOR_SELECTOR = os.getenv("SPA_WAIT_FOR_SELECTOR", "")  # e.g. "#app" or ".root" if known
+SPA_WAIT_FOR_SELECTOR = os.getenv("SPA_WAIT_FOR_SELECTOR", "")
+
+# Playwright settings
+PLAYWRIGHT_ENABLED = os.getenv("PLAYWRIGHT_ENABLED", "false").lower() == "true"
+PLAYWRIGHT_TIMEOUT = int(os.getenv("PLAYWRIGHT_TIMEOUT", "30000"))
+PLAYWRIGHT_WAIT_FOR = os.getenv("PLAYWRIGHT_WAIT_FOR", "networkidle")
+
+# User Agent
+USER_AGENT = os.getenv("USER_AGENT", 
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+# Rate limiting
+RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "false").lower() == "true"
+RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "20"))
+
+# Google Search
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GOOGLE_SEARCH_ENGINE_ID = os.getenv("GOOGLE_SEARCH_ENGINE_ID", "171a60959e6cb4d76")
+
+# OpenAI
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+# Redis
+REDIS_URL = os.getenv("REDIS_URL")
+
+# ============================================================================
+# CONFIGURATION SYSTEM
+# ============================================================================
+
+@dataclass
+class ScoringConfig:
+    """Configurable scoring weights and thresholds"""
+    weights: Dict[str, int] = None
+    content_thresholds: Dict[str, int] = None
+    technical_thresholds: Dict[str, Any] = None
+    seo_thresholds: Dict[str, Any] = None
+    
+    def __post_init__(self):
+        if self.weights is None:
+            self.weights = {
+                'security': 15, 'seo_basics': 20, 'content': 20,
+                'technical': 15, 'mobile': 15, 'social': 10, 'performance': 5
+            }
+        
+        if self.content_thresholds is None:
+            self.content_thresholds = {
+                'excellent': 3000, 'good': 2000, 'fair': 1500, 'basic': 800, 'minimal': 300
+            }
+        
+        if self.technical_thresholds is None:
+            self.technical_thresholds = {
+                'ssl_score': 20, 'mobile_viewport_score': 15, 'mobile_responsive_score': 5,
+                'analytics_score': 10, 'meta_tags_max_score': 15, 'structured_data_multiplier': 2,
+                'security_headers': {'csp': 4, 'x_frame_options': 3, 'strict_transport': 3}
+            }
+        
+        if self.seo_thresholds is None:
+            self.seo_thresholds = {
+                'title_optimal_range': (30, 60), 'title_acceptable_range': (20, 70),
+                'meta_desc_optimal_range': (120, 160), 'meta_desc_acceptable_range': (80, 200),
+                'h1_optimal_count': 1,
+                'scores': {
+                    'title_optimal': 5, 'title_acceptable': 3, 'title_basic': 1,
+                    'meta_desc_optimal': 5, 'meta_desc_acceptable': 3, 'meta_desc_basic': 1,
+                    'canonical': 2, 'hreflang': 1, 'clean_urls': 2
+                }
+            }
+
+def load_scoring_config() -> ScoringConfig:
+    """Load scoring configuration from file or environment"""
+    config_file = Path('scoring_config.json')
+    if config_file.exists():
+        try:
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config_data = json.load(f)
+                return ScoringConfig(**config_data)
+        except Exception as e:
+            logger.warning(f"Failed to load scoring config: {e}")
+    return ScoringConfig()
+
+# Global scoring configuration
+SCORING_CONFIG = load_scoring_config()
+
+# ============================================================================
+# INITIALIZE SERVICES
+# ============================================================================
+
+# Global variables
+analysis_cache: Dict[str, Dict[str, Any]] = {}
+user_search_counts: Dict[str, int] = {}
+magic_link_auth = None
+oauth = None
+redis_client = None
+task_queue = None
+openai_client = None
+
+# Log initial configuration
+logger.info(f"Starting {APP_NAME} v{APP_VERSION}")
+logger.info(f"Scoring weights: {SCORING_CONFIG.weights}")
+logger.info(f"Playwright support: {'enabled' if PLAYWRIGHT_AVAILABLE and PLAYWRIGHT_ENABLED else 'disabled'}")
+logger.info(f"OpenAI support: {'available' if OPENAI_AVAILABLE else 'not available'}")
+logger.info(f"Redis support: {'available' if REDIS_AVAILABLE else 'not available'}")
+logger.info(f"Database support: {'enabled' if DATABASE_ENABLED else 'disabled'}")
+
+# Initialize OpenAI (after logger is ready)
+if OPENAI_AVAILABLE and os.getenv("OPENAI_API_KEY"):
+    try:
+        openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        logger.info(f"✅ OpenAI client initialized (model={OPENAI_MODEL})")
+    except Exception as e:
+        logger.warning(f"⚠️ OpenAI init failed: {e}")
+        openai_client = None
+else:
+    logger.info("ℹ️ OpenAI not configured")
+
+# Initialize Redis
+if REDIS_AVAILABLE and REDIS_URL:
+    try:
+        redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+        redis_client.ping()
+        logger.info("✅ Redis connected successfully")
+        
+        try:
+            from redis_tasks import RedisTaskQueue
+            task_queue = RedisTaskQueue(redis_client)
+            logger.info("✅ Redis task queue initialized")
+        except ImportError:
+            logger.warning("⚠️ RedisTaskQueue module not available")
+            task_queue = None
+    except Exception as e:
+        logger.warning(f"⚠️ Redis connection failed: {e}")
+        redis_client = None
+        task_queue = None
+else:
+    logger.info("ℹ️ Redis not configured, using memory cache")
+
+# Initialize Google Search
+GOOGLE_SEARCH_AVAILABLE = False
+if GOOGLE_API_AVAILABLE and GOOGLE_API_KEY and GOOGLE_SEARCH_ENGINE_ID:
+    def search(query: str, num_results: int = 10, lang: str = "fi") -> List[str]:
+        """Official Google Custom Search API"""
+        try:
+            service = build("customsearch", "v1", developerKey=GOOGLE_API_KEY)
+            results = []
+            start_index = 1
+            
+            while len(results) < num_results and start_index <= 91:
+                request_params = {
+                    "q": query,
+                    "cx": GOOGLE_SEARCH_ENGINE_ID,
+                    "num": min(10, num_results - len(results)),
+                    "start": start_index
+                }
+                
+                if lang and lang != "en":
+                    request_params["lr"] = f"lang_{lang}"
+                
+                response = service.cse().list(**request_params).execute()
+                
+                if "items" not in response:
+                    break
+                
+                results.extend([item["link"] for item in response["items"]])
+                start_index += 10
+                
+                if len(response["items"]) < 10:
+                    break
+            
+            return results[:num_results]
+            
+        except Exception as e:
+            logger.error(f"Search failed: {e}")
+            return []
+    
+    GOOGLE_SEARCH_AVAILABLE = True
+    logger.info("✅ Google Custom Search API initialized")
+else:
+    def search(query, num_results, lang):
+        raise NotImplementedError("Google Search requires API credentials")
+    logger.warning("⚠️ Google Search disabled - missing API credentials")
+
+
 
 # ============================================================================
 # UTILITY FUNCTIONS - MOBILE OPTIMIZATION
@@ -433,7 +714,14 @@ else:
             "Google Search requires API credentials. "
             "Set GOOGLE_API_KEY and GOOGLE_SEARCH_ENGINE_ID in .env file"
         )
-
+try:
+    from Wappalyzer import Wappalyzer, WebPage
+    WAPPALYZER_AVAILABLE = True
+except ImportError:
+    Wappalyzer = None
+    WebPage = None
+    WAPPALYZER_AVAILABLE = False
+    logger.warning("Wappalyzer not available - install with: pip install python-Wappalyzer")
 # ============================================================================
 # DATABASE INTEGRATION
 # ============================================================================
@@ -4463,7 +4751,7 @@ async def generate_ai_insights(
     content: Dict[str, Any], 
     ux: Dict[str, Any], 
     social: Dict[str, Any],
-    html: str,  # ADD THIS PARAMETER
+    html: str,
     language: str = 'en'
 ) -> AIAnalysis:
     """Generate comprehensive AI-powered insights"""
@@ -4508,8 +4796,7 @@ async def generate_ai_insights(
         except Exception as e:
             logger.warning(f"OpenAI enhancement failed: {e}")
     
-    # --- Humanized layer fusion ---
-    # --- Humanized layer fusion ---
+    # Humanized layer fusion
     try:
         # Use detailed impact calculation (with optional revenue input support)
         detailed_impact = compute_business_impact_with_input(basic, content, ux, revenue_input=None)
@@ -4528,7 +4815,7 @@ async def generate_ai_insights(
         snippets = build_snippet_examples(url, basic)
 
         insights.update({
-            "business_impact": detailed_impact.dict(),  # Use detailed version in output
+            "business_impact": detailed_impact.dict(),
             "role_summaries": role.dict(),
             "plan_90d": plan.dict(),
             "risk_register": [r.dict() for r in risks],
@@ -4537,7 +4824,7 @@ async def generate_ai_insights(
     except Exception as e:
         logger.warning(f"Humanized layer build failed: {e}")
 
-    # NEW: AI Search Visibility Analysis - SEPARATE try block
+    # AI Search Visibility Analysis
     try:
         ai_visibility = await analyze_ai_search_visibility(
             url, html, basic, technical, content, social
@@ -4557,7 +4844,6 @@ async def generate_ai_insights(
         }
 
     return AIAnalysis(**insights)
-
 
 
 def generate_english_insights(overall: int, basic: Dict[str, Any], technical: Dict[str, Any], content: Dict[str, Any], ux: Dict[str, Any], social: Dict[str, Any]) -> Dict[str, Any]:
@@ -4685,6 +4971,7 @@ def generate_english_insights(overall: int, basic: Dict[str, Any], technical: Di
         'action_priority': action_priority
     }
 
+
 async def generate_enhanced_features(
     url: str,
     basic: Dict[str, Any],
@@ -4695,14 +4982,12 @@ async def generate_enhanced_features(
     """Generate all 10 enhanced features for complete frontend compatibility"""
     try:
         score = int(basic.get("digital_maturity_score", 0))
-        breakdown = (basic.get("score_breakdown") or {})
+        breakdown = basic.get("score_breakdown", {})
         seo_w = SCORING_CONFIG.weights.get("seo_basics", 20)
         mob_w = SCORING_CONFIG.weights.get("mobile", 15)
-        tech_w = SCORING_CONFIG.weights.get("technical", 15)
 
         seo_pts = int(breakdown.get("seo_basics", 0))
         mob_pts = int(breakdown.get("mobile", 0))
-        tech_pts = int(breakdown.get("technical", 0))
 
         # 1. Industry benchmarking
         percentile = (
@@ -4730,7 +5015,7 @@ async def generate_enhanced_features(
             gaps_items.append("Improve mobile UX and page speed")
         if seo_pts < int(seo_w * 0.7):
             gaps_items.append("Enhance internal linking & meta coverage")
-        if (social.get("platforms") or []).__len__() < 3:
+        if len(social.get("platforms", [])) < 3:
             gaps_items.append("Increase social proof & UGC")
         if not technical.get("has_analytics"):
             gaps_items.append("Implement comprehensive analytics tracking")
@@ -4799,7 +5084,7 @@ async def generate_enhanced_features(
             "value": "Trends analyzed",
             "description": "Relevant market trends",
             "items": trends,
-            "trends": trends,  # Backend compatibility
+            "trends": trends,
             "status": "modern" if score >= 55 else "developing"
         }
 
@@ -4825,13 +5110,13 @@ async def generate_enhanced_features(
             "value": "Yes" if mobile_ready else "No",
             "description": "Google Mobile-First indexing readiness",
             "status": "ready" if mobile_ready else "not_ready",
-            "mobile_score": int((mob_pts / mob_w) * 100) if mob_pts > 0 else 0,
+            "mobile_score": int((mob_pts / max(1, mob_w)) * 100) if mob_pts > 0 else 0,  # FIX: max(1, mob_w)
             "issues": [] if mobile_ready else ["Viewport / responsiveness improvements required"],
-            "recommendations": ([] if mobile_ready else [
+            "recommendations": [] if mobile_ready else [
                 "Add viewport meta",
                 "Increase responsive coverage (media queries)",
                 "Optimize mobile LCP elements"
-            ])
+            ]
         }
 
         # 8. Core Web Vitals
@@ -4841,20 +5126,13 @@ async def generate_enhanced_features(
         cwv_grade = ("A" if ps >= 90 else "B" if ps >= 80 else 
                     "C" if ps >= 70 else "D" if ps >= 60 else "E")
 
-        # Laske todelliset arvot page_speed_score:n perusteella
-        # LCP (Largest Contentful Paint): 0-5000ms
-        # Hyvä < 2500ms, Kohtalainen 2500-4000ms, Huono > 4000ms
-        lcp_ms = int(5000 - (ps * 27.5))  # 100 → 2250ms, 0 → 5000ms
+        lcp_ms = int(5000 - (ps * 27.5))
         lcp_ms = max(1500, min(5500, lcp_ms))
 
-        # TBT (Total Blocking Time): 0-600ms  
-        # Hyvä < 200ms, Kohtalainen 200-600ms, Huono > 600ms
-        tbt_ms = int(600 - (ps * 5))  # 100 → 100ms, 0 → 600ms
+        tbt_ms = int(600 - (ps * 5))
         tbt_ms = max(50, min(700, tbt_ms))
 
-        # CLS (Cumulative Layout Shift): 0-0.5
-        # Hyvä < 0.1, Kohtalainen 0.1-0.25, Huono > 0.25
-        cls = round((0.5 - (ps * 0.0045)), 2)  # 100 → 0.05, 0 → 0.5
+        cls = round((0.5 - (ps * 0.0045)), 2)
         cls = max(0.01, min(0.6, cls))
 
         core_web_vitals_assessment = {
@@ -4870,14 +5148,15 @@ async def generate_enhanced_features(
                 "cls": cls
             },
             "recommendations": [
-                "Optimize hero images (modern formats, compression)" if lcp_ms > 2500 else None,
-                "Defer non-critical JS and enable lazy-loading" if tbt_ms > 200 else None,
-                "Fix layout shifts - reserve space for images/ads" if cls > 0.1 else None,
-                "Minify CSS/JS and leverage HTTP caching"
+                r for r in [
+                    "Optimize hero images (modern formats, compression)" if lcp_ms > 2500 else None,
+                    "Defer non-critical JS and enable lazy-loading" if tbt_ms > 200 else None,
+                    "Fix layout shifts - reserve space for images/ads" if cls > 0.1 else None,
+                    "Minify CSS/JS and leverage HTTP caching"
+                ] if r is not None
             ]
         }
 
-        
         # 9. Technology stack
         detected = ["HTML5", "CSS3", "JavaScript"]
         modern_features = basic.get('detailed_findings', {}).get('modern_features', {})
@@ -4921,10 +5200,7 @@ async def generate_enhanced_features(
             "modernity": "modern" if basic.get('modernity_score', 0) > 60 else "standard"
         }
 
-        
-        
-
-        # PALAUTA KAIKKI 10 ENHANCED FEATURES
+        # Return all features
         return {
             "industry_benchmarking": industry_benchmarking,
             "competitor_gaps": competitor_gaps,
@@ -4935,7 +5211,6 @@ async def generate_enhanced_features(
             "mobile_first_index_ready": mobile_first_index_ready,
             "core_web_vitals_assessment": core_web_vitals_assessment,
             "technology_stack": technology_stack,
-            
         }
 
     except Exception as e:
@@ -4950,14 +5225,15 @@ async def generate_enhanced_features(
             "mobile_first_index_ready": {"name": "Mobile-First Readiness", "value": "N/A"},
             "core_web_vitals_assessment": {"name": "Core Web Vitals", "value": "N/A"},
             "technology_stack": {"name": "Technology Stack", "value": "N/A", "detected": []},
-            "ai_search_visibility": {"name": "AI Search Visibility", "value": "N/A"}  # ← LISÄTTY
+            "ai_search_visibility": {"name": "AI Search Visibility", "value": "N/A"}
         }
+
 
 def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], content: Dict[str, Any], basic: Dict[str, Any]) -> List[Dict[str, Any]]:
     actions: List[Dict[str, Any]] = []
     breakdown = basic.get('score_breakdown', {})
 
-    # --- existing rules, kept but concise ---
+    # Security check
     if breakdown.get('security', 0) <= 5:
         actions.append({
             "title": "Enable HTTPS and security headers",
@@ -4966,6 +5242,7 @@ def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], c
             "estimated_score_increase": 12, "category": "security", "estimated_time": "1-3 days"
         })
 
+    # Content check
     if breakdown.get('content', 0) <= 8:
         actions.append({
             "title": "Develop comprehensive content",
@@ -4974,6 +5251,7 @@ def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], c
             "estimated_score_increase": 15, "category": "content", "estimated_time": "2-4 weeks"
         })
 
+    # SEO check
     if breakdown.get('seo_basics', 0) < 12:
         actions.append({
             "title": "Optimize SEO fundamentals",
@@ -4982,6 +5260,7 @@ def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], c
             "estimated_score_increase": 10, "category": "seo", "estimated_time": "1-2 weeks"
         })
 
+    # Mobile check
     if breakdown.get('mobile', 0) < 10:
         actions.append({
             "title": "Implement responsive design",
@@ -4990,6 +5269,7 @@ def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], c
             "estimated_score_increase": 8, "category": "mobile", "estimated_time": "1-2 weeks"
         })
 
+    # Analytics check
     if not technical.get('has_analytics', False):
         actions.append({
             "title": "Install Google Analytics 4",
@@ -4998,6 +5278,7 @@ def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], c
             "estimated_score_increase": 5, "category": "analytics", "estimated_time": "1-2 days"
         })
 
+    # SPA check
     if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
         actions.append({
             "title": "Implement SPA SEO optimization",
@@ -5006,6 +5287,7 @@ def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], c
             "estimated_score_increase": 12, "category": "spa", "estimated_time": "2-3 weeks"
         })
 
+    # Social check
     if breakdown.get('social', 0) < 6:
         actions.append({
             "title": "Build social media presence",
@@ -5014,6 +5296,7 @@ def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], c
             "estimated_score_increase": 6, "category": "social", "estimated_time": "1-2 weeks"
         })
 
+    # Performance check
     if breakdown.get('performance', 0) < 3:
         actions.append({
             "title": "Optimize website performance",
@@ -5022,6 +5305,7 @@ def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], c
             "estimated_score_increase": 4, "category": "performance", "estimated_time": "3-5 days"
         })
 
+    # Technical check
     if breakdown.get('technical', 0) < 10:
         actions.append({
             "title": "Improve technical SEO",
@@ -5030,6 +5314,7 @@ def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], c
             "estimated_score_increase": 3, "category": "technical", "estimated_time": "2-3 days"
         })
 
+    # Default action if none found
     if not actions:
         actions.append({
             "title": "Content optimization",
@@ -5038,12 +5323,10 @@ def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], c
             "estimated_score_increase": 2, "category": "content", "estimated_time": "1 week"
         })
 
-    # --- enrichment: So what / Why now / What to do + RICE + signals ---
-    def _confidence_label(val: int) -> str:
-        return "H" if val >= 75 else "M" if val >= 50 else "L"
-
+    # Enrichment function
     def enrich(a: Dict[str, Any]) -> Dict[str, Any]:
-        cat = a.get("category","")
+        cat = a.get("category", "")
+        
         so_what = {
             "security": "Protects users and prevents SEO/trust penalties.",
             "content": "Drives qualified traffic and improves conversion.",
@@ -5078,21 +5361,26 @@ def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], c
             "technical": "Publish sitemap.xml/robots.txt; add schema markup."
         }.get(cat, "Ship the smallest change that moves the metric.")
 
-        # RICE (karkea) + owner/ETA
-        reach = max(50, int(basic.get('digital_maturity_score',0)/2) + content.get('content_quality_score',0)//2)
-        conf = min(10, max(3, basic.get('digital_maturity_score',0)//12))
+        # RICE scoring
+        reach = max(50, int(basic.get('digital_maturity_score', 0) / 2) + content.get('content_quality_score', 0) // 2)
+        conf = min(10, max(3, basic.get('digital_maturity_score', 0) // 12))
         eff_map = {"low": 1, "medium": 2, "high": 3}
-        effort_n = eff_map.get(a.get("effort","medium"), 2)
-        impact_w = {"low":2,"medium":3,"high":4,"critical":5}.get(a.get("impact","medium"),3)
+        effort_n = eff_map.get(a.get("effort", "medium"), 2)
+        impact_w = {"low": 2, "medium": 3, "high": 4, "critical": 5}.get(a.get("impact", "medium"), 3)
         rice = int((reach * impact_w * conf) / max(1, effort_n))
 
-        sig: List[str] = []
+        # Signals
+        sig = []
         if cat == "mobile":
-            if not basic.get('has_mobile_viewport'): sig.append("No viewport meta")
-            if technical.get('page_speed_score', 100) < 70: sig.append("Low page speed score")
+            if not basic.get('has_mobile_viewport'):
+                sig.append("No viewport meta")
+            if technical.get('page_speed_score', 100) < 70:
+                sig.append("Low page speed score")
         if cat == "seo":
-            if not basic.get('meta_description'): sig.append("Missing/short meta description")
-            if not basic.get('title'): sig.append("Missing/short <title>")
+            if not basic.get('meta_description'):
+                sig.append("Missing/short meta description")
+            if not basic.get('title'):
+                sig.append("Missing/short <title>")
         if cat == "spa" and basic.get('rendering_method') == 'http':
             sig.append("SPA client-rendered only")
 
@@ -5100,20 +5388,23 @@ def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], c
             "so_what": so_what,
             "why_now": why_now,
             "what_to_do": what_to_do,
-            "owner": "CMO" if cat in ["seo","content","social","performance"] else "CTO",
-            "eta_days": 5 if a.get("effort")=="low" else 10 if a.get("effort")=="medium" else 20,
+            "owner": "CMO" if cat in ["seo", "content", "social", "performance"] else "CTO",
+            "eta_days": 5 if a.get("effort") == "low" else 10 if a.get("effort") == "medium" else 20,
             "reach": reach,
             "confidence": conf,
             "rice_score": rice,
             "signals": sig or None,
-            "evidence_confidence": _confidence_label(basic.get('digital_maturity_score',0))
+            "evidence_confidence": "H" if basic.get('digital_maturity_score', 0) >= 75 else "M" if basic.get('digital_maturity_score', 0) >= 50 else "L"
         })
         return a
 
+    # Enrich all actions
     actions = [enrich(a) for a in actions]
 
+    # Sort by priority and score
     priority_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
     actions.sort(key=lambda x: (priority_order.get(x['priority'], 4), -x.get('rice_score', 0), -x.get('estimated_score_increase', 0)))
+    
     return actions[:8]
 
 # ============================================================================
@@ -7723,7 +8014,23 @@ async def _get_ai_differentiation_insights(
 ) -> Dict[str, Any]:
     """Pyydä AI:lta syvällisiä erottuvuus-insighteja"""
     
+    # LISÄÄ TÄMÄ TARKISTUS HETI ALKUUN
+    
+    if not openai_client:
+        logger.warning("OpenAI client not available, returning default insights")
+        return {
+            "positioning_summary": "AI analysis not available",
+            "unique_selling_points": [],
+            "target_customer_profile": "Analysis requires OpenAI",
+            "messaging_strategy": "Analysis requires OpenAI",
+            "immediate_opportunities": [],
+            "strategic_vulnerabilities": [],
+            "12_month_roadmap": []
+        }
+    
     prompt_lang = "fi" if language == "fi" else "en"
+    
+    # TÄSTÄ ETEENPÄIN ALKUPERÄINEN KOODI JATKUU NORMAALISTI...
     
     # Rakenna kontekstuaalinen prompt
     industry_str = f"Toimiala: {industry_context}\n" if industry_context else ""
@@ -8082,6 +8389,11 @@ def _find_content_market_gaps(summaries: List[Dict]) -> List[Dict[str, Any]]:
 async def _find_service_gaps_with_ai(summaries: List[Dict], language: str) -> List[Dict[str, Any]]:
     """Käytä AI:ta tunnistamaan palvelu- ja liiketoimintaaukot"""
     
+    # LISÄÄ TÄMÄ TARKISTUS HETI ALKUUN
+    if not openai_client:
+        logger.warning("OpenAI client not available, returning empty gaps")
+        return []
+    
     # Rakenna yhteenveto kaikista yrityksistä
     companies_summary = "\n".join([
         f"- {s['company']}: Pisteet {s['score']}/100, Sisältö: {s['content_strategy']['content_depth']}, "
@@ -8090,6 +8402,7 @@ async def _find_service_gaps_with_ai(summaries: List[Dict], language: str) -> Li
     ])
     
     prompt_lang = "fi" if language == "fi" else "en"
+    
     
     if prompt_lang == "fi":
         prompt = f"""Analysoi näiden {len(summaries)} yrityksen perusteella, mitä ASIAKKAAT kaipaavat mutta kukaan ei tarjoa:
@@ -8350,7 +8663,7 @@ def _identify_quick_wins(matrix: Dict, gaps: List[Dict]) -> List[Dict[str, Any]]
                 'expected_result': gap.get('estimated_advantage', 'Merkittävä etu')
             })
     
-    return quick_wins[:3]  # ✅ OIKEA RETURN!
+    return quick_wins[:3]  
 
 async def _get_ai_strategic_recommendations(
     your_analysis: Dict,
@@ -8361,12 +8674,19 @@ async def _get_ai_strategic_recommendations(
 ) -> List[Dict[str, Any]]:
     """Pyydä AI:lta strategisia suosituksia"""
     
+    # LISÄÄ TÄMÄ TARKISTUS HETI ALKUUN
+    if not openai_client:
+        logger.warning("OpenAI client not available, returning empty recommendations")
+        return []
+    
     your_summary = _extract_detailed_summary(your_analysis)
     positioning = matrix.get('ai_insights', {})
     
     top_gaps = [g['gap_title'] + ': ' + g['description'] for g in gaps[:3]]
     
     prompt_lang = "fi" if language == "fi" else "en"
+    
+    
     
     if prompt_lang == "fi":
         prompt = f"""Olet digitaalisen liiketoiminnan strateginen neuvonantaja. Analysoi tilanne ja anna 3 strategista suositusta:
@@ -8501,7 +8821,56 @@ def _calculate_recommendation_priority(rec: Dict) -> int:
     return score
 
 
-
+@app.delete("/api/v1/discoveries/{task_id}")
+async def delete_discovery(
+    task_id: str,
+    user: UserInfo = Depends(require_user)
+):
+    """
+    Delete a discovery task (soft delete - mark as deleted)
+    User can only delete their own discoveries
+    """
+    
+    if not task_queue:
+        raise HTTPException(503, "Task queue not available")
+    
+    try:
+        # Check task exists and belongs to user
+        task_key = f"task:{task_id}"
+        task_data = redis_client.get(task_key)
+        
+        if not task_data:
+            raise HTTPException(404, "Discovery not found")
+        
+        task = json.loads(task_data)
+        
+        # Permission check
+        if task.get("username") != user.username and user.role not in ["admin", "super_user"]:
+            raise HTTPException(403, "Access denied")
+        
+        # Soft delete: mark as deleted instead of removing
+        task["deleted"] = True
+        task["deleted_at"] = datetime.now().isoformat()
+        
+        redis_client.setex(
+            task_key,
+            86400,  # Keep for 24h for audit
+            json.dumps(task)
+        )
+        
+        logger.info(f"User {user.username} deleted discovery {task_id}")
+        
+        return {
+            "success": True,
+            "message": "Discovery deleted successfully",
+            "task_id": task_id
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete discovery: {e}")
+        raise HTTPException(500, f"Failed to delete discovery: {str(e)}")
 
 # ============================================================================
 # MAIN APPLICATION ENTRY POINT
