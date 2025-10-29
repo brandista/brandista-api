@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Brandista Competitive Intelligence API - Complete Unified Version
-Version: 6.2.4 - Production Ready
+Version: 6.3.0 - Production Ready
 Author: Brandista Team
 Date: 2025
 Description: Complete production-ready website analysis with configurable scoring system and comprehensive SPA support
@@ -26,6 +26,7 @@ from urllib.parse import urlparse
 from dataclasses import dataclass
 from pathlib import Path
 from collections import defaultdict
+from ai_content_generator import generate_full_ai_insights
 
 # ============================================================================
 # THIRD-PARTY IMPORTS
@@ -5772,7 +5773,12 @@ async def _perform_comprehensive_analysis_internal(
             # ✅ ADD MISSING FIELDS AT ROOT LEVEL OF detailed_analysis
             "missing_modern_features": modern_features.get('missing_modern_features', []),
             "interaction_patterns": interaction_data.get('interaction_patterns', []) if interaction_data else [],
-            "accessibility_score": modern_features.get('accessibility_score', ux_analysis.get('accessibility_score', 0)),
+            # ✅ FIXED: Scale ux_analysis.accessibility_score (0-100) to modern_features scale (0-15)
+            "accessibility_score": (
+                modern_features.get('accessibility_score', 0) 
+                if modern_features.get('accessibility_score', 0) > 0 
+                else int((ux_analysis.get('accessibility_score', 0) / 100) * 15)
+            ),
         },
         "smart": {
             "actions": smart_actions,
