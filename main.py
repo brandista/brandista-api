@@ -74,6 +74,16 @@ except Exception:
     AsyncOpenAI = None
     OPENAI_AVAILABLE = False
 
+    try:
+    from Wappalyzer import Wappalyzer, WebPage
+    WAPPALYZER_AVAILABLE = True
+except ImportError:
+    Wappalyzer = None
+    WebPage = None
+    WAPPALYZER_AVAILABLE = False
+    logger.warning("Wappalyzer not available - install with: pip install python-Wappalyzer")
+
+
 # ============================================================================
 # ENVIRONMENT SETUP
 # ============================================================================
@@ -930,10 +940,56 @@ def _extract_style_content(soup: BeautifulSoup) -> str:
 
 
 def _detect_frameworks_advanced(html: str, script_content: str, soup: BeautifulSoup) -> List[str]:
-    """Advanced framework detection with multiple checks"""
+    """
+    Advanced framework detection with Wappalyzer + fallback regex
+    
+    Returns:
+        List of detected framework names (e.g., ['React', 'Next.js', 'Vue.js'])
+    """
     detected = set()
     
     try:
+        # === 1. TRY WAPPALYZER FIRST (most accurate) ===
+        if WAPPALYZER_AVAILABLE:
+            try:
+                # Create Wappalyzer instance
+                wappalyzer = Wappalyzer.latest()
+                
+                # Create webpage object (needs full HTML)
+                webpage = WebPage.new_from_response(
+                    html=html,
+                    url='https://example.com'  # Wappalyzer needs a URL (fake is OK)
+                )
+                
+                # Analyze
+                technologies = wappalyzer.analyze(webpage)
+                
+                # Map Wappalyzer names to our standard names
+                framework_map = {
+                    'React': 'react',
+                    'Next.js': 'next',
+                    'Vue.js': 'vue',
+                    'Nuxt.js': 'nuxt',
+                    'Angular': 'angular',
+                    'Svelte': 'svelte',
+                    'Gatsby': 'gatsby',
+                }
+                
+                for tech in technologies:
+                    normalized = framework_map.get(tech, tech.lower())
+                    detected.add(normalized)
+                    logger.info(f"✅ Wappalyzer detected: {tech} → {normalized}")
+                
+                # If Wappalyzer found something, use it
+                if detected:
+                    return sorted(list(detected))
+                    
+            except Exception as e:
+                logger.warning(f"Wappalyzer analysis failed: {e}")
+        
+        # === 2. FALLBACK: REGEX PATTERNS (if Wappalyzer fails) ===
+        logger.info("Using regex fallback for framework detection")
+        
         # Check meta tags
         meta_generator = soup.find('meta', attrs={'name': 'generator'})
         if meta_generator:
@@ -969,7 +1025,11 @@ def _detect_frameworks_advanced(html: str, script_content: str, soup: BeautifulS
             detected.add('angular')
             
     except Exception as e:
-        logger.warning(f"Framework detection error: {e}")
+        logger.error(f"Framework detection error: {e}")
+    
+    result = sorted(list(detected))
+    logger.info(f"📦 Final detected frameworks: {result}")
+    return result
     
     return sorted(list(detected))
 
@@ -8116,7 +8176,10 @@ if __name__ == "__main__":
     logger.info(f"🔧 Enhanced Features: 10 complete features implemented")
     logger.info(f"🤖 OpenAI: {'available' if openai_client else 'not configured'}")
     logger.info(f"🌐 Starting server on {host}:{port}")
+    logger.info(f"🔍 Framework detection mode: {'Wappalyzer' if WAPPALYZER_AVAILABLE else 'Regex fallback'}")
     
+    if not WAPPALYZER_AVAILABLE:
+    logger.warning("⚠️  Install Wappalyzer for better framework detection: pip install python-Wappalyzer")
     if SECRET_KEY.startswith("brandista-key-"):
         logger.warning("⚠️  Using default SECRET_KEY - set SECRET_KEY environment variable in production!")
     if PLAYWRIGHT_AVAILABLE and not PLAYWRIGHT_ENABLED:
