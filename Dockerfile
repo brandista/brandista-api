@@ -17,9 +17,9 @@ COPY . .
 # Install Playwright browsers (if not already in base image)
 RUN playwright install chromium --with-deps || echo "Chromium already installed"
 
-# Create non-root user for security
-RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
-USER appuser
+# Use existing pwuser from Playwright image (UID 1000)
+RUN chown -R 1000:1000 /app
+USER 1000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
