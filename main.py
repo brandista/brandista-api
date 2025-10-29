@@ -955,10 +955,11 @@ def _detect_frameworks_advanced(html: str, script_content: str, soup: BeautifulS
                 # Create Wappalyzer instance
                 wappalyzer = Wappalyzer.latest()
                 
-                # Create webpage object (needs full HTML)
-                webpage = WebPage.new_from_response(
-                    html=html,
-                    url='https://example.com'  # Wappalyzer needs a URL (fake is OK)
+                # ✅ KORJAUS: Käytä WebPage() konstruktoria suoraan
+                # Wappalyzer 0.3.1 API vaatii vain html:n ja url:n
+                webpage = WebPage(
+                    url='https://example.com',  # Fake URL riittää
+                    html=html
                 )
                 
                 # Analyze
@@ -1030,8 +1031,6 @@ def _detect_frameworks_advanced(html: str, script_content: str, soup: BeautifulS
     result = sorted(list(detected))
     logger.info(f"📦 Final detected frameworks: {result}")
     return result
-    
-    return sorted(list(detected))
 
 
 def detect_interactive_elements(soup: BeautifulSoup, html: str) -> Dict[str, Any]:
