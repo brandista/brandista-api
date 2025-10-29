@@ -5709,6 +5709,33 @@ async def _perform_comprehensive_analysis_internal(
         ai_analysis, technical_audit, content_analysis, basic_analysis
     )
     
+    # ✅ EXTRACT DATA FOR ROOT-LEVEL FIELDS
+    # Extract modern_features from basic_analysis
+    modern_features = basic_analysis.get('detailed_findings', {}).get('modern_features', {})
+    
+    # Extract interaction patterns from detect_interactive_elements (if available)
+    interaction_data = None
+    try:
+        soup = BeautifulSoup(html_content, 'html.parser')
+        interaction_data = detect_interactive_elements(soup, html_content)
+    except Exception as e:
+        logger.warning(f"Could not detect interactive elements: {e}")
+        interaction_data = {
+            'interaction_patterns': [],
+            'interactivity_score': 0
+        }
+    
+    # Build mobile_reasons based on mobile score
+    mobile_score_value = basic_analysis.get('detailed_findings', {}).get('mobile_score_raw', 0)
+    mobile_reasons = []
+    if mobile_score_value < 60:
+        if not basic_analysis.get('has_mobile_viewport'):
+            mobile_reasons.append('Missing viewport meta tag')
+        if not basic_analysis.get('detailed_findings', {}).get('responsive_design', {}).get('responsive_signals'):
+            mobile_reasons.append('No responsive design signals detected')
+        if not basic_analysis.get('detailed_findings', {}).get('responsive_design', {}).get('media_queries'):
+            mobile_reasons.append('No media queries found')
+    
     # Construct result
     result = {
         "success": True,
@@ -5729,6 +5756,12 @@ async def _perform_comprehensive_analysis_internal(
             "rendering_method": basic_analysis.get('rendering_method', 'http'),
             "modernity_score": basic_analysis.get('modernity_score', 0)
         },
+        # ✅ ADD ROOT-LEVEL FIELDS FOR FRONTEND
+        "mobile_reasons": mobile_reasons,
+        "modernity_score": basic_analysis.get('modernity_score', 0),
+        "spa_detected": basic_analysis.get('spa_detected', False),
+        "rendering_method": basic_analysis.get('rendering_method', 'http'),
+        "technology_level": basic_analysis.get('technology_level', 'standard'),
         "ai_analysis": ai_analysis.dict(),
         "detailed_analysis": {
             "social_media": social_analysis,
@@ -5736,6 +5769,10 @@ async def _perform_comprehensive_analysis_internal(
             "content_analysis": content_analysis,
             "ux_analysis": ux_analysis,
             "competitive_analysis": competitive_analysis,
+            # ✅ ADD MISSING FIELDS AT ROOT LEVEL OF detailed_analysis
+            "missing_modern_features": modern_features.get('missing_modern_features', []),
+            "interaction_patterns": interaction_data.get('interaction_patterns', []) if interaction_data else [],
+            "accessibility_score": modern_features.get('accessibility_score', ux_analysis.get('accessibility_score', 0)),
         },
         "smart": {
             "actions": smart_actions,
