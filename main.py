@@ -1932,23 +1932,19 @@ async def analyze_ux_elements(html: str) -> Dict[str, Any]:
     # Accessibility scoring
     a11y_score = 0
     accessibility_issues = []
-
     if soup.find('html', lang=True): 
-        a11y_score += 7
+        a11y_score += 10
     else:
         accessibility_issues.append('Missing lang attribute')
         
-        imgs = soup.find_all('img')
+    imgs = soup.find_all('img')
     if imgs:
         with_alt = [i for i in imgs if i.get('alt','').strip()]
-        a11y_score += int((len(with_alt)/len(imgs))*8)
+        a11y_score += int((len(with_alt)/len(imgs))*25)
         if len(with_alt) < len(imgs):
             accessibility_issues.append(f'{len(imgs) - len(with_alt)} images missing alt text')
     else: 
-        a11y_score += 8
-
-    # Ensure max 15
-        a11y_score = min(a11y_score, 15)
+        a11y_score += 25
     
     # ARIA labels check
     if 'aria-' in hl:
