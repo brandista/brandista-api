@@ -5466,18 +5466,43 @@ def generate_english_insights(overall: int, basic: Dict[str, Any], technical: Di
         weaknesses.append("CRITICAL: No SSL certificate")
         threats.append("Search engines penalize non-HTTPS sites")
         recommendations.append("Install SSL certificate immediately")
+    elif breakdown.get('security', 0) < 15:
+        # FIX 12: Add subtle improvements even for good sites
+        weaknesses.append(f"Security headers could be enhanced ({breakdown.get('security', 0)}/15)")
+        recommendations.append("Add Content-Security-Policy and security headers")
+    
     if breakdown.get('content', 0) < 5:
         weaknesses.append(f"Very low content depth ({wc} words)")
         recommendations.append("Develop comprehensive content strategy")
+    elif wc < 1500:
+        # FIX 12: Content improvement for good sites
+        weaknesses.append(f"Content depth could be improved ({wc} words)")
+        recommendations.append("Expand content to 2000+ words for better SEO")
+    
     if not technical.get('has_analytics'):
         weaknesses.append("No analytics tracking")
         recommendations.append("Install Google Analytics 4")
+    
     if breakdown.get('mobile', 0) < 8:
         weaknesses.append("Poor mobile optimization")
         recommendations.append("Implement responsive design")
+    
     if len(social.get('platforms', [])) < 2:
         weaknesses.append("Limited social media presence")
         recommendations.append("Expand to key social platforms")
+    elif len(social.get('platforms', [])) < 4:
+        # FIX 12: Social media expansion for good sites
+        weaknesses.append("Social media presence could be expanded")
+        recommendations.append("Consider adding LinkedIn, TikTok, or YouTube")
+    
+    # FIX 12: Add competitive threats even for strong sites
+    if overall >= 70:
+        threats.append("Market leaders face increased competitive pressure")
+        threats.append("Digital trends evolve rapidly - continuous innovation required")
+    elif overall >= 50:
+        threats.append("Competitors may catch up if improvements stall")
+    else:
+        threats.append("Risk of losing market share to more digital-mature competitors")
     
     # Opportunities
     if overall < 30:
