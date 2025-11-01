@@ -175,10 +175,66 @@ except ImportError as e:
 # ============================================================================
 # CONSTANTS AND VERSION INFO
 # ============================================================================
-APP_VERSION = "6.3.0"
+APP_VERSION = "6.3.1"
 APP_NAME = "Brandista Competitive Intelligence API"
 APP_DESCRIPTION = """Production-ready website analysis with configurable scoring system and comprehensive SPA support."""
+# ============================================================================
+# CONFIGURATION SYSTEM
+# ============================================================================
 
+@dataclass
+class ScoringConfig:
+    """Configurable scoring weights and thresholds"""
+    weights: Dict[str, int] = None
+    content_thresholds: Dict[str, int] = None
+    technical_thresholds: Dict[str, Any] = None
+    seo_thresholds: Dict[str, Any] = None
+    
+    def __post_init__(self):
+        if self.weights is None:
+            self.weights = {
+                'security': 15, 'seo_basics': 20, 'content': 20,
+                'technical': 15, 'mobile': 15, 'social': 10, 'performance': 5
+            }
+        
+        if self.content_thresholds is None:
+            self.content_thresholds = {
+                'excellent': 3000, 'good': 2000, 'fair': 1500, 'basic': 800, 'minimal': 300
+            }
+        
+        if self.technical_thresholds is None:
+            self.technical_thresholds = {
+                'ssl_score': 20, 'mobile_viewport_score': 15, 'mobile_responsive_score': 5,
+                'analytics_score': 10, 'meta_tags_max_score': 15, 'structured_data_multiplier': 2,
+                'security_headers': {'csp': 4, 'x_frame_options': 3, 'strict_transport': 3}
+            }
+        
+        if self.seo_thresholds is None:
+            self.seo_thresholds = {
+                'title_optimal_range': (30, 60), 'title_acceptable_range': (20, 70),
+                'meta_desc_optimal_range': (120, 160), 'meta_desc_acceptable_range': (80, 200),
+                'h1_optimal_count': 1,
+                'scores': {
+                    'title_optimal': 5, 'title_acceptable': 3, 'title_basic': 1,
+                    'meta_desc_optimal': 5, 'meta_desc_acceptable': 3, 'meta_desc_basic': 1,
+                    'canonical': 2, 'hreflang': 1, 'clean_urls': 2
+                }
+            }
+
+def load_scoring_config() -> ScoringConfig:
+    """Load scoring configuration from file or environment"""
+    config_file = Path('scoring_config.json')
+    if config_file.exists():
+        try:
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config_data = json.load(f)
+                return ScoringConfig(**config_data)
+        except Exception as e:
+            logger.warning(f"Failed to load scoring config: {e}")
+    return ScoringConfig()
+
+# Global scoring configuration
+SCORING_CONFIG = load_scoring_config()
 # ============================================================================
 # CONFIGURATION - ENVIRONMENT VARIABLES
 # ============================================================================
