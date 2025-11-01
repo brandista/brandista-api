@@ -2445,27 +2445,6 @@ def generate_english_insights(overall: int, basic: Dict[str, Any], technical: Di
         'action_priority': action_priority
     }
 
-    return {
-        'summary': summary,
-        'strengths': strengths[:5],
-        'weaknesses': weaknesses[:5],
-        'opportunities': opportunities[:4],
-        'threats': threats[:3],
-        'recommendations': recommendations[:5],
-        'confidence_score': min(95, max(60, overall + 20)),
-        'sentiment_score': (overall / 100) * 0.8 + 0.2,
-        'key_metrics': {
-            'digital_maturity': overall,
-            'content_words': wc,
-            'security_score': breakdown.get('security', 0),
-            'seo_score': breakdown.get('seo_basics', 0),
-            'mobile_score': breakdown.get('mobile', 0),
-            'social_platforms': len(social.get('platforms', [])),
-            'spa_detected': basic.get('spa_detected', False),
-            'modernity_score': basic.get('modernity_score', 0)
-        },
-        'action_priority': action_priority
-    }
 
 async def generate_enhanced_features(
     url: str,
@@ -2643,7 +2622,7 @@ async def generate_enhanced_features(
         }
 
         
-                # 9. Technology stack - Improved version combining both approaches
+        # 9. Technology stack - Improved version combining both approaches
         detected = ["HTML5", "CSS3", "JavaScript"]
 
         # Get SPA frameworks from modern features (6.2.0 approach)
