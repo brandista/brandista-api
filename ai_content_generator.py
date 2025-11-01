@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 # CONFIGURATION
 # ============================================================================
 
-OPENAI_MODEL = "gpt-4o-mini"  # or "gpt-4o" for better quality
+OPENAI_MODEL = "gpt-4o"  # or "gpt-4o" for better quality
 MAX_RETRIES = 3
 TIMEOUT_SECONDS = 30
 MAX_CONCURRENT_REQUESTS = 3  # Semaphore limit
