@@ -5893,7 +5893,8 @@ async def generate_enhanced_features(
             "core_web_vitals_assessment": {"name": "Core Web Vitals", "value": "N/A"},
             "technology_stack": {"name": "Technology Stack", "value": "N/A"}
         }
-
+    
+# ✅ END OF generate_enhanced_features()
 
 def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], content: Dict[str, Any], basic: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
@@ -6623,7 +6624,7 @@ async def _perform_comprehensive_analysis_internal(
     force_playwright: bool = False,
     user: Optional[UserInfo] = None,
     revenue_input: Optional[RevenueInputRequest] = None
-) -> Dict[str, Any]:
+) -> Dict[str, Any]:  
     """
     Internal analysis core - NO QUOTA CHECK.
     Used by both public API and background tasks.
