@@ -6634,6 +6634,7 @@ async def _perform_comprehensive_analysis_internal(
         language: Language code (en/fi)
         force_playwright: Force SPA rendering
         user: Optional user info for metadata
+        revenue_input: Optional user revenue data for business impact calculation
     
     Returns:
         Complete analysis result dict
@@ -6683,7 +6684,7 @@ async def _perform_comprehensive_analysis_internal(
         headers=httpx.Headers({})
     )
     
-    # ✅ KORJAUS 1: Käytä `basic_analysis` eikä `result`
+    # Enrich technical audit with modern features
     if 'modern_features' in basic_analysis.get('detailed_findings', {}):
         modern_features = basic_analysis['detailed_findings']['modern_features']
         logger.info(f"✅ Found modern_features: {len(modern_features.get('detected_frameworks', []))} frameworks")
@@ -6694,7 +6695,6 @@ async def _perform_comprehensive_analysis_internal(
         
         logger.info(f"✅ Enriched technical_audit with: {technical_audit['detected_frameworks']}")
     else:
-        # ✅ KORJAUS 2: Oikea sisennys
         logger.warning(
             f"⚠️ modern_features NOT FOUND in detailed_findings! "
             f"Available keys: {list(basic_analysis.get('detailed_findings', {}).keys())}"
@@ -6704,7 +6704,7 @@ async def _perform_comprehensive_analysis_internal(
         technical_audit['detected_frameworks'] = []
         technical_audit['modern_js_features'] = 0
     
-    # ✅ KORJAUS 3: Siirrä analyysit oikeaan paikkaan (ei `else`-blokin sisään!)
+    # Perform remaining analyses
     content_analysis = await analyze_content_quality(html_content)
     ux_analysis = await analyze_ux_elements(html_content)
     social_analysis = await analyze_social_media_presence(url, html_content)
@@ -6739,11 +6739,10 @@ async def _perform_comprehensive_analysis_internal(
         ai_analysis, technical_audit, content_analysis, basic_analysis
     )
     
-    # ✅ EXTRACT DATA FOR ROOT-LEVEL FIELDS
-    # Extract modern_features from basic_analysis
+    # Extract modern features for detailed analysis
     modern_features = basic_analysis.get('detailed_findings', {}).get('modern_features', {})
     
-    # Extract interaction patterns from detect_interactive_elements (if available)
+    # Extract interaction patterns
     interaction_data = None
     try:
         soup = BeautifulSoup(html_content, 'html.parser')
@@ -6755,7 +6754,7 @@ async def _perform_comprehensive_analysis_internal(
             'interactivity_score': 0
         }
     
-    # Build mobile_reasons based on mobile score
+    # Build mobile reasons
     mobile_score_value = basic_analysis.get('detailed_findings', {}).get('mobile_score_raw', 0)
     mobile_reasons = []
     if mobile_score_value < 60:
@@ -6766,11 +6765,12 @@ async def _perform_comprehensive_analysis_internal(
         if not basic_analysis.get('detailed_findings', {}).get('responsive_design', {}).get('media_queries'):
             mobile_reasons.append('No media queries found')
     
-    # Construct result
+    # ✅ CONSTRUCT RESULT - KORJATTU RAKENNE
     result = {
         "success": True,
         "company_name": company_name or get_domain_from_url(url),
         "analysis_date": datetime.now().isoformat(),
+        
         "basic_analysis": {
             "company": company_name or get_domain_from_url(url),
             "website": url,
@@ -6786,24 +6786,24 @@ async def _perform_comprehensive_analysis_internal(
             "rendering_method": basic_analysis.get('rendering_method', 'http'),
             "modernity_score": basic_analysis.get('modernity_score', 0)
         },
-        # ✅ ADD ROOT-LEVEL FIELDS FOR FRONTEND
+        
+        # Root-level fields for frontend
         "mobile_reasons": mobile_reasons,
         "modernity_score": basic_analysis.get('modernity_score', 0),
         "spa_detected": basic_analysis.get('spa_detected', False),
         "rendering_method": basic_analysis.get('rendering_method', 'http'),
         "technology_level": basic_analysis.get('technology_level', 'standard'),
         "ai_analysis": ai_analysis.dict(),
+        
         "detailed_analysis": {
             "social_media": social_analysis,
             "technical_audit": technical_audit,
             "content_analysis": content_analysis,
             "ux_analysis": ux_analysis,
             "competitive_analysis": competitive_analysis,
-            # ✅ ADD MISSING FIELDS AT ROOT LEVEL OF detailed_analysis
-            "missing_modern_features": modern_features.get('missing_modern_features', []),
-            "interaction_patterns": interaction_data.get('interaction_patterns', []) if interaction_data else [],
-            # ✅ FIXED: Scale ux_analysis.accessibility_score (0-100) to modern_features scale (0-15)
-            "accessibility_score": ux_analysis.get('accessibility_score', 0), 
+            
+            # ✅ KORJATTU: Accessibility score ilman nested dict-virhettä
+            "accessibility_score": ux_analysis.get('accessibility_score', 0),
             
             "accessibility_details": {
                 "base_score": ux_analysis.get('accessibility_score', 0),
@@ -6828,9 +6828,11 @@ async def _perform_comprehensive_analysis_internal(
                 ),
             },
             
+            # ✅ KORJATTU: Nämä olivat duplikaattina - nyt vain kerran
             "missing_modern_features": modern_features.get('missing_modern_features', []),
             "interaction_patterns": interaction_data.get('interaction_patterns', []) if interaction_data else [],
         },
+        
         "smart": {
             "actions": smart_actions,
             "scores": {
@@ -6844,7 +6846,9 @@ async def _perform_comprehensive_analysis_internal(
                 "percentile": enhanced_features['industry_benchmarking']['details'].get('percentile', 50)
             }
         },
+        
         "enhanced_features": enhanced_features,
+        
         "metadata": {
             "version": APP_VERSION,
             "scoring_version": "configurable_v1_complete",
