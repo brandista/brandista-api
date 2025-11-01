@@ -1933,18 +1933,18 @@ async def analyze_ux_elements(html: str) -> Dict[str, Any]:
     a11y_score = 0
     accessibility_issues = []
 
-if soup.find('html', lang=True): 
+    if soup.find('html', lang=True): 
     a11y_score += 7
-else:
+    else:
     accessibility_issues.append('Missing lang attribute')
     
     imgs = soup.find_all('img')
-if imgs:
+    if imgs:
     with_alt = [i for i in imgs if i.get('alt','').strip()]
     a11y_score += int((len(with_alt)/len(imgs))*8)
     if len(with_alt) < len(imgs):
         accessibility_issues.append(f'{len(imgs) - len(with_alt)} images missing alt text')
-else: 
+    else: 
     a11y_score += 8
 
 # Ensure max 15
@@ -2218,79 +2218,176 @@ async def generate_ai_insights(url: str, basic: Dict[str, Any], technical: Dict[
     return AIAnalysis(**insights)
 
 def generate_english_insights(overall: int, basic: Dict[str, Any], technical: Dict[str, Any], content: Dict[str, Any], ux: Dict[str, Any], social: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate comprehensive English insights"""
+    """Generate comprehensive English insights with rich SWOT analysis"""
     strengths, weaknesses, opportunities, threats, recommendations = [], [], [], [], []
     breakdown = basic.get('score_breakdown', {})
     wc = content.get('word_count', 0)
     
-    # Strengths analysis
+    # ========== STRENGTHS ==========
     if breakdown.get('security', 0) >= 13:
-        strengths.append(f"Strong security posture ({breakdown['security']}/15)")
+        strengths.append(f"Strong security posture with HTTPS and headers ({breakdown['security']}/15)")
     if breakdown.get('seo_basics', 0) >= 15:
-        strengths.append(f"Excellent SEO fundamentals ({breakdown['seo_basics']}/20)")
+        strengths.append(f"Excellent SEO fundamentals - well-structured metadata ({breakdown['seo_basics']}/20)")
     if wc > 2000:
-        strengths.append(f"Comprehensive content ({wc} words)")
+        strengths.append(f"Comprehensive content library ({wc:,} words) - strong for organic search")
+    if wc > 1000:
+        strengths.append("Content depth demonstrates authority and expertise")
     if social.get('platforms'):
-        strengths.append(f"Multi-platform social presence ({len(social['platforms'])} platforms)")
+        strengths.append(f"Multi-platform social presence ({len(social['platforms'])} active platforms)")
     if basic.get('spa_detected') and basic.get('modernity_score', 0) > 60:
-        strengths.append("Modern SPA architecture with good implementation")
+        strengths.append("Modern SPA architecture with good performance and UX")
+    if technical.get('has_analytics'):
+        strengths.append("Analytics tracking enabled - data-driven optimization possible")
+    if breakdown.get('mobile', 0) >= 12:
+        strengths.append("Excellent mobile optimization - ready for mobile-first indexing")
+    if basic.get('modernity_score', 0) > 70:
+        strengths.append("Cutting-edge technology stack - competitive advantage")
+    if len(strengths) < 3:
+        strengths.append("Basic digital presence established")
     
-    # Weaknesses analysis
+    # ========== WEAKNESSES ==========
     if breakdown.get('security', 0) == 0:
-        weaknesses.append("CRITICAL: No SSL certificate")
-        threats.append("Search engines penalize non-HTTPS sites")
-        recommendations.append("Install SSL certificate immediately")
+        weaknesses.append("CRITICAL: No SSL certificate - search engines penalize and users see warnings")
     if breakdown.get('content', 0) < 5:
-        weaknesses.append(f"Very low content depth ({wc} words)")
-        recommendations.append("Develop comprehensive content strategy")
+        weaknesses.append(f"Thin content ({wc} words) - insufficient for ranking on competitive terms")
+    if wc < 500:
+        weaknesses.append("Minimal content depth limits organic traffic potential significantly")
     if not technical.get('has_analytics'):
-        weaknesses.append("No analytics tracking")
-        recommendations.append("Install Google Analytics 4")
+        weaknesses.append("No analytics tracking - decisions made blind without user data")
     if breakdown.get('mobile', 0) < 8:
-        weaknesses.append("Poor mobile optimization")
-        recommendations.append("Implement responsive design with proper viewport")
+        weaknesses.append("Poor mobile optimization - fails Core Web Vitals and user expectations")
+    if breakdown.get('seo_basics', 0) < 10:
+        weaknesses.append("Weak SEO fundamentals - titles, meta descriptions, or headers missing")
     if len(social.get('platforms', [])) < 2:
-        weaknesses.append("Limited social media presence")
-        recommendations.append("Establish presence on relevant social platforms")
+        weaknesses.append("Limited social media presence - missing discovery and trust signals")
+    if technical.get('page_speed_score', 100) < 50:
+        weaknesses.append("Slow page speed - users bounce before content loads")
+    if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
+        weaknesses.append("SPA client-only rendering - invisible to search engines and social crawlers")
+    if breakdown.get('technical', 0) < 8:
+        weaknesses.append("Missing technical SEO fundamentals (sitemap, robots.txt, schema)")
+    if len(weaknesses) < 3:
+        weaknesses.append("Minor SEO and UX gaps remain")
     
-    # Opportunities based on score
+    # ========== OPPORTUNITIES ==========
     if overall < 30:
         opportunities.extend([
-            f"Massive upside potential - target {overall + 40} points",
-            "Basic fundamentals can yield +20-30 points quickly"
+            f"Massive upside potential - target {overall + 40}+ points (realistic 6-12 month roadmap)",
+            "Basic fundamentals can yield +20-30 points quickly with focused effort",
+            "Content gap vs competitors is exploitable - first-mover advantage on key topics",
+            "Mobile optimization alone could unlock 15-25% traffic increase"
         ])
     elif overall < 50:
         opportunities.extend([
-            f"Strong growth potential - target {overall + 30} points",
-            "SEO optimization could lift traffic by 50-100%"
+            f"Strong growth potential - target {overall + 30}+ points within 6 months",
+            "SEO optimization could unlock 50-100% organic traffic increase",
+            "Content expansion into underserved topics vs competitors",
+            "Mobile/UX improvements could improve conversion by 20-40%"
         ])
     elif overall < 75:
         opportunities.extend([
-            "Optimize for conversion and user experience",
-            "Advanced features and automation opportunities"
+            "Optimize for conversion and user experience - focus on revenue impact",
+            "Advanced features and automation opportunities (AI, chatbots, personalization)",
+            "Competitive content strategy to reclaim market share",
+            "International or vertical market expansion potential"
         ])
     else:
         opportunities.extend([
-            "Strong foundation for innovation",
-            "AI and automation are next leverage points"
+            "Strong foundation for innovation and experimentation",
+            "AI and automation are next leverage points for efficiency",
+            "Leadership positioning in market - thought leadership content",
+            "Expansion into adjacent markets or verticals"
         ])
     
     # SPA-specific opportunities
-    if basic.get('spa_detected') and basic.get('modernity_score', 0) < 50:
-        opportunities.append("Modernize SPA implementation for better performance")
+    if basic.get('spa_detected'):
+        if basic.get('modernity_score', 0) < 50:
+            opportunities.append("Modernize SPA implementation - better performance and SEO")
+        else:
+            opportunities.append("Leverage SPA advantages - faster UX, progressive enhancement")
     
-    # Summary generation
+    # Content-specific opportunities
+    if wc < 1000:
+        opportunities.append("Pillar content strategy - create authoritative 3000+ word guides")
+    if wc >= 2000:
+        opportunities.append("Repurpose content across channels (video, infographics, podcasts)")
+    
+    # ========== THREATS ==========
+    if breakdown.get('security', 0) <= 5:
+        threats.append("CRITICAL: Security vulnerabilities expose users and damage brand trust")
+    if technical.get('page_speed_score', 100) < 50:
+        threats.append("Slow performance drives traffic to faster competitors - direct revenue loss")
+    if breakdown.get('mobile', 0) < 8:
+        threats.append("Mobile-first indexing penalties - Google demotes non-optimized sites in search")
+    if breakdown.get('seo_basics', 0) < 10:
+        threats.append("Competitors with better SEO capture organic traffic and market share")
+    if len(social.get('platforms', [])) == 0:
+        threats.append("Zero social presence - missing trust signals and discovery channels")
+    if wc < 500:
+        threats.append("Content weakness vs competitors with authoritative, deep content")
+    if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
+        threats.append("SPA visibility crisis - search engines and social crawlers see empty pages")
+    if not technical.get('has_analytics'):
+        threats.append("No data on user behavior - unable to respond to market changes quickly")
+    if basic.get('modernity_score', 0) < 30:
+        threats.append("Technology debt - outdated stack limits scaling and feature development")
+    if breakdown.get('technical', 0) < 8:
+        threats.append("Technical SEO gaps allow competitors to rank for high-intent keywords")
+    if overall < 40:
+        threats.append("Overall digital maturity gap - risk of being overtaken by digitally-savvy competitors")
+    if len(threats) < 3:
+        threats.append("Moderate competitive pressure from well-optimized competitors")
+    
+    # ========== RECOMMENDATIONS ==========
+    if breakdown.get('security', 0) == 0:
+        recommendations.append("Install SSL certificate immediately - blocks revenue and trust")
+    
+    if wc < 1000:
+        recommendations.append("Develop comprehensive content strategy - 6-12 pillar articles")
+    else:
+        recommendations.append("Expand content into clusters - link pillar to supporting articles")
+    
+    if breakdown.get('seo_basics', 0) < 12:
+        recommendations.append("Optimize top 10 pages - titles, meta, H1/H2 structure")
+    else:
+        recommendations.append("Audit internal linking and implement topic clusters")
+    
+    if breakdown.get('mobile', 0) < 10:
+        recommendations.append("Implement responsive design with proper viewport meta")
+    else:
+        recommendations.append("Optimize Core Web Vitals - images, lazy-loading, JS defer")
+    
+    if not technical.get('has_analytics'):
+        recommendations.append("Install Google Analytics 4 + conversion events immediately")
+    else:
+        recommendations.append("Set up conversion funnels and anomaly detection alerts")
+    
+    if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
+        recommendations.append("Implement SSR or prerendering for critical routes")
+    
+    if len(social.get('platforms', [])) < 2:
+        recommendations.append("Establish presence on 2-3 relevant social platforms with strategy")
+    else:
+        recommendations.append("Increase social sharing and engagement - add share buttons")
+    
+    if technical.get('page_speed_score', 100) < 60:
+        recommendations.append("Compress images, defer JS, enable caching - target LCP < 2.5s")
+    
+    if basic.get('modernity_score', 0) < 50:
+        recommendations.append("Modernize tech stack - evaluate framework/build tool upgrades")
+    
+    # ========== SUMMARY ==========
     if overall >= 75: 
-        summary = f"Excellent digital maturity ({overall}/100) - you are a digital leader."
+        summary = f"Excellent digital maturity ({overall}/100) - you are a digital leader with strong competitive advantages."
     elif overall >= 60: 
-        summary = f"Good digital presence ({overall}/100) with solid fundamentals."
+        summary = f"Good digital presence ({overall}/100) with solid fundamentals and clear growth opportunities."
     elif overall >= 45: 
-        summary = f"Baseline achieved ({overall}/100) with improvement opportunities."
+        summary = f"Baseline achieved ({overall}/100) with significant improvement opportunities ahead."
     else: 
-        summary = f"Early-stage digital maturity ({overall}/100) - immediate action required."
+        summary = f"Early-stage digital maturity ({overall}/100) - immediate action required to compete effectively."
     
     if basic.get('spa_detected'):
-        summary += f" Modern SPA architecture {'well-implemented' if basic.get('modernity_score', 0) > 60 else 'needs optimization'}."
+        summary += f" Modern SPA architecture {'well-implemented' if basic.get('modernity_score', 0) > 60 else 'needs SEO optimization'}."
 
     # Action priority
     action_priority = [
@@ -2319,6 +2416,28 @@ def generate_english_insights(overall: int, basic: Dict[str, Any], technical: Di
             'description': 'Mobile experience and responsiveness'
         }
     ]
+
+    return {
+        'summary': summary,
+        'strengths': strengths[:8],  # Top 8 strengths
+        'weaknesses': weaknesses[:8],  # Top 8 weaknesses
+        'opportunities': opportunities[:6],  # Top 6 opportunities
+        'threats': threats[:6],  # Top 6 threats
+        'recommendations': recommendations[:8],  # Top 8 recommendations
+        'confidence_score': min(95, max(60, overall + 20)),
+        'sentiment_score': (overall / 100) * 0.8 + 0.2,
+        'key_metrics': {
+            'digital_maturity': overall,
+            'content_words': wc,
+            'security_score': breakdown.get('security', 0),
+            'seo_score': breakdown.get('seo_basics', 0),
+            'mobile_score': breakdown.get('mobile', 0),
+            'social_platforms': len(social.get('platforms', [])),
+            'spa_detected': basic.get('spa_detected', False),
+            'modernity_score': basic.get('modernity_score', 0)
+        },
+        'action_priority': action_priority
+    }
 
     return {
         'summary': summary,
