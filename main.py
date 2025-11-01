@@ -6422,18 +6422,44 @@ async def verify_magic_link_get(token: str, req: Request):
 
        
 # ============================================================================
-# GOOGLE OAUTH ENDPOINTS - FIXED VERSION
+# GOOGLE OAUTH ENDPOINTS - COMPLETE FIXED VERSION
 # ============================================================================
 
-# ============================================================================
-# GOOGLE OAUTH CALLBACK - KORJATTU SALASANAN LUONTI
-# ============================================================================
+@app.get("/auth/google/login")
+async def google_login(request: Request):
+    """
+    Initiate Google OAuth login flow
+    Redirects user to Google's OAuth consent screen
+    """
+    
+    if not oauth:
+        raise HTTPException(503, "Google OAuth not configured")
+    
+    if not os.getenv('GOOGLE_CLIENT_ID'):
+        raise HTTPException(503, "Google OAuth not configured - missing GOOGLE_CLIENT_ID")
+    
+    try:
+        # Generate redirect URI (backend callback URL)
+        redirect_uri = request.url_for('google_callback')
+        
+        logger.info(f"🔐 Initiating Google OAuth login")
+        logger.info(f"📍 Redirect URI: {redirect_uri}")
+        
+        # Authorize redirect to Google
+        return await oauth.google.authorize_redirect(request, redirect_uri)
+        
+    except Exception as e:
+        logger.error(f"❌ Google OAuth login failed: {e}")
+        import traceback
+        logger.error(f"📋 Traceback: {traceback.format_exc()}")
+        raise HTTPException(500, f"OAuth initialization failed: {str(e)}")
+
 
 @app.get("/auth/google/callback")
 async def google_callback(request: Request, background_tasks: BackgroundTasks):
-    """Handle Google OAuth callback"""
+    """Handle Google OAuth callback and create user session"""
     try:
-        if not os.getenv('GOOGLE_CLIENT_ID'):
+        if not oauth or not os.getenv('GOOGLE_CLIENT_ID'):
             raise HTTPException(503, "Google OAuth not configured")
         
         # Get access token from Google
@@ -6454,14 +6480,14 @@ async def google_callback(request: Request, background_tasks: BackgroundTasks):
         if not email:
             raise HTTPException(400, "Email not provided by Google")
         
-        # ✅ FIX: Check DATABASE FIRST for existing user and role
+        # ✅ STEP 1: Check DATABASE FIRST for existing user and role
         existing_user = None
         existing_username = None
         is_new_user = True
-        role = "user"  # Default
+        role = "user"  # Default role
         username = email.split('@')[0]
         
-        # Check database first
+        # Check database first (highest priority)
         try:
             from database import get_user_from_db, DATABASE_ENABLED
             
@@ -6478,7 +6504,7 @@ async def google_callback(request: Request, background_tasks: BackgroundTasks):
         except Exception as db_error:
             logger.warning(f"⚠️ Database lookup error: {db_error}")
         
-        # If not in DB, check memory (USERS_DB)
+        # ✅ STEP 2: If not in DB, check memory (USERS_DB)
         if not existing_user:
             for uname, udata in USERS_DB.items():
                 if udata.get("email") == email:
@@ -6489,7 +6515,7 @@ async def google_callback(request: Request, background_tasks: BackgroundTasks):
                     logger.info(f"📋 Found user in memory: {username} with role: {role}")
                     break
         
-        # Add to user_store
+        # ✅ STEP 3: Add to user_store (temporary session store)
         if email not in user_store:
             user_store[email] = {
                 "username": username,
@@ -6505,30 +6531,23 @@ async def google_callback(request: Request, background_tasks: BackgroundTasks):
             }
             logger.info(f"✅ Added Google OAuth user to user_store: {email}")
         
-        # Add to USERS_DB if needed
+        # ✅ STEP 4: Create new user if not exists
         if not existing_user:
-            # ✅ KORJATTU: Luodaan turvallinen salasana OAuth-käyttäjille
             try:
-                # Vaihtoehto 1: Käytä google_id:tä (suositeltu)
+                # Create safe password for OAuth users
                 safe_password = f"oauth_google_{google_id[:16]}"
                 
-                # Vaihtoehto 2: Jos google_id on liian pitkä, hashaa se ensin
-                # password_base = hashlib.sha256(google_id.encode()).hexdigest()[:16]
-                # safe_password = f"g_{password_base}"
-                
-                logger.info(f"🔐 Creating OAuth password (length: {len(safe_password)} chars)")
-                
-                # Varmista että on string (ei bytes)
+                # Ensure it's a string (not bytes)
                 if not isinstance(safe_password, str):
                     safe_password = safe_password.decode('utf-8')
                 
-                # ✅ Käytä OLEMASSA OLEVAA pwd_context (määritelty tiedoston alussa)
+                # Hash password using existing pwd_context
                 hashed_password = pwd_context.hash(safe_password)
                 logger.info(f"✅ Password hashed successfully")
                 
             except Exception as hash_error:
                 logger.error(f"❌ Password hashing failed: {hash_error}")
-                # Ultra-yksinkertainen fallback
+                # Ultra-simple fallback
                 try:
                     fallback_password = f"oauth_{username}"
                     hashed_password = pwd_context.hash(fallback_password)
@@ -6537,7 +6556,7 @@ async def google_callback(request: Request, background_tasks: BackgroundTasks):
                     logger.error(f"❌ Even fallback failed: {fallback_error}")
                     raise HTTPException(500, "Failed to create user password hash")
             
-            # Tallenna USERS_DB:hen
+            # ✅ STEP 5: Save to USERS_DB (memory)
             USERS_DB[username] = {
                 "username": username,
                 "email": email,
@@ -6547,7 +6566,7 @@ async def google_callback(request: Request, background_tasks: BackgroundTasks):
             }
             logger.info(f"✅ Added Google OAuth user to USERS_DB: {username}")
             
-            # ✅ Tallenna tietokantaan (jos saatavilla)
+            # ✅ STEP 6: Persist to database (if available)
             try:
                 from database import create_user_in_db, DATABASE_ENABLED
                 
@@ -6570,27 +6589,30 @@ async def google_callback(request: Request, background_tasks: BackgroundTasks):
                 logger.warning("⚠️ Database module not available, user stored in memory only")
             except Exception as db_error:
                 logger.error(f"⚠️ Database error: {db_error}")
-                # Jatka silti - käyttäjä on muistissa
+                # Continue anyway - user is in memory
             
-            # ✅ Lähetä ilmoitus uudesta käyttäjästä
+            # ✅ STEP 7: Send new user notification
             if is_new_user:
                 logger.info(f"📧 New Google OAuth user, sending notification for: {email}")
-                background_tasks.add_task(
-                    on_user_registered,
-                    user_email=email,
-                    user_name=name,
-                    method="google"
-                )
+                try:
+                    background_tasks.add_task(
+                        on_user_registered,
+                        user_email=email,
+                        user_name=name,
+                        method="google"
+                    )
+                except Exception as email_error:
+                    logger.warning(f"⚠️ Failed to send notification: {email_error}")
         
-        # Luo JWT access token API:lle
+        # ✅ STEP 8: Create JWT access token for API
         access_token = create_access_token({
-            "sub": username,
-            "role": role  # ✅ Käytä DB:stä haettua roolia!
+            "sub": username,  # Use username (not email) for consistency
+            "role": role      # Use role from DB or default
         })
         
         logger.info(f"✅ Google OAuth login successful for {email} with role: {role}")
         
-        # ✅ Ohjaa suoraan dashboardiin hash-parametreilla
+        # ✅ STEP 9: Redirect to frontend dashboard with token in hash
         import time
         timestamp = int(time.time())
         
@@ -6603,7 +6625,7 @@ async def google_callback(request: Request, background_tasks: BackgroundTasks):
             f"&role={role}"
         )
         
-        logger.info(f"🎯 Redirecting to dashboard with token hash: {redirect_url[:80]}...")
+        logger.info(f"🎯 Redirecting to dashboard: {redirect_url[:80]}...")
         
         return RedirectResponse(url=redirect_url)
         
@@ -6613,7 +6635,8 @@ async def google_callback(request: Request, background_tasks: BackgroundTasks):
         logger.error(f"❌ Google OAuth callback failed: {e}")
         import traceback
         logger.error(f"📋 Traceback: {traceback.format_exc()}")
-        # Ohjaa frontendiin virheellä
+        
+        # Redirect to frontend with error
         frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')
         return RedirectResponse(url=f"{frontend_url}/login?error=google_auth_failed")
 # ============================================================================
