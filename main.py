@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Brandista Competitive Intelligence API - Complete Unified Version
-Version: 6.3.5 - Production Ready
+Version: 6.3.1 - Production Ready
 Author: Brandista Team
 Date: 2025
 Description: Complete production-ready website analysis with configurable scoring system and comprehensive SPA support
@@ -6688,7 +6688,9 @@ async def _perform_comprehensive_analysis_internal(
     url = clean_url(url)
     
     # Check cache
-    cache_key = get_cache_key(url, "ai_comprehensive_v6.1.1_complete")
+    # FIX 11: Updated cache version to v6.3.1_fixed to invalidate old cache
+    # with incorrect accessibility scores (45/15 bug) and modern features bugs
+    cache_key = get_cache_key(url, "ai_comprehensive_v6.3.1_fixed")
     cached_result = await get_from_cache(cache_key)
     if cached_result:
         logger.info(f"Cache hit for {url}")
