@@ -508,62 +508,11 @@ _FRAMEWORK_PATTERNS = {
 
 
 # ============================================================================
-# CONFIGURATION SYSTEM
+# CONFIGURATION SYSTEM (already defined above at line ~186)
 # ============================================================================
 
-@dataclass
-class ScoringConfig:
-    """Configurable scoring weights and thresholds"""
-    weights: Dict[str, int] = None
-    content_thresholds: Dict[str, int] = None
-    technical_thresholds: Dict[str, Any] = None
-    seo_thresholds: Dict[str, Any] = None
-    
-    def __post_init__(self):
-        if self.weights is None:
-            self.weights = {
-                'security': 15, 'seo_basics': 20, 'content': 20,
-                'technical': 15, 'mobile': 15, 'social': 10, 'performance': 5
-            }
-        
-        if self.content_thresholds is None:
-            self.content_thresholds = {
-                'excellent': 3000, 'good': 2000, 'fair': 1500, 'basic': 800, 'minimal': 300
-            }
-        
-        if self.technical_thresholds is None:
-            self.technical_thresholds = {
-                'ssl_score': 20, 'mobile_viewport_score': 15, 'mobile_responsive_score': 5,
-                'analytics_score': 10, 'meta_tags_max_score': 15, 'structured_data_multiplier': 2,
-                'security_headers': {'csp': 4, 'x_frame_options': 3, 'strict_transport': 3}
-            }
-        
-        if self.seo_thresholds is None:
-            self.seo_thresholds = {
-                'title_optimal_range': (30, 60), 'title_acceptable_range': (20, 70),
-                'meta_desc_optimal_range': (120, 160), 'meta_desc_acceptable_range': (80, 200),
-                'h1_optimal_count': 1,
-                'scores': {
-                    'title_optimal': 5, 'title_acceptable': 3, 'title_basic': 1,
-                    'meta_desc_optimal': 5, 'meta_desc_acceptable': 3, 'meta_desc_basic': 1,
-                    'canonical': 2, 'hreflang': 1, 'clean_urls': 2
-                }
-            }
-
-def load_scoring_config() -> ScoringConfig:
-    """Load scoring configuration from file or environment"""
-    config_file = Path('scoring_config.json')
-    if config_file.exists():
-        try:
-            with open(config_file, 'r', encoding='utf-8') as f:
-                config_data = json.load(f)
-                return ScoringConfig(**config_data)
-        except Exception as e:
-            logging.getLogger(__name__).warning(f"Failed to load scoring config: {e}")
-    return ScoringConfig()
-
-# Global scoring configuration
-SCORING_CONFIG = load_scoring_config()
+# ScoringConfig and load_scoring_config already defined above
+# Global scoring configuration already loaded above
 
 # ============================================================================
 # CONSTANTS
@@ -608,19 +557,11 @@ RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "false").lower() == "true"
 RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "20"))
 
 # ============================================================================
-# LOGGING
+# LOGGING (already configured at top of file)
 # ============================================================================
 
-logging.basicConfig(
-    level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(), logging.FileHandler('brandista_api.log', encoding='utf-8')]
-)
-
-logger = logging.getLogger(__name__)
-logger.info(f"Starting {APP_NAME} v{APP_VERSION}")
-logger.info(f"Scoring weights: {SCORING_CONFIG.weights}")
-logger.info(f"Playwright support: {'enabled' if PLAYWRIGHT_AVAILABLE and PLAYWRIGHT_ENABLED else 'disabled'}")
+# Logger already initialized at top - using existing logger
+# These log messages moved to startup sequence
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 GOOGLE_SEARCH_ENGINE_ID = os.getenv("GOOGLE_SEARCH_ENGINE_ID", "171a60959e6cb4d76")
@@ -1472,15 +1413,13 @@ def detect_interactive_elements(soup: BeautifulSoup, html: str) -> Dict[str, Any
 # FASTAPI SETUP
 # ============================================================================
 
-app = FastAPI(
-    title=APP_NAME, version=APP_VERSION, description=APP_DESCRIPTION,
-    docs_url="/docs", redoc_url="/redoc", openapi_url="/openapi.json"
-)
+# Add the startup event handler here using modern lifespan
+from contextlib import asynccontextmanager
 
-# Add the startup event handler here:
-@app.on_event("startup")
-async def startup_event():
-    """Initialize all services on application startup"""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Modern lifespan context manager (replaces deprecated @app.on_event)"""
+    # Startup
     global magic_link_auth, redis_client, task_queue, oauth
     
     # 1. Initialize database if enabled
@@ -1573,7 +1512,6 @@ async def startup_event():
         magic_link_auth = None
     
     # 4. Initialize Google OAuth
-    global oauth
     try:
         oauth_config = StarletteConfig(environ={
             'GOOGLE_CLIENT_ID': os.getenv('GOOGLE_CLIENT_ID', ''),
@@ -1609,6 +1547,21 @@ async def startup_event():
     
     if SECRET_KEY.startswith("brandista-key-"):
         logger.warning("⚠️ Using default SECRET_KEY - set custom SECRET_KEY in production!")
+    
+    yield
+    
+    # Shutdown (cleanup code here if needed)
+    logger.info("🛑 Shutting down application")
+
+# Now recreate app WITH lifespan
+app = FastAPI(
+    title=APP_NAME,
+    description="Brandista Competitive Intelligence API - Complete Production System",
+    version=APP_VERSION,
+    docs_url="/docs",
+    redoc_url="/redoc",
+    lifespan=lifespan  # Modern way to handle startup/shutdown
+)
 
 
 app.add_middleware(
@@ -1735,11 +1688,9 @@ def init_users():
         }
     }
     
-    logger.info("🔐 User passwords hashed:")
-    for email, user_data in USERS_DB.items():
-        username = user_data.get('username')
-        hash_preview = user_data.get('hashed_password')[:20]
-        logger.info(f"  {username}: {hash_preview}...")
+    # Security: Do not log password hashes, even partial
+    logger.info("🔐 User authentication initialized")
+    logger.info(f"   Loaded {len(USERS_DB)} users")
     
     return USERS_DB
 
@@ -6261,7 +6212,9 @@ async def login(request: LoginRequest):
     # ✅ VERIFY PASSWORD
     logger.info(f"🔐 Verifying password for: {user.get('username')} (key: {user_key})")
     
-    if not verify_password(request.password, user["hashed_password"]):
+    # FIX: verify_password can return None, must explicitly check for False
+    password_valid = verify_password(request.password, user["hashed_password"])
+    if password_valid is False or not password_valid:
         logger.error(f"❌ INVALID PASSWORD for: {request.username}")
         raise HTTPException(401, "Invalid credentials")
     
