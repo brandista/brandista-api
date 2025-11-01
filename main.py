@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Brandista Competitive Intelligence API - Complete Unified Version
-Version: 6.3.3 - Production Ready
+Version: 6.3.1 - Production Ready
 Author: Brandista Team
 Date: 2025
 Description: Complete production-ready website analysis with configurable scoring system and comprehensive SPA support
@@ -2309,12 +2309,19 @@ def create_score_breakdown_with_aliases(breakdown_raw: Dict[str, int]) -> Dict[s
     """Create score breakdown with both backend and frontend fields (aliases 0-100)."""
     weights = SCORING_CONFIG.weights
     result = dict(breakdown_raw or {})
+    
+    # Frontend aliases (0-100 scale)
     result['seo'] = int((result.get('seo_basics', 0) / weights['seo_basics']) * 100)
     result['user_experience'] = int((result.get('mobile', 0) / weights['mobile']) * 100)
-    result['accessibility'] = min(100, int((
-        (result.get('mobile', 0) / weights['mobile'] * 0.6) + 
-        (result.get('technical', 0) / weights['technical'] * 0.4)
-    ) * 100))
+    
+    # FIX 7: Accessibility should be 0-15, not 0-100!
+    # It's weighted combination of mobile (60%) and technical (40%)
+    # Max: 15 * 0.6 + 15 * 0.4 = 9 + 6 = 15
+    result['accessibility'] = int(
+        (result.get('mobile', 0) * 0.6) + 
+        (result.get('technical', 0) * 0.4)
+    )
+    
     return result
 
 async def cleanup_cache():
