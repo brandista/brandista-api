@@ -6427,25 +6427,24 @@ async def verify_magic_link_get(token: str, req: Request):
 
 @app.get("/auth/google/login")
 async def google_login(request: Request):
-    """
-    Initiate Google OAuth login flow
-    Redirects user to Google's OAuth consent screen
-    """
+    """Initiate Google OAuth login flow"""
     
     if not oauth:
         raise HTTPException(503, "Google OAuth not configured")
     
     if not os.getenv('GOOGLE_CLIENT_ID'):
-        raise HTTPException(503, "Google OAuth not configured - missing GOOGLE_CLIENT_ID")
+        raise HTTPException(503, "Google OAuth not configured")
     
     try:
-        # Generate redirect URI (backend callback URL)
-        redirect_uri = request.url_for('google_callback')
+        # ✅ KORJAUS: Käytä GOOGLE_REDIRECT_URI env-muuttujaa
+        redirect_uri = os.getenv(
+            'GOOGLE_REDIRECT_URI',
+            'https://fastapi-production-51f9.up.railway.app/auth/google/callback'
+        )
         
         logger.info(f"🔐 Initiating Google OAuth login")
         logger.info(f"📍 Redirect URI: {redirect_uri}")
         
-        # Authorize redirect to Google
         return await oauth.google.authorize_redirect(request, redirect_uri)
         
     except Exception as e:
