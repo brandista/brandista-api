@@ -7768,60 +7768,8 @@ async def get_discovery_results(
 
 
 # ============================================================================
-# USER DISCOVERIES LIST
+# USER DISCOVERIES LIST - Moved to line ~7897
 # ============================================================================
-
-@app.get("/api/v1/my-discoveries", tags=["Competitor Discovery"])
-async def get_my_discoveries(
-    user: UserInfo = Depends(require_user),
-    limit: int = 20,
-    status: Optional[str] = None
-):
-    """
-    Get list of user's discovery tasks.
-    
-    Args:
-        limit: Maximum number of tasks to return
-        status: Filter by status (pending, running, completed, failed)
-    """
-    
-    if not task_queue:
-        raise HTTPException(503, "Task queue not available")
-    
-    try:
-        # Get user's tasks from Redis
-        user_tasks = task_queue.get_user_tasks(user.username, limit=limit)
-        
-        # Filter by status if requested
-        if status:
-            user_tasks = [t for t in user_tasks if t.get("status") == status]
-        
-        # Enrich with summary data
-        enriched_tasks = []
-        for task in user_tasks:
-            task_id = task.get("task_id")
-            results = task_queue.get_results(task_id)
-            
-            enriched_tasks.append({
-                "task_id": task_id,
-                "status": task.get("status"),
-                "progress": task.get("progress", 0),
-                "created_at": task.get("created_at"),
-                "completed_at": task.get("completed_at"),
-                "industry": task.get("industry"),
-                "total_competitors": task.get("total", 0),
-                "successful": len([r for r in results if r.get("status") == "success"]),
-                "failed": len([r for r in results if r.get("status") == "failed"])
-            })
-        
-        return {
-            "discoveries": enriched_tasks,
-            "total": len(enriched_tasks)
-        }
-        
-    except Exception as e:
-        logger.error(f"Failed to get user discoveries: {e}")
-        raise HTTPException(500, "Failed to retrieve discoveries")
 
 
 # ============================================================================
