@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Brandista Competitive Intelligence API - Complete Unified Version
-Version: 6.3.1 - Production Ready
+Version: 6.3.5 - Production Ready
 Author: Brandista Team
 Date: 2025
 Description: Complete production-ready website analysis with configurable scoring system and comprehensive SPA support
@@ -1122,7 +1122,7 @@ def analyze_modern_web_features(html: str, spa_info: Dict[str, Any]) -> Dict[str
                 'aria_label_count': aria_labels,
                 'aria_role_count': aria_roles,
                 'images_total': len(images),
-                'images_with_alt': len(images_with_alt) if images else 0,
+                'images_with_alt': images_with_alt,  # FIX 8: Already an int, don't use len()
             },
             
             'missing_modern_features': missing_modern_features
@@ -1187,11 +1187,12 @@ def _detect_frameworks_advanced(html: str, script_content: str, soup: BeautifulS
                 # Create Wappalyzer instance
                 wappalyzer = Wappalyzer.latest()
                 
-                # ✅ KORJAUS: Käytä WebPage() konstruktoria suoraan
-                # Wappalyzer 0.3.1 API vaatii vain html:n ja url:n
+                # ✅ FIX 9: Wappalyzer API requires headers parameter
+                # Create WebPage with proper parameters
                 webpage = WebPage(
-                    url='https://example.com',  # Fake URL riittää
-                    html=html
+                    url='https://example.com',  # Fake URL is sufficient
+                    html=html,
+                    headers={}  # Empty headers dict required by API
                 )
                 
                 # Analyze
@@ -4775,11 +4776,11 @@ async def generate_ai_insights(
         snippets = build_snippet_examples(url, basic)
 
         insights.update({
-            "business_impact": detailed_impact.dict(),
-            "role_summaries": role.dict(),
-            "plan_90d": plan.dict(),
-            "risk_register": [r.dict() for r in risks],
-            "snippet_examples": snippets.dict()
+            "business_impact": detailed_impact.model_dump(),  # FIX 10: Pydantic V2
+            "role_summaries": role.model_dump(),
+            "plan_90d": plan.model_dump(),
+            "risk_register": [r.model_dump() for r in risks],
+            "snippet_examples": snippets.model_dump()
         })
     except Exception as e:
         logger.warning(f"Humanized layer build failed: {e}")
@@ -6768,8 +6769,9 @@ async def _perform_comprehensive_analysis_internal(
     
     # AI Search Visibility
     if hasattr(ai_analysis, 'ai_search_visibility') and ai_analysis.ai_search_visibility:
-        ai_vis_dict = (ai_analysis.ai_search_visibility.dict() 
-                      if hasattr(ai_analysis.ai_search_visibility, 'dict') 
+        # FIX 10: Use Pydantic V2 model_dump() instead of deprecated dict()
+        ai_vis_dict = (ai_analysis.ai_search_visibility.model_dump() 
+                      if hasattr(ai_analysis.ai_search_visibility, 'model_dump') 
                       else ai_analysis.ai_search_visibility)
         enhanced_features["ai_search_visibility"] = ai_vis_dict
     
@@ -6832,7 +6834,7 @@ async def _perform_comprehensive_analysis_internal(
         "spa_detected": basic_analysis.get('spa_detected', False),
         "rendering_method": basic_analysis.get('rendering_method', 'http'),
         "technology_level": basic_analysis.get('technology_level', 'standard'),
-        "ai_analysis": ai_analysis.dict(),
+        "ai_analysis": ai_analysis.model_dump(),  # FIX 10: Pydantic V2
         
         "detailed_analysis": {
             "social_media": social_analysis,
