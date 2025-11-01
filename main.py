@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Brandista Competitive Intelligence API - Complete Unified Version
-Version: 6.3.1 - Production Ready
+Version: 6.3.5 - Production Ready
 Author: Brandista Team
 Date: 2025
 Description: Complete production-ready website analysis with configurable scoring system and comprehensive SPA support
@@ -3563,7 +3563,7 @@ async def analyze_ux_elements(html: str) -> Dict[str, Any]:
         if len(with_alt) < len(imgs):
             accessibility_issues.append(f'{len(imgs) - len(with_alt)} images missing alt text')
     else: 
-        a11y_score += 25
+        a11y_score += 5
     
     # ARIA labels check
     if 'aria-' in hl:
