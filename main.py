@@ -1926,36 +1926,40 @@ async def analyze_ux_elements(html: str) -> Dict[str, Any]:
     if 'display: flex' in hl: 
         design_score += 10
         design_frameworks.append('flexbox')
-    if '@media' in hl: design_score += 10
+    if '@media' in hl: 
+        design_score += 10
     design_score = min(100, design_score)
     
     # Accessibility scoring
     a11y_score = 0
     accessibility_issues = []
-
-    if soup.find('html', lang=True): 
-    a11y_score += 7
-    else:
-    accessibility_issues.append('Missing lang attribute')
     
+    # HTML lang attribute
+    if soup.find('html', lang=True): 
+        a11y_score += 7
+    else:
+        accessibility_issues.append('Missing lang attribute')
+    
+    # Image alt text
     imgs = soup.find_all('img')
     if imgs:
-    with_alt = [i for i in imgs if i.get('alt','').strip()]
-    a11y_score += int((len(with_alt)/len(imgs))*8)
-    if len(with_alt) < len(imgs):
-        accessibility_issues.append(f'{len(imgs) - len(with_alt)} images missing alt text')
+        with_alt = [i for i in imgs if i.get('alt','').strip()]
+        a11y_score += int((len(with_alt)/len(imgs))*8)
+        if len(with_alt) < len(imgs):
+            accessibility_issues.append(f'{len(imgs) - len(with_alt)} images missing alt text')
     else: 
-    a11y_score += 8
+        a11y_score += 8
 
-# Ensure max 15
+    # Ensure max 15
     a11y_score = min(a11y_score, 15)
     
     # ARIA labels check
     if 'aria-' in hl:
-        a11y_score += 10
+        a11y_score = min(100, a11y_score + 5)
     else:
         accessibility_issues.append('Limited ARIA labeling')
     
+    # Cap at 100
     a11y_score = min(100, a11y_score)
     
     # Mobile UX
@@ -1963,8 +1967,10 @@ async def analyze_ux_elements(html: str) -> Dict[str, Any]:
     vp = soup.find('meta', attrs={'name':'viewport'})
     if vp:
         vc = vp.get('content','')
-        if 'width=device-width' in vc: mobile_score += 20
-        if 'initial-scale=1' in vc: mobile_score += 10
+        if 'width=device-width' in vc: 
+            mobile_score += 20
+        if 'initial-scale=1' in vc: 
+            mobile_score += 10
     mobile_score = min(100, mobile_score)
     
     overall = int((nav_score + design_score + a11y_score + mobile_score)/4)
