@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Brandista Competitive Intelligence API - Complete Unified Version
-Version: 6.3.0 - Production Ready
+Version: 6.3.5 - Production Ready
 Author: Brandista Team
 Date: 2025
 Description: Complete production-ready website analysis with configurable scoring system and comprehensive SPA support
@@ -26,16 +26,42 @@ from urllib.parse import urlparse
 from dataclasses import dataclass
 from pathlib import Path
 from collections import defaultdict
-from ai_content_generator import generate_full_ai_insights
+from functools import lru_cache
+
+# ============================================================================
+# ENVIRONMENT SETUP (EARLY)
+# ============================================================================
+from dotenv import load_dotenv
+load_dotenv()
+
+# ============================================================================
+# LOGGING SETUP (BEFORE ANY LOGGER USAGE!)
+# ============================================================================
+logging.basicConfig(
+    level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(), 
+        logging.FileHandler('brandista_api.log', encoding='utf-8')
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # ============================================================================
 # THIRD-PARTY IMPORTS
 # ============================================================================
 import httpx
-import redis
 from bs4 import BeautifulSoup
 import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
+
+# Redis (optional)
+try:
+    import redis
+    REDIS_AVAILABLE = True
+except ImportError:
+    redis = None
+    REDIS_AVAILABLE = False
 
 # ============================================================================
 # FASTAPI IMPORTS
@@ -48,12 +74,35 @@ from pydantic import BaseModel, Field
 # ============================================================================
 # AUTH & OAUTH IMPORTS
 # ============================================================================
-from auth_magic_link import create_magic_link_auth, MagicLinkRequest, MagicLinkVerify
-from authlib.integrations.starlette_client import OAuth
-from starlette.config import Config as StarletteConfig
-from starlette.responses import RedirectResponse
+try:
+    from auth_magic_link import create_magic_link_auth, MagicLinkRequest, MagicLinkVerify
+    MAGIC_LINK_AVAILABLE = True
+except ImportError:
+    MAGIC_LINK_AVAILABLE = False
+    logger.warning("Magic link authentication module not available")
 
-from email_notifications import on_user_registered, send_new_user_notification
+try:
+    from authlib.integrations.starlette_client import OAuth
+    from starlette.config import Config as StarletteConfig
+    from starlette.responses import RedirectResponse
+    OAUTH_AVAILABLE = True
+except ImportError:
+    OAUTH_AVAILABLE = False
+    logger.warning("OAuth module not available")
+
+try:
+    from email_notifications import on_user_registered, send_new_user_notification
+    EMAIL_NOTIFICATIONS_AVAILABLE = True
+except ImportError:
+    EMAIL_NOTIFICATIONS_AVAILABLE = False
+    logger.warning("Email notifications module not available")
+
+try:
+    from ai_content_generator import generate_full_ai_insights
+    AI_GENERATOR_AVAILABLE = True
+except ImportError:
+    AI_GENERATOR_AVAILABLE = False
+    logger.warning("AI content generator module not available")
 
 # ============================================================================
 # OPTIONAL DEPENDENCIES
@@ -63,7 +112,7 @@ from email_notifications import on_user_registered, send_new_user_notification
 try:
     from playwright.async_api import async_playwright
     PLAYWRIGHT_AVAILABLE = True
-except Exception:
+except ImportError:
     async_playwright = None
     PLAYWRIGHT_AVAILABLE = False
 
@@ -71,10 +120,11 @@ except Exception:
 try:
     from openai import AsyncOpenAI
     OPENAI_AVAILABLE = True
-except Exception:
+except ImportError:
     AsyncOpenAI = None
     OPENAI_AVAILABLE = False
 
+# Wappalyzer
 try:
     from Wappalyzer import Wappalyzer, WebPage
     WAPPALYZER_AVAILABLE = True
@@ -82,29 +132,133 @@ except ImportError:
     Wappalyzer = None
     WebPage = None
     WAPPALYZER_AVAILABLE = False
-    logger.warning("Wappalyzer not available - install with: pip install python-Wappalyzer")
 
+# Google API
+try:
+    from googleapiclient.discovery import build
+    from googleapiclient.errors import HttpError
+    GOOGLE_API_AVAILABLE = True
+except ImportError:
+    GOOGLE_API_AVAILABLE = False
 
 # ============================================================================
-# ENVIRONMENT SETUP
+# DATABASE INTEGRATION
 # ============================================================================
-from dotenv import load_dotenv
-load_dotenv()
+try:
+    from database import (
+        init_database, 
+        is_database_available,
+        get_user_from_db,
+        get_all_users_from_db,
+        create_user_in_db,
+        update_user_in_db,
+        delete_user_from_db,
+        sync_hardcoded_users_to_db,
+        get_user_preferences_from_db
+    )
+    DATABASE_ENABLED = True
+    logger.info("✅ Database module imported successfully")
+except ImportError as e:
+    logger.warning(f"⚠️ Database module not available: {e}")
+    DATABASE_ENABLED = False
+    # Fallback functions
+    def is_database_available(): return False
+    def get_user_from_db(username): return None
+    def get_all_users_from_db(): return []
+    def create_user_in_db(*args, **kwargs): return False
+    def update_user_in_db(*args, **kwargs): return False
+    def delete_user_from_db(username): return False
+    def sync_hardcoded_users_to_db(users): pass
+    def init_database(): pass
+    def get_user_preferences_from_db(username): return None
 
+# ============================================================================
+# CONSTANTS AND VERSION INFO
+# ============================================================================
+APP_VERSION = "6.3.1"
+APP_NAME = "Brandista Competitive Intelligence API"
+APP_DESCRIPTION = """Production-ready website analysis with configurable scoring system and comprehensive SPA support."""
+# ============================================================================
+# CONFIGURATION SYSTEM
+# ============================================================================
+
+@dataclass
+class ScoringConfig:
+    """Configurable scoring weights and thresholds"""
+    weights: Dict[str, int] = None
+    content_thresholds: Dict[str, int] = None
+    technical_thresholds: Dict[str, Any] = None
+    seo_thresholds: Dict[str, Any] = None
+    
+    def __post_init__(self):
+        if self.weights is None:
+            self.weights = {
+                'security': 15, 'seo_basics': 20, 'content': 20,
+                'technical': 15, 'mobile': 15, 'social': 10, 'performance': 5
+            }
+        
+        if self.content_thresholds is None:
+            self.content_thresholds = {
+                'excellent': 3000, 'good': 2000, 'fair': 1500, 'basic': 800, 'minimal': 300
+            }
+        
+        if self.technical_thresholds is None:
+            self.technical_thresholds = {
+                'ssl_score': 20, 'mobile_viewport_score': 15, 'mobile_responsive_score': 5,
+                'analytics_score': 10, 'meta_tags_max_score': 15, 'structured_data_multiplier': 2,
+                'security_headers': {'csp': 4, 'x_frame_options': 3, 'strict_transport': 3}
+            }
+        
+        if self.seo_thresholds is None:
+            self.seo_thresholds = {
+                'title_optimal_range': (30, 60), 'title_acceptable_range': (20, 70),
+                'meta_desc_optimal_range': (120, 160), 'meta_desc_acceptable_range': (80, 200),
+                'h1_optimal_count': 1,
+                'scores': {
+                    'title_optimal': 5, 'title_acceptable': 3, 'title_basic': 1,
+                    'meta_desc_optimal': 5, 'meta_desc_acceptable': 3, 'meta_desc_basic': 1,
+                    'canonical': 2, 'hreflang': 1, 'clean_urls': 2
+                }
+            }
+
+def load_scoring_config() -> ScoringConfig:
+    """Load scoring configuration from file or environment"""
+    config_file = Path('scoring_config.json')
+    if config_file.exists():
+        try:
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config_data = json.load(f)
+                return ScoringConfig(**config_data)
+        except Exception as e:
+            logger.warning(f"Failed to load scoring config: {e}")
+    return ScoringConfig()
+
+# Global scoring configuration
+SCORING_CONFIG = load_scoring_config()
 # ============================================================================
 # CONFIGURATION - ENVIRONMENT VARIABLES
 # ============================================================================
 
+# Security
+SECRET_KEY = os.getenv("SECRET_KEY", "brandista-key-" + os.urandom(32).hex())
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
+
+# Performance settings
+CACHE_TTL = int(os.getenv("CACHE_TTL", "3600"))
+MAX_CACHE_SIZE = int(os.getenv("MAX_CACHE_SIZE", "100"))
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
+REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "30"))
+DEFAULT_USER_LIMIT = int(os.getenv("DEFAULT_USER_LIMIT", "1"))
+
 # SPA Cache Configuration
-SPA_CACHE_TTL = int(os.getenv("SPA_CACHE_TTL", "3600"))  # seconds
+SPA_CACHE_TTL = int(os.getenv("SPA_CACHE_TTL", "3600"))
 content_cache: Dict[str, Dict[str, Any]] = {}
 
 # Content Fetch Configuration
-CONTENT_FETCH_MODE = os.getenv("CONTENT_FETCH_MODE", "aggressive")  # "aggressive" | "balanced" | "light"
-
-# Content Fetch Advanced Toggles
+CONTENT_FETCH_MODE = os.getenv("CONTENT_FETCH_MODE", "aggressive")
 CAPTURE_XHR = os.getenv("CAPTURE_XHR", "1") == "1"
-MAX_XHR_BYTES = int(os.getenv("MAX_XHR_BYTES", "1048576"))  # 1 MB cap per response
+MAX_XHR_BYTES = int(os.getenv("MAX_XHR_BYTES", "1048576"))
 BLOCK_HEAVY_RESOURCES = os.getenv("BLOCK_HEAVY_RESOURCES", "1") == "1"
 COOKIE_AUTO_DISMISS = os.getenv("COOKIE_AUTO_DISMISS", "1") == "1"
 COOKIE_SELECTORS = os.getenv(
@@ -116,7 +270,132 @@ COOKIE_SELECTORS = os.getenv(
 SPA_MAX_SCROLL_STEPS = int(os.getenv("SPA_MAX_SCROLL_STEPS", "15"))  
 SPA_SCROLL_PAUSE_MS = int(os.getenv("SPA_SCROLL_PAUSE_MS", "1000"))  
 SPA_EXTRA_WAIT_MS = int(os.getenv("SPA_EXTRA_WAIT_MS", "5000"))      
-SPA_WAIT_FOR_SELECTOR = os.getenv("SPA_WAIT_FOR_SELECTOR", "")  # e.g. "#app" or ".root" if known
+SPA_WAIT_FOR_SELECTOR = os.getenv("SPA_WAIT_FOR_SELECTOR", "")
+
+# Playwright settings
+PLAYWRIGHT_ENABLED = os.getenv("PLAYWRIGHT_ENABLED", "false").lower() == "true"
+PLAYWRIGHT_TIMEOUT = int(os.getenv("PLAYWRIGHT_TIMEOUT", "30000"))
+PLAYWRIGHT_WAIT_FOR = os.getenv("PLAYWRIGHT_WAIT_FOR", "networkidle")
+
+# User Agent
+USER_AGENT = os.getenv("USER_AGENT", 
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+# Rate limiting
+RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "false").lower() == "true"
+RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "20"))
+
+# Google Search
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GOOGLE_SEARCH_ENGINE_ID = os.getenv("GOOGLE_SEARCH_ENGINE_ID", "171a60959e6cb4d76")
+
+# OpenAI
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+# Redis
+REDIS_URL = os.getenv("REDIS_URL")
+
+# ============================================================================
+# INITIALIZE SERVICES
+# ============================================================================
+
+# Global variables
+analysis_cache: Dict[str, Dict[str, Any]] = {}
+user_search_counts: Dict[str, int] = {}
+magic_link_auth = None
+oauth = None
+redis_client = None
+task_queue = None
+openai_client = None
+
+# Log initial configuration
+logger.info(f"Starting {APP_NAME} v{APP_VERSION}")
+logger.info(f"Scoring weights: {SCORING_CONFIG.weights}")
+logger.info(f"Playwright support: {'enabled' if PLAYWRIGHT_AVAILABLE and PLAYWRIGHT_ENABLED else 'disabled'}")
+logger.info(f"OpenAI support: {'available' if OPENAI_AVAILABLE else 'not available'}")
+logger.info(f"Redis support: {'available' if REDIS_AVAILABLE else 'not available'}")
+logger.info(f"Database support: {'enabled' if DATABASE_ENABLED else 'disabled'}")
+
+# Initialize OpenAI (after logger is ready)
+if OPENAI_AVAILABLE and os.getenv("OPENAI_API_KEY"):
+    try:
+        openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        logger.info(f"✅ OpenAI client initialized (model={OPENAI_MODEL})")
+    except Exception as e:
+        logger.warning(f"⚠️ OpenAI init failed: {e}")
+        openai_client = None
+else:
+    logger.info("ℹ️ OpenAI not configured")
+
+# Initialize Redis
+if REDIS_AVAILABLE and REDIS_URL:
+    try:
+        redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+        redis_client.ping()
+        logger.info("✅ Redis connected successfully")
+        
+        try:
+            from redis_tasks import RedisTaskQueue
+            task_queue = RedisTaskQueue(redis_client)
+            logger.info("✅ Redis task queue initialized")
+        except ImportError:
+            logger.warning("⚠️ RedisTaskQueue module not available")
+            task_queue = None
+    except Exception as e:
+        logger.warning(f"⚠️ Redis connection failed: {e}")
+        redis_client = None
+        task_queue = None
+else:
+    logger.info("ℹ️ Redis not configured, using memory cache")
+
+# Initialize Google Search
+GOOGLE_SEARCH_AVAILABLE = False
+if GOOGLE_API_AVAILABLE and GOOGLE_API_KEY and GOOGLE_SEARCH_ENGINE_ID:
+    def search(query: str, num_results: int = 10, lang: str = "fi") -> List[str]:
+        """Official Google Custom Search API"""
+        try:
+            service = build("customsearch", "v1", developerKey=GOOGLE_API_KEY)
+            results = []
+            start_index = 1
+            
+            while len(results) < num_results and start_index <= 91:
+                request_params = {
+                    "q": query,
+                    "cx": GOOGLE_SEARCH_ENGINE_ID,
+                    "num": min(10, num_results - len(results)),
+                    "start": start_index
+                }
+                
+                if lang and lang != "en":
+                    request_params["lr"] = f"lang_{lang}"
+                
+                response = service.cse().list(**request_params).execute()
+                
+                if "items" not in response:
+                    break
+                
+                results.extend([item["link"] for item in response["items"]])
+                start_index += 10
+                
+                if len(response["items"]) < 10:
+                    break
+            
+            return results[:num_results]
+            
+        except Exception as e:
+            logger.error(f"Search failed: {e}")
+            return []
+    
+    GOOGLE_SEARCH_AVAILABLE = True
+    logger.info("✅ Google Custom Search API initialized")
+else:
+    def search(query, num_results, lang):
+        raise NotImplementedError("Google Search requires API credentials")
+    logger.warning("⚠️ Google Search disabled - missing API credentials")
+
+
 
 # ============================================================================
 # UTILITY FUNCTIONS - MOBILE OPTIMIZATION
@@ -189,9 +468,6 @@ def detect_responsive_signals(html: str) -> bool:
     return any(re.search(pat, h) for pat in patterns)
 
 
-# ============================================================================
-# REST OF YOUR CODE CONTINUES HERE (from line 151+ of your uploaded file)
-# ============================================================================
 
 # ============================================================================
 # WEB FEATURES ANALYSIS - REGEX PATTERNS (PERFORMANCE IMPROVEMENT)
@@ -232,68 +508,17 @@ _FRAMEWORK_PATTERNS = {
 
 
 # ============================================================================
-# CONFIGURATION SYSTEM
+# CONFIGURATION SYSTEM (already defined above at line ~186)
 # ============================================================================
 
-@dataclass
-class ScoringConfig:
-    """Configurable scoring weights and thresholds"""
-    weights: Dict[str, int] = None
-    content_thresholds: Dict[str, int] = None
-    technical_thresholds: Dict[str, Any] = None
-    seo_thresholds: Dict[str, Any] = None
-    
-    def __post_init__(self):
-        if self.weights is None:
-            self.weights = {
-                'security': 15, 'seo_basics': 20, 'content': 20,
-                'technical': 15, 'mobile': 15, 'social': 10, 'performance': 5
-            }
-        
-        if self.content_thresholds is None:
-            self.content_thresholds = {
-                'excellent': 3000, 'good': 2000, 'fair': 1500, 'basic': 800, 'minimal': 300
-            }
-        
-        if self.technical_thresholds is None:
-            self.technical_thresholds = {
-                'ssl_score': 20, 'mobile_viewport_score': 15, 'mobile_responsive_score': 5,
-                'analytics_score': 10, 'meta_tags_max_score': 15, 'structured_data_multiplier': 2,
-                'security_headers': {'csp': 4, 'x_frame_options': 3, 'strict_transport': 3}
-            }
-        
-        if self.seo_thresholds is None:
-            self.seo_thresholds = {
-                'title_optimal_range': (30, 60), 'title_acceptable_range': (20, 70),
-                'meta_desc_optimal_range': (120, 160), 'meta_desc_acceptable_range': (80, 200),
-                'h1_optimal_count': 1,
-                'scores': {
-                    'title_optimal': 5, 'title_acceptable': 3, 'title_basic': 1,
-                    'meta_desc_optimal': 5, 'meta_desc_acceptable': 3, 'meta_desc_basic': 1,
-                    'canonical': 2, 'hreflang': 1, 'clean_urls': 2
-                }
-            }
-
-def load_scoring_config() -> ScoringConfig:
-    """Load scoring configuration from file or environment"""
-    config_file = Path('scoring_config.json')
-    if config_file.exists():
-        try:
-            with open(config_file, 'r', encoding='utf-8') as f:
-                config_data = json.load(f)
-                return ScoringConfig(**config_data)
-        except Exception as e:
-            logging.getLogger(__name__).warning(f"Failed to load scoring config: {e}")
-    return ScoringConfig()
-
-# Global scoring configuration
-SCORING_CONFIG = load_scoring_config()
+# ScoringConfig and load_scoring_config already defined above
+# Global scoring configuration already loaded above
 
 # ============================================================================
 # CONSTANTS
 # ============================================================================
 
-APP_VERSION = "6.2.4"
+
 APP_NAME = "Brandista Competitive Intelligence API"
 APP_DESCRIPTION = """Production-ready website analysis with configurable scoring system and comprehensive SPA support."""
 
@@ -332,19 +557,11 @@ RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "false").lower() == "true"
 RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "20"))
 
 # ============================================================================
-# LOGGING
+# LOGGING (already configured at top of file)
 # ============================================================================
 
-logging.basicConfig(
-    level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(), logging.FileHandler('brandista_api.log', encoding='utf-8')]
-)
-
-logger = logging.getLogger(__name__)
-logger.info(f"Starting {APP_NAME} v{APP_VERSION}")
-logger.info(f"Scoring weights: {SCORING_CONFIG.weights}")
-logger.info(f"Playwright support: {'enabled' if PLAYWRIGHT_AVAILABLE and PLAYWRIGHT_ENABLED else 'disabled'}")
+# Logger already initialized at top - using existing logger
+# These log messages moved to startup sequence
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 GOOGLE_SEARCH_ENGINE_ID = os.getenv("GOOGLE_SEARCH_ENGINE_ID", "171a60959e6cb4d76")
@@ -433,7 +650,14 @@ else:
             "Google Search requires API credentials. "
             "Set GOOGLE_API_KEY and GOOGLE_SEARCH_ENGINE_ID in .env file"
         )
-
+try:
+    from Wappalyzer import Wappalyzer, WebPage
+    WAPPALYZER_AVAILABLE = True
+except ImportError:
+    Wappalyzer = None
+    WebPage = None
+    WAPPALYZER_AVAILABLE = False
+    logger.warning("Wappalyzer not available - install with: pip install python-Wappalyzer")
 # ============================================================================
 # DATABASE INTEGRATION
 # ============================================================================
@@ -889,11 +1113,18 @@ def analyze_modern_web_features(html: str, spa_info: Dict[str, Any]) -> Dict[str
             'technology_description': tech_description,
             'detected_frameworks': frameworks,
             'modern_js_features': modern_js_features,
-            'accessibility_score': round((
-                (10 if has_aria else 0) +
-                (5 if skip_links else 0) +
-                (alt_text_coverage / 10)
-            ), 1),
+            
+            # ✅ KORJAUS: Palauta accessibility-detaljit pisteiden sijaan
+            'accessibility_features': {
+                'has_aria_labels': has_aria,
+                'has_skip_links': skip_links,
+                'alt_text_coverage_percent': round(alt_text_coverage, 1),
+                'aria_label_count': aria_labels,
+                'aria_role_count': aria_roles,
+                'images_total': len(images),
+                'images_with_alt': images_with_alt,  # FIX 8: Already an int, don't use len()
+            },
+            
             'missing_modern_features': missing_modern_features
         }
         
@@ -956,11 +1187,12 @@ def _detect_frameworks_advanced(html: str, script_content: str, soup: BeautifulS
                 # Create Wappalyzer instance
                 wappalyzer = Wappalyzer.latest()
                 
-                # ✅ KORJAUS: Käytä WebPage() konstruktoria suoraan
-                # Wappalyzer 0.3.1 API vaatii vain html:n ja url:n
+                # ✅ FIX 9: Wappalyzer API requires headers parameter
+                # Create WebPage with proper parameters
                 webpage = WebPage(
-                    url='https://example.com',  # Fake URL riittää
-                    html=html
+                    url='https://example.com',  # Fake URL is sufficient
+                    html=html,
+                    headers={}  # Empty headers dict required by API
                 )
                 
                 # Analyze
@@ -1182,15 +1414,13 @@ def detect_interactive_elements(soup: BeautifulSoup, html: str) -> Dict[str, Any
 # FASTAPI SETUP
 # ============================================================================
 
-app = FastAPI(
-    title=APP_NAME, version=APP_VERSION, description=APP_DESCRIPTION,
-    docs_url="/docs", redoc_url="/redoc", openapi_url="/openapi.json"
-)
+# Add the startup event handler here using modern lifespan
+from contextlib import asynccontextmanager
 
-# Add the startup event handler here:
-@app.on_event("startup")
-async def startup_event():
-    """Initialize all services on application startup"""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Modern lifespan context manager (replaces deprecated @app.on_event)"""
+    # Startup
     global magic_link_auth, redis_client, task_queue, oauth
     
     # 1. Initialize database if enabled
@@ -1283,7 +1513,6 @@ async def startup_event():
         magic_link_auth = None
     
     # 4. Initialize Google OAuth
-    global oauth
     try:
         oauth_config = StarletteConfig(environ={
             'GOOGLE_CLIENT_ID': os.getenv('GOOGLE_CLIENT_ID', ''),
@@ -1319,6 +1548,21 @@ async def startup_event():
     
     if SECRET_KEY.startswith("brandista-key-"):
         logger.warning("⚠️ Using default SECRET_KEY - set custom SECRET_KEY in production!")
+    
+    yield
+    
+    # Shutdown (cleanup code here if needed)
+    logger.info("🛑 Shutting down application")
+
+# Now recreate app WITH lifespan
+app = FastAPI(
+    title=APP_NAME,
+    description="Brandista Competitive Intelligence API - Complete Production System",
+    version=APP_VERSION,
+    docs_url="/docs",
+    redoc_url="/redoc",
+    lifespan=lifespan  # Modern way to handle startup/shutdown
+)
 
 
 app.add_middleware(
@@ -1445,11 +1689,9 @@ def init_users():
         }
     }
     
-    logger.info("🔐 User passwords hashed:")
-    for email, user_data in USERS_DB.items():
-        username = user_data.get('username')
-        hash_preview = user_data.get('hashed_password')[:20]
-        logger.info(f"  {username}: {hash_preview}...")
+    # Security: Do not log password hashes, even partial
+    logger.info("🔐 User authentication initialized")
+    logger.info(f"   Loaded {len(USERS_DB)} users")
     
     return USERS_DB
 
@@ -2068,12 +2310,19 @@ def create_score_breakdown_with_aliases(breakdown_raw: Dict[str, int]) -> Dict[s
     """Create score breakdown with both backend and frontend fields (aliases 0-100)."""
     weights = SCORING_CONFIG.weights
     result = dict(breakdown_raw or {})
+    
+    # Frontend aliases (0-100 scale)
     result['seo'] = int((result.get('seo_basics', 0) / weights['seo_basics']) * 100)
     result['user_experience'] = int((result.get('mobile', 0) / weights['mobile']) * 100)
-    result['accessibility'] = min(100, int((
-        (result.get('mobile', 0) / weights['mobile'] * 0.6) + 
-        (result.get('technical', 0) / weights['technical'] * 0.4)
-    ) * 100))
+    
+    # FIX 7: Accessibility should be 0-15, not 0-100!
+    # It's weighted combination of mobile (60%) and technical (40%)
+    # Max: 15 * 0.6 + 15 * 0.4 = 9 + 6 = 15
+    result['accessibility'] = int(
+        (result.get('mobile', 0) * 0.6) + 
+        (result.get('technical', 0) * 0.4)
+    )
+    
     return result
 
 async def cleanup_cache():
@@ -3314,7 +3563,7 @@ async def analyze_ux_elements(html: str) -> Dict[str, Any]:
         if len(with_alt) < len(imgs):
             accessibility_issues.append(f'{len(imgs) - len(with_alt)} images missing alt text')
     else: 
-        a11y_score += 25
+        a11y_score += 5
     
     # ARIA labels check
     if 'aria-' in hl:
@@ -4463,7 +4712,7 @@ async def generate_ai_insights(
     content: Dict[str, Any], 
     ux: Dict[str, Any], 
     social: Dict[str, Any],
-    html: str,  # ADD THIS PARAMETER
+    html: str,
     language: str = 'en'
 ) -> AIAnalysis:
     """Generate comprehensive AI-powered insights"""
@@ -4508,8 +4757,7 @@ async def generate_ai_insights(
         except Exception as e:
             logger.warning(f"OpenAI enhancement failed: {e}")
     
-    # --- Humanized layer fusion ---
-    # --- Humanized layer fusion ---
+    # Humanized layer fusion
     try:
         # Use detailed impact calculation (with optional revenue input support)
         detailed_impact = compute_business_impact_with_input(basic, content, ux, revenue_input=None)
@@ -4528,16 +4776,16 @@ async def generate_ai_insights(
         snippets = build_snippet_examples(url, basic)
 
         insights.update({
-            "business_impact": detailed_impact.dict(),  # Use detailed version in output
-            "role_summaries": role.dict(),
-            "plan_90d": plan.dict(),
-            "risk_register": [r.dict() for r in risks],
-            "snippet_examples": snippets.dict()
+            "business_impact": detailed_impact.model_dump(),  # FIX 10: Pydantic V2
+            "role_summaries": role.model_dump(),
+            "plan_90d": plan.model_dump(),
+            "risk_register": [r.model_dump() for r in risks],
+            "snippet_examples": snippets.model_dump()
         })
     except Exception as e:
         logger.warning(f"Humanized layer build failed: {e}")
 
-    # NEW: AI Search Visibility Analysis - SEPARATE try block
+    # AI Search Visibility Analysis
     try:
         ai_visibility = await analyze_ai_search_visibility(
             url, html, basic, technical, content, social
@@ -4559,14 +4807,649 @@ async def generate_ai_insights(
     return AIAnalysis(**insights)
 
 
+# ============================================================================
+# ENHANCED INSIGHTS GENERATION - COMPLETE REWRITE
+# ============================================================================
+
+async def generate_competitive_swot_analysis(
+    your_analysis: Dict[str, Any],
+    competitor_analyses: Optional[List[Dict[str, Any]]] = None,
+    language: str = 'en'
+) -> Dict[str, Any]:
+    """
+    Generate comprehensive SWOT with competitive context and business impact.
+    
+    Features:
+    - Competitive benchmarking for each SWOT item
+    - Business impact quantification
+    - Priority scoring with RICE framework
+    - Actionable recommendations with timelines
+    - Risk assessment with mitigation strategies
+    """
+    
+    # Extract data
+    basic = your_analysis.get('basic_analysis', {})
+    breakdown = basic.get('score_breakdown', {})
+    technical = your_analysis.get('detailed_analysis', {}).get('technical_audit', {})
+    content = your_analysis.get('detailed_analysis', {}).get('content_analysis', {})
+    ux = your_analysis.get('detailed_analysis', {}).get('ux_analysis', {})
+    social = your_analysis.get('detailed_analysis', {}).get('social_media', {})
+    
+    your_score = basic.get('digital_maturity_score', 0)
+    wc = content.get('word_count', 0)
+    
+    # Competitive context
+    if competitor_analyses and len(competitor_analyses) > 0:
+        comp_scores = [c.get('basic_analysis', {}).get('digital_maturity_score', 50) for c in competitor_analyses]
+        avg_comp_score = sum(comp_scores) / len(comp_scores)
+        max_comp_score = max(comp_scores)
+        min_comp_score = min(comp_scores)
+        has_competitors = True
+    else:
+        avg_comp_score = 50
+        max_comp_score = 70
+        min_comp_score = 30
+        has_competitors = False
+    
+    swot = {
+        'strengths': [],
+        'weaknesses': [],
+        'opportunities': [],
+        'threats': [],
+        'summary': {},
+        'priority_matrix': {},
+        'competitive_context': {
+            'has_competitor_data': has_competitors,
+            'your_score': your_score,
+            'market_average': int(avg_comp_score),
+            'market_leader': int(max_comp_score),
+            'position': 'Leader' if your_score >= max_comp_score else 'Above Average' if your_score >= avg_comp_score else 'Below Average'
+        }
+    }
+    
+    # === STRENGTHS ===
+    strengths = []
+    
+    # Overall maturity
+    if your_score > avg_comp_score + 15:
+        strengths.append({
+            'area': 'Digital Maturity Leadership',
+            'finding': f'Score {your_score}/100 significantly above market average ({int(avg_comp_score)})',
+            'competitive_position': f'+{your_score - int(avg_comp_score)} points vs average',
+            'business_impact': 'Higher conversion rates, better customer trust, stronger SEO rankings',
+            'sustainability': 'High',
+            'priority': 'maintain_and_leverage',
+            'quantified_value': f'{int((your_score / avg_comp_score - 1) * 100)}% above market',
+            'maintain_actions': ['Continue investing in digital excellence', 'Document best practices', 'Train team on maintaining standards']
+        })
+    elif your_score > avg_comp_score:
+        strengths.append({
+            'area': 'Above Average Performance',
+            'finding': f'Score {your_score}/100 above market average ({int(avg_comp_score)})',
+            'competitive_position': f'+{your_score - int(avg_comp_score)} points',
+            'business_impact': 'Competitive advantage in digital channels',
+            'sustainability': 'Medium',
+            'priority': 'maintain',
+            'quantified_value': f'{int((your_score / avg_comp_score - 1) * 100)}% above market',
+            'maintain_actions': ['Monitor competitor improvements', 'Invest in key areas']
+        })
+    
+    # Content strength
+    if wc > 2500:
+        strengths.append({
+            'area': 'Content Depth & Authority',
+            'finding': f'{wc} words - comprehensive content strategy',
+            'competitive_position': 'Top tier content depth' if has_competitors else 'Excellent depth',
+            'business_impact': 'Better SEO rankings, higher engagement, improved conversion, thought leadership',
+            'sustainability': 'High',
+            'priority': 'leverage',
+            'quantified_value': 'Each 1000-word article can drive 50-100 monthly visitors',
+            'leverage_actions': ['Expand content clusters', 'Add internal linking', 'Promote on social media']
+        })
+    elif wc > 1500:
+        strengths.append({
+            'area': 'Solid Content Foundation',
+            'finding': f'{wc} words - good content base',
+            'competitive_position': 'Above average depth',
+            'business_impact': 'Good SEO foundation, decent engagement',
+            'sustainability': 'Medium',
+            'priority': 'maintain',
+            'quantified_value': 'Room to grow to 2500+ words for leadership',
+            'leverage_actions': ['Expand key pages', 'Add more examples and details']
+        })
+    
+    # Technical excellence
+    page_speed = technical.get('page_speed_score', 0)
+    if page_speed >= 80:
+        strengths.append({
+            'area': 'Technical Performance Excellence',
+            'finding': f'Fast loading ({page_speed}/100)',
+            'competitive_position': 'Top quartile performance',
+            'business_impact': 'Lower bounce rate, better mobile experience, improved conversions',
+            'sustainability': 'Medium',
+            'priority': 'maintain',
+            'quantified_value': 'Every second faster = 7% more conversions',
+            'maintain_actions': ['Monitor performance monthly', 'Optimize new content', 'Use CDN']
+        })
+    elif page_speed >= 70:
+        strengths.append({
+            'area': 'Good Technical Performance',
+            'finding': f'Acceptable loading speed ({page_speed}/100)',
+            'competitive_position': 'Above average',
+            'business_impact': 'Decent user experience',
+            'sustainability': 'Medium',
+            'priority': 'maintain',
+            'quantified_value': 'Meeting Core Web Vitals threshold',
+            'maintain_actions': ['Keep monitoring', 'Prevent regressions']
+        })
+    
+    # Security leadership
+    security_score = breakdown.get('security', 0)
+    if security_score >= 13:
+        strengths.append({
+            'area': 'Security & Trust',
+            'finding': f'Strong security posture ({security_score}/15)',
+            'competitive_position': 'Industry standard compliance',
+            'business_impact': 'Customer trust, no SEO penalties, professional image',
+            'sustainability': 'High',
+            'priority': 'maintain',
+            'quantified_value': 'HTTPS = baseline requirement for Google rankings',
+            'maintain_actions': ['Annual SSL renewal', 'Security header monitoring', 'Regular audits']
+        })
+    
+    # Modern technology
+    modernity = basic.get('modernity_score', 0)
+    if modernity >= 70:
+        strengths.append({
+            'area': 'Modern Technology Stack',
+            'finding': f'Advanced implementation ({modernity}/100)',
+            'competitive_position': 'Technology leader',
+            'business_impact': 'Better performance, easier maintenance, future-ready',
+            'sustainability': 'High',
+            'priority': 'leverage',
+            'quantified_value': 'Faster feature development, better UX',
+            'leverage_actions': ['Showcase technology', 'Attract better talent', 'Scale efficiently']
+        })
+    
+    # Social presence
+    social_platforms = social.get('platforms', [])
+    if len(social_platforms) >= 4:
+        strengths.append({
+            'area': 'Multi-Channel Social Presence',
+            'finding': f'{len(social_platforms)} active platforms',
+            'competitive_position': 'Strong social footprint',
+            'business_impact': 'Multiple discovery channels, brand awareness, community engagement',
+            'sustainability': 'Medium',
+            'priority': 'maintain_and_leverage',
+            'quantified_value': '20-30% of traffic from social channels',
+            'leverage_actions': ['Cross-promote content', 'Engage with audience', 'Run campaigns']
+        })
+    
+    # === WEAKNESSES ===
+    weaknesses = []
+    
+    # Critical security
+    if security_score <= 5:
+        weaknesses.append({
+            'area': 'Security Vulnerability',
+            'finding': 'Missing SSL certificate or security headers',
+            'urgency': 'CRITICAL',
+            'business_risk': 'SEO penalties, lost customer trust, browser warnings, data exposure',
+            'fix_timeframe': '1-2 days',
+            'fix_cost': '€0-50/year for SSL',
+            'priority_score': 100,
+            'competitive_gap': f'{sum(1 for c in (competitor_analyses or []) if c.get("basic_analysis", {}).get("score_breakdown", {}).get("security", 0) > 10)} competitors ahead' if has_competitors else 'Critical industry requirement',
+            'fix_steps': ['Purchase SSL certificate', 'Install on server', 'Configure HTTPS redirect', 'Add security headers', 'Test thoroughly']
+        })
+    elif security_score < 10:
+        weaknesses.append({
+            'area': 'Incomplete Security',
+            'finding': 'SSL present but missing security headers',
+            'urgency': 'HIGH',
+            'business_risk': 'Vulnerability to attacks, missing best practices',
+            'fix_timeframe': '1 day',
+            'fix_cost': '€0 (configuration)',
+            'priority_score': 85,
+            'competitive_gap': 'Missing industry standard headers',
+            'fix_steps': ['Add CSP header', 'Add X-Frame-Options', 'Add HSTS', 'Test configuration']
+        })
+    
+    # Content weakness
+    if wc < 500:
+        weaknesses.append({
+            'area': 'Critically Thin Content',
+            'finding': f'Only {wc} words - severely insufficient',
+            'urgency': 'CRITICAL',
+            'business_risk': 'Poor/no rankings, high bounce rate, no authority, unprofessional image',
+            'fix_timeframe': '2-4 weeks',
+            'fix_cost': '€1000-3000 for professional content',
+            'priority_score': 95,
+            'competitive_gap': 'Competitors have 3-5x more content',
+            'fix_steps': ['Content strategy workshop', 'Write 3-5 pillar pages (2000+ words each)', 'Add FAQs', 'Internal linking', 'Publish schedule']
+        })
+    elif wc < 1000:
+        weaknesses.append({
+            'area': 'Thin Content',
+            'finding': f'{wc} words - insufficient for SEO',
+            'urgency': 'HIGH',
+            'business_risk': 'Poor rankings, limited engagement, weak authority',
+            'fix_timeframe': '2-3 weeks',
+            'fix_cost': '€500-1500',
+            'priority_score': 85,
+            'competitive_gap': 'Below market average',
+            'fix_steps': ['Expand key pages to 1500+ words', 'Add case studies', 'Create blog', 'Internal links']
+        })
+    
+    # No analytics
+    if not technical.get('has_analytics'):
+        weaknesses.append({
+            'area': 'No Analytics Tracking',
+            'finding': 'Cannot measure performance or user behavior',
+            'urgency': 'HIGH',
+            'business_risk': 'Flying blind - no data for optimization, wasted marketing spend',
+            'fix_timeframe': '2-4 hours',
+            'fix_cost': '€0 (GA4 is free)',
+            'priority_score': 90,
+            'competitive_gap': 'Missing industry standard tool',
+            'fix_steps': ['Create GA4 property', 'Install tracking code', 'Configure events', 'Setup goals', 'Create dashboard']
+        })
+    
+    # Mobile issues
+    mobile_score = breakdown.get('mobile', 0)
+    if mobile_score < 5:
+        weaknesses.append({
+            'area': 'No Mobile Optimization',
+            'finding': 'Missing viewport and responsive design',
+            'urgency': 'CRITICAL',
+            'business_risk': 'Losing 60%+ of potential customers, mobile-first indexing penalty',
+            'fix_timeframe': '1-2 weeks',
+            'fix_cost': '€1000-5000',
+            'priority_score': 92,
+            'competitive_gap': 'Failing Google mobile-first requirements',
+            'fix_steps': ['Add viewport meta', 'Implement responsive CSS', 'Test on devices', 'Fix touch targets', 'Optimize images']
+        })
+    elif mobile_score < 10:
+        weaknesses.append({
+            'area': 'Poor Mobile Experience',
+            'finding': 'Partial mobile optimization',
+            'urgency': 'HIGH',
+            'business_risk': 'Suboptimal mobile UX, losing mobile visitors',
+            'fix_timeframe': '1 week',
+            'fix_cost': '€500-2000',
+            'priority_score': 80,
+            'competitive_gap': 'Behind mobile-first expectations',
+            'fix_steps': ['Improve responsive breakpoints', 'Fix mobile navigation', 'Optimize touch targets']
+        })
+    
+    # Slow performance
+    if page_speed < 50:
+        weaknesses.append({
+            'area': 'Very Slow Performance',
+            'finding': f'Only {page_speed}/100 - critical performance issues',
+            'urgency': 'HIGH',
+            'business_risk': 'Extremely high bounce rate, poor rankings, lost conversions',
+            'fix_timeframe': '1-2 weeks',
+            'fix_cost': '€1000-3000',
+            'priority_score': 88,
+            'competitive_gap': 'Each second loses 7% conversions',
+            'fix_steps': ['Compress images', 'Minify CSS/JS', 'Enable caching', 'Use CDN', 'Lazy load images']
+        })
+    elif page_speed < 70:
+        weaknesses.append({
+            'area': 'Slow Performance',
+            'finding': f'{page_speed}/100 - below acceptable',
+            'urgency': 'MEDIUM',
+            'business_risk': 'High bounce rate, poor mobile experience',
+            'fix_timeframe': '3-5 days',
+            'fix_cost': '€500-1500',
+            'priority_score': 75,
+            'competitive_gap': 'Missing Core Web Vitals targets',
+            'fix_steps': ['Optimize images', 'Defer non-critical JS', 'Enable compression']
+        })
+    
+    # SEO issues
+    seo_score = breakdown.get('seo_basics', 0)
+    if seo_score < 10:
+        weaknesses.append({
+            'area': 'Poor SEO Fundamentals',
+            'finding': 'Missing titles, meta descriptions, or structure',
+            'urgency': 'HIGH',
+            'business_risk': 'No organic traffic, invisible to Google',
+            'fix_timeframe': '1-2 weeks',
+            'fix_cost': '€500-1500',
+            'priority_score': 83,
+            'competitive_gap': 'Failing basic SEO requirements',
+            'fix_steps': ['Write title tags (50-60 chars)', 'Meta descriptions (150-160 chars)', 'Fix H1 tags', 'Add canonical URLs', 'Internal linking']
+        })
+    
+    # === OPPORTUNITIES ===
+    opportunities = []
+    
+    # Content marketing gap
+    if not content.get('has_blog') and wc < 2000:
+        comp_with_blogs = sum(1 for c in (competitor_analyses or []) if c.get('detailed_analysis', {}).get('content_analysis', {}).get('has_blog', False)) if has_competitors else 0
+        opportunities.append({
+            'area': 'Content Marketing Strategy',
+            'opportunity': 'Launch strategic blog with pillar content',
+            'market_gap': f'{comp_with_blogs}/{len(competitor_analyses or [])} competitors have blogs' if has_competitors else 'Content marketing underutilized',
+            'potential_impact': 'HIGH',
+            'estimated_roi': '200-400% organic traffic increase in 12 months',
+            'investment_required': '€2000-5000 setup + €500-1500/month ongoing',
+            'timeframe': '6-12 months to see results',
+            'difficulty': 'Medium',
+            'priority_score': 85,
+            'implementation_steps': [
+                'Content strategy workshop (Week 1)',
+                'Keyword research & topic clusters (Week 2)',
+                'Write 3 pillar articles (Month 1)',
+                'Publish 2-4 articles/month (Ongoing)',
+                'Promote on social & email (Ongoing)'
+            ],
+            'success_metrics': ['Organic traffic +50%', 'New rankings for 20+ keywords', 'Domain authority increase']
+        })
+    
+    # SEO optimization
+    if int((seo_score / 20) * 100) < 70:
+        opportunities.append({
+            'area': 'SEO Quick Wins',
+            'opportunity': 'Optimize titles, meta descriptions, H-tags, schema markup',
+            'market_gap': 'Low-hanging SEO fruit available',
+            'potential_impact': 'MEDIUM-HIGH',
+            'estimated_roi': '30-60% more organic traffic within 3-6 months',
+            'investment_required': '€500-2000',
+            'timeframe': '2-4 weeks implementation',
+            'difficulty': 'Low',
+            'priority_score': 82,
+            'implementation_steps': [
+                'SEO audit of top 20 pages',
+                'Optimize titles & metas',
+                'Fix heading hierarchy',
+                'Add schema markup (Organization, FAQ)',
+                'Submit updated sitemap'
+            ],
+            'success_metrics': ['Improved click-through rate', 'Higher rankings for key terms', '20-30% traffic increase']
+        })
+    
+    # Modern tech adoption
+    if modernity < 60 and your_score < 70:
+        opportunities.append({
+            'area': 'Technology Modernization',
+            'opportunity': 'Upgrade to modern framework & optimize performance',
+            'market_gap': 'Few competitors using cutting-edge tech',
+            'potential_impact': 'HIGH',
+            'estimated_roi': '15-25% conversion lift, better UX, faster development',
+            'investment_required': '€10,000-30,000',
+            'timeframe': '3-6 months',
+            'difficulty': 'High',
+            'priority_score': 70,
+            'implementation_steps': [
+                'Technology audit & roadmap',
+                'Choose framework (Next.js, React, etc.)',
+                'Phased migration plan',
+                'Development & testing',
+                'Launch & monitor'
+            ],
+            'success_metrics': ['Page load < 2s', 'Mobile score 90+', 'Modernity score 80+']
+        })
+    
+    # Social expansion
+    if len(social_platforms) < 3:
+        opportunities.append({
+            'area': 'Social Media Expansion',
+            'opportunity': 'Establish presence on LinkedIn, Instagram, Facebook',
+            'market_gap': 'Limited social footprint vs competitors',
+            'potential_impact': 'MEDIUM',
+            'estimated_roi': '20-40% brand awareness increase, new traffic channels',
+            'investment_required': '€1000-3000 setup + €500-1500/month management',
+            'timeframe': '3-6 months to build audience',
+            'difficulty': 'Medium',
+            'priority_score': 65,
+            'implementation_steps': [
+                'Social media strategy',
+                'Setup profiles & branding',
+                'Content calendar',
+                'Regular posting (3-5x/week)',
+                'Engage with audience'
+            ],
+            'success_metrics': ['1000+ followers on each platform', '10-20% of traffic from social', 'Increased brand mentions']
+        })
+    
+    # Conversion optimization
+    if your_score >= 60:
+        opportunities.append({
+            'area': 'Conversion Rate Optimization (CRO)',
+            'opportunity': 'A/B testing, UX improvements, funnel optimization',
+            'market_gap': 'Strong foundation ready for optimization',
+            'potential_impact': 'HIGH',
+            'estimated_roi': '10-30% conversion improvement = direct revenue impact',
+            'investment_required': '€2000-5000 for CRO audit + tools',
+            'timeframe': '3-6 months for meaningful data',
+            'difficulty': 'Medium',
+            'priority_score': 75,
+            'implementation_steps': [
+                'Install heatmap tools (Hotjar)',
+                'Analyze user behavior',
+                'A/B test headlines & CTAs',
+                'Optimize forms & checkout',
+                'Iterative improvements'
+            ],
+            'success_metrics': ['Conversion rate +15%', 'Lower bounce rate', 'Higher average order value']
+        })
+    
+    # === THREATS ===
+    threats = []
+    
+    # Falling behind
+    if your_score < avg_comp_score:
+        gap = int(avg_comp_score - your_score)
+        threats.append({
+            'threat': 'Below Market Average',
+            'description': f'Score {your_score} vs market avg {int(avg_comp_score)} ({gap} points behind)',
+            'likelihood': 'HIGH',
+            'impact': 'HIGH',
+            'risk_score': 90,
+            'business_consequences': 'Losing customers to competitors, poor conversion, weak brand perception',
+            'mitigation': 'Immediate focus on critical weaknesses + 2-3 quick wins',
+            'urgency': 'Act within 30 days',
+            'mitigation_steps': [
+                'Fix critical security issues (Week 1)',
+                'Improve mobile experience (Weeks 2-3)',
+                'Expand content (Month 1-2)',
+                'Monthly progress reviews'
+            ]
+        })
+    
+    # Competitor innovation
+    if has_competitors:
+        modern_comps = sum(1 for c in competitor_analyses 
+            if c.get('detailed_analysis', {}).get('technical_audit', {}).get('modernity_score', 0) > modernity)
+        
+        if modern_comps >= len(competitor_analyses) // 2:
+            threats.append({
+                'threat': 'Competitors Adopting Modern Technology',
+                'description': f'{modern_comps}/{len(competitor_analyses)} competitors more technically advanced',
+                'likelihood': 'MEDIUM',
+                'impact': 'HIGH',
+                'risk_score': 75,
+                'business_consequences': 'User experience gap, slower feature development, talent attraction issues',
+                'mitigation': 'Technology roadmap & phased modernization plan',
+                'urgency': 'Plan within 3 months, execute within 12 months',
+                'mitigation_steps': [
+                    'Technology assessment',
+                    'Modernization roadmap',
+                    'Budget approval',
+                    'Phased implementation'
+                ]
+            })
+    
+    # SEO penalties
+    if not technical.get('has_ssl'):
+        threats.append({
+            'threat': 'Google Ranking Penalty',
+            'description': 'No HTTPS = negative ranking signal & browser warnings',
+            'likelihood': 'CERTAIN',
+            'impact': 'CRITICAL',
+            'risk_score': 98,
+            'business_consequences': 'Traffic loss, trust damage, competitive disadvantage',
+            'mitigation': 'Install SSL certificate immediately',
+            'urgency': 'Act within 7 days',
+            'mitigation_steps': [
+                'Purchase SSL (Day 1)',
+                'Install on server (Day 1-2)',
+                'Configure HTTPS redirect (Day 2)',
+                'Test thoroughly (Day 2-3)',
+                'Update Google Search Console (Day 3)'
+            ]
+        })
+    
+    # Mobile-first indexing
+    if mobile_score < 10:
+        threats.append({
+            'threat': 'Mobile-First Indexing Penalty',
+            'description': 'Google prioritizes mobile experience - poor mobile = poor rankings',
+            'likelihood': 'HIGH',
+            'impact': 'HIGH',
+            'risk_score': 87,
+            'business_consequences': 'Ranking drops, losing 60%+ of potential traffic',
+            'mitigation': 'Implement responsive design urgently',
+            'urgency': 'Act within 30 days',
+            'mitigation_steps': [
+                'Responsive design audit',
+                'Priority fixes (viewport, layout)',
+                'Test on real devices',
+                'Monitor mobile rankings'
+            ]
+        })
+    
+    # Algorithm updates
+    if your_score < 60:
+        threats.append({
+            'threat': 'Google Algorithm Updates',
+            'description': 'Weak sites more vulnerable to algorithm changes',
+            'likelihood': 'MEDIUM',
+            'impact': 'MEDIUM-HIGH',
+            'risk_score': 70,
+            'business_consequences': 'Traffic volatility, sudden ranking drops',
+            'mitigation': 'Build strong fundamentals & diversify traffic sources',
+            'urgency': 'Ongoing vigilance',
+            'mitigation_steps': [
+                'Focus on E-E-A-T',
+                'Quality content strategy',
+                'Build backlinks',
+                'Diversify to social, email, direct'
+            ]
+        })
+    
+    # === SORT BY PRIORITY ===
+    strengths.sort(key=lambda x: {'maintain_and_leverage': 0, 'leverage': 1, 'maintain': 2}.get(x.get('priority', 'maintain'), 3))
+    weaknesses.sort(key=lambda x: x.get('priority_score', 0), reverse=True)
+    opportunities.sort(key=lambda x: x.get('priority_score', 0), reverse=True)
+    threats.sort(key=lambda x: x.get('risk_score', 0), reverse=True)
+    
+    swot['strengths'] = strengths[:6]
+    swot['weaknesses'] = weaknesses[:6]
+    swot['opportunities'] = opportunities[:5]
+    swot['threats'] = threats[:5]
+    
+    # === SUMMARY ===
+    swot['summary'] = {
+        'overall_position': (
+            'Digital Leader' if your_score >= avg_comp_score + 15 else
+            'Strong Performer' if your_score >= avg_comp_score + 5 else
+            'Competitive' if your_score >= avg_comp_score else
+            'Challenged' if your_score >= avg_comp_score - 10 else
+            'Urgent Action Required'
+        ),
+        'score_vs_market': your_score - int(avg_comp_score),
+        'critical_issues': len([w for w in weaknesses if w.get('urgency') == 'CRITICAL']),
+        'high_priority_issues': len([w for w in weaknesses if w.get('urgency') in ['CRITICAL', 'HIGH']]),
+        'high_roi_opportunities': len([o for o in opportunities if o.get('priority_score', 0) >= 80]),
+        'immediate_threats': len([t for t in threats if t.get('risk_score', 0) >= 85]),
+        'potential_score_gain': min(30, sum(w.get('priority_score', 0) for w in weaknesses[:3]) // 10),
+        'recommended_investment': '€5,000-15,000 for top 3-5 priorities',
+        'time_to_competitive': '3-6 months with focused effort' if your_score < avg_comp_score else 'Already competitive'
+    }
+    
+    # === PRIORITY MATRIX (Eisenhower-style) ===
+    swot['priority_matrix'] = {
+        'urgent_important': [
+            {
+                'type': 'weakness',
+                'action': w['area'],
+                'why': w['finding'],
+                'do_by': w.get('fix_timeframe', '1-2 weeks'),
+                'cost': w.get('fix_cost', 'TBD'),
+                'impact': f"+{w.get('priority_score', 0) // 10} points potential"
+            }
+            for w in weaknesses[:3] if w.get('urgency') in ['CRITICAL', 'HIGH']
+        ],
+        'important_not_urgent': [
+            {
+                'type': 'opportunity',
+                'action': o['area'],
+                'why': o['opportunity'],
+                'plan_by': o.get('timeframe', '1-3 months'),
+                'roi': o.get('estimated_roi', 'TBD'),
+                'priority': o.get('priority_score', 0)
+            }
+            for o in opportunities[:4]
+        ],
+        'maintain_strengths': [
+            {
+                'type': 'strength',
+                'area': s['area'],
+                'current_state': s['finding'],
+                'maintain': s.get('maintain_actions', [])[:2]
+            }
+            for s in strengths[:4]
+        ],
+        'monitor_threats': [
+            {
+                'type': 'threat',
+                'threat': t['threat'],
+                'likelihood': t['likelihood'],
+                'impact': t['impact'],
+                'mitigation': t['mitigation']
+            }
+            for t in threats[:3]
+        ]
+    }
+    
+    # === 30-60-90 DAY PLAN ===
+    swot['action_roadmap'] = {
+        'days_0_30': {
+            'focus': 'Fix Critical Issues',
+            'actions': [w['area'] for w in weaknesses[:2] if w.get('urgency') == 'CRITICAL'] or ['Security audit', 'Mobile optimization'],
+            'goal': 'Eliminate vulnerabilities',
+            'investment': '€1,000-3,000'
+        },
+        'days_31_60': {
+            'focus': 'Build Foundation',
+            'actions': [w['area'] for w in weaknesses[2:4] if w.get('urgency') == 'HIGH'] or ['Content expansion', 'SEO optimization'],
+            'goal': 'Competitive baseline',
+            'investment': '€2,000-5,000'
+        },
+        'days_61_90': {
+            'focus': 'Strategic Growth',
+            'actions': [o['area'] for o in opportunities[:2]] or ['Content marketing', 'Conversion optimization'],
+            'goal': 'Pull ahead of competition',
+            'investment': '€3,000-7,000'
+        }
+    }
+    
+    return swot
+
 
 def generate_english_insights(overall: int, basic: Dict[str, Any], technical: Dict[str, Any], content: Dict[str, Any], ux: Dict[str, Any], social: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate comprehensive English insights"""
+    """
+    Generate comprehensive English insights with basic SWOT.
+    For detailed SWOT, use generate_competitive_swot_analysis().
+    """
     strengths, weaknesses, opportunities, threats, recommendations = [], [], [], [], []
     breakdown = basic.get('score_breakdown', {})
     wc = content.get('word_count', 0)
     
-    # Strengths analysis
+    # Basic Strengths
     if breakdown.get('security', 0) >= 13:
         strengths.append(f"Strong security posture ({breakdown['security']}/15)")
     if breakdown.get('seo_basics', 0) >= 15:
@@ -4578,25 +5461,50 @@ def generate_english_insights(overall: int, basic: Dict[str, Any], technical: Di
     if basic.get('spa_detected') and basic.get('modernity_score', 0) > 60:
         strengths.append("Modern SPA architecture with good implementation")
     
-    # Weaknesses analysis
+    # Basic Weaknesses
     if breakdown.get('security', 0) == 0:
         weaknesses.append("CRITICAL: No SSL certificate")
         threats.append("Search engines penalize non-HTTPS sites")
         recommendations.append("Install SSL certificate immediately")
+    elif breakdown.get('security', 0) < 15:
+        # FIX 12: Add subtle improvements even for good sites
+        weaknesses.append(f"Security headers could be enhanced ({breakdown.get('security', 0)}/15)")
+        recommendations.append("Add Content-Security-Policy and security headers")
+    
     if breakdown.get('content', 0) < 5:
         weaknesses.append(f"Very low content depth ({wc} words)")
         recommendations.append("Develop comprehensive content strategy")
+    elif wc < 1500:
+        # FIX 12: Content improvement for good sites
+        weaknesses.append(f"Content depth could be improved ({wc} words)")
+        recommendations.append("Expand content to 2000+ words for better SEO")
+    
     if not technical.get('has_analytics'):
         weaknesses.append("No analytics tracking")
         recommendations.append("Install Google Analytics 4")
+    
     if breakdown.get('mobile', 0) < 8:
         weaknesses.append("Poor mobile optimization")
-        recommendations.append("Implement responsive design with proper viewport")
+        recommendations.append("Implement responsive design")
+    
     if len(social.get('platforms', [])) < 2:
         weaknesses.append("Limited social media presence")
-        recommendations.append("Establish presence on relevant social platforms")
+        recommendations.append("Expand to key social platforms")
+    elif len(social.get('platforms', [])) < 4:
+        # FIX 12: Social media expansion for good sites
+        weaknesses.append("Social media presence could be expanded")
+        recommendations.append("Consider adding LinkedIn, TikTok, or YouTube")
     
-    # Opportunities based on score
+    # FIX 12: Add competitive threats even for strong sites
+    if overall >= 70:
+        threats.append("Market leaders face increased competitive pressure")
+        threats.append("Digital trends evolve rapidly - continuous innovation required")
+    elif overall >= 50:
+        threats.append("Competitors may catch up if improvements stall")
+    else:
+        threats.append("Risk of losing market share to more digital-mature competitors")
+    
+    # Opportunities
     if overall < 30:
         opportunities.extend([
             f"Massive upside potential - target {overall + 40} points",
@@ -4610,32 +5518,31 @@ def generate_english_insights(overall: int, basic: Dict[str, Any], technical: Di
     elif overall < 75:
         opportunities.extend([
             "Optimize for conversion and user experience",
-            "Advanced features and automation opportunities"
+            "Content marketing for thought leadership"
         ])
     else:
         opportunities.extend([
             "Strong foundation for innovation",
-            "AI and automation are next leverage points"
+            "AI and automation opportunities"
         ])
     
-    # SPA-specific opportunities
     if basic.get('spa_detected') and basic.get('modernity_score', 0) < 50:
-        opportunities.append("Modernize SPA implementation for better performance")
+        opportunities.append("Modernize SPA for better performance")
     
-    # Summary generation
+    # Summary
     if overall >= 75: 
-        summary = f"Excellent digital maturity ({overall}/100) - you are a digital leader."
+        summary = f"Excellent digital maturity ({overall}/100) - digital leader."
     elif overall >= 60: 
-        summary = f"Good digital presence ({overall}/100) with solid fundamentals."
+        summary = f"Good digital presence ({overall}/100) - solid fundamentals."
     elif overall >= 45: 
-        summary = f"Baseline achieved ({overall}/100) with improvement opportunities."
+        summary = f"Baseline achieved ({overall}/100) - improvement opportunities."
     else: 
-        summary = f"Early-stage digital maturity ({overall}/100) - immediate action required."
+        summary = f"Early-stage ({overall}/100) - immediate action required."
     
     if basic.get('spa_detected'):
-        summary += f" Modern SPA architecture {'well-implemented' if basic.get('modernity_score', 0) > 60 else 'needs optimization'}."
+        summary += f" Modern SPA {'well-implemented' if basic.get('modernity_score', 0) > 60 else 'needs work'}."
 
-    # Action priority
+    # Action Priority
     action_priority = [
         {
             'category': 'security',
@@ -4653,13 +5560,13 @@ def generate_english_insights(overall: int, basic: Dict[str, Any], technical: Di
             'category': 'seo',
             'priority': 'high' if breakdown.get('seo_basics', 0) < 12 else 'medium',
             'score_impact': 8 if breakdown.get('seo_basics', 0) < 12 else 4,
-            'description': 'SEO fundamentals and optimization'
+            'description': 'SEO fundamentals'
         },
         {
             'category': 'mobile',
             'priority': 'medium' if breakdown.get('mobile', 0) < 10 else 'low',
             'score_impact': 8 if breakdown.get('mobile', 0) < 10 else 3,
-            'description': 'Mobile experience and responsiveness'
+            'description': 'Mobile experience'
         }
     ]
 
@@ -4682,8 +5589,12 @@ def generate_english_insights(overall: int, basic: Dict[str, Any], technical: Di
             'spa_detected': basic.get('spa_detected', False),
             'modernity_score': basic.get('modernity_score', 0)
         },
-        'action_priority': action_priority
+        'action_priority': action_priority,
+        # Add note about enhanced SWOT
+        'enhanced_swot_available': True,
+        'enhanced_swot_note': 'For detailed competitive SWOT analysis, use generate_competitive_swot_analysis()'
     }
+
 
 async def generate_enhanced_features(
     url: str,
@@ -4692,18 +5603,16 @@ async def generate_enhanced_features(
     content: Dict[str, Any],
     social: Dict[str, Any]
 ) -> Dict[str, Any]:
-    """Generate all 10 enhanced features for complete frontend compatibility"""
+    """Generate all 9 enhanced features for complete frontend compatibility"""
     try:
         score = int(basic.get("digital_maturity_score", 0))
-        breakdown = (basic.get("score_breakdown") or {})
+        breakdown = basic.get("score_breakdown", {})
         seo_w = SCORING_CONFIG.weights.get("seo_basics", 20)
         mob_w = SCORING_CONFIG.weights.get("mobile", 15)
-        tech_w = SCORING_CONFIG.weights.get("technical", 15)
-
+        
         seo_pts = int(breakdown.get("seo_basics", 0))
         mob_pts = int(breakdown.get("mobile", 0))
-        tech_pts = int(breakdown.get("technical", 0))
-
+        
         # 1. Industry benchmarking
         percentile = (
             min(100, int((score / 45) * 50))
@@ -4713,170 +5622,228 @@ async def generate_enhanced_features(
         industry_benchmarking = {
             "name": "Industry Benchmarking",
             "value": f"{score} / 100",
-            "description": "Industry comparison based on configurable scoring",
+            "description": "Position relative to market standards",
             "status": "above_average" if score > 45 else "below_average",
             "details": {
                 "your_score": score,
                 "industry_average": 45,
                 "top_quartile": 70,
                 "bottom_quartile": 30,
-                "percentile": percentile
+                "percentile": percentile,
+                "interpretation": (
+                    "Top performer" if score >= 70 else
+                    "Above average" if score >= 50 else
+                    "Below average" if score >= 30 else
+                    "Needs improvement"
+                )
             }
         }
-
+        
         # 2. Competitor gaps
         gaps_items = []
         if mob_pts < int(mob_w * 0.7):
-            gaps_items.append("Improve mobile UX and page speed")
+            gaps_items.append("Mobile UX & performance optimization")
         if seo_pts < int(seo_w * 0.7):
-            gaps_items.append("Enhance internal linking & meta coverage")
-        if (social.get("platforms") or []).__len__() < 3:
-            gaps_items.append("Increase social proof & UGC")
+            gaps_items.append("SEO fundamentals & technical optimization")
+        if len(social.get("platforms", [])) < 3:
+            gaps_items.append("Social media presence & engagement")
         if not technical.get("has_analytics"):
-            gaps_items.append("Implement comprehensive analytics tracking")
+            gaps_items.append("Analytics tracking & conversion optimization")
+        if content.get('word_count', 0) < 1500:
+            gaps_items.append("Content depth & authority building")
         
         competitor_gaps = {
-            "name": "Competitor Gaps",
-            "value": "Analysis available",
-            "description": "Areas where competitors may have advantages",
-            "status": "attention" if gaps_items else "competitive",
-            "items": gaps_items or ["Minor gaps vs. peers"]
+            "name": "Competitive Gaps",
+            "value": f"{len(gaps_items)} gaps identified",
+            "description": "Areas requiring attention vs market standards",
+            "status": "urgent" if len(gaps_items) >= 4 else "attention" if gaps_items else "competitive",
+            "items": gaps_items or ["No significant gaps detected"],
+            "priority_level": "High" if len(gaps_items) >= 3 else "Medium" if gaps_items else "Low"
         }
-
-        # 3. Growth opportunities
-        growth_delta = max(10, 90 - score)
-        growth_items = [
-            "Technical SEO quick wins (schema, canonical hygiene)",
-            "Content expansion targeting mid-funnel queries",
-            "UX improvements (nav clarity, accessibility fixes)",
-            "CRO experiments on top landing pages"
-        ]
         
-        if basic.get('spa_detected') and basic.get('modernity_score', 0) < 60:
-            growth_items.append("Modernize SPA implementation for better SEO")
+        # 3. Growth opportunities
+        growth_delta = max(10, min(40, 90 - score))
+        growth_items = []
+        
+        if seo_pts < int(seo_w * 0.8):
+            growth_items.append("Technical SEO optimization (+8-12 points)")
+        if content.get('word_count', 0) < 2000:
+            growth_items.append("Content expansion strategy (+10-15 points)")
+        if mob_pts < int(mob_w * 0.8):
+            growth_items.append("Mobile experience enhancement (+8-10 points)")
+        if not content.get('has_blog'):
+            growth_items.append("Content marketing via blog (+5-8 points)")
+        if basic.get('modernity_score', 0) < 60:
+            growth_items.append("Technology modernization (+5-10 points)")
         
         growth_opportunities = {
             "name": "Growth Opportunities",
             "value": f"+{growth_delta} Points Potential",
-            "description": "Strategic growth areas",
-            "items": growth_items,
-            "potential_score": min(100, score + growth_delta)
+            "description": "Strategic improvements for competitive advantage",
+            "items": growth_items[:5] or ["Maintain current excellence"],
+            "potential_score": min(100, score + growth_delta),
+            "estimated_timeframe": "3-6 months for full implementation"
         }
-
+        
         # 4. Risk assessment
         risks = []
+        risk_level = "Low"
+        
+        if breakdown.get('security', 0) < 10:
+            risks.append("CRITICAL: Security vulnerabilities (SSL/headers)")
+            risk_level = "Critical"
+        if mob_pts < int(mob_w * 0.5):
+            risks.append("HIGH: Mobile-first indexing penalty risk")
+            risk_level = "High" if risk_level != "Critical" else risk_level
         if seo_pts < int(seo_w * 0.5):
-            risks.append("Weak SEO fundamentals on key pages")
+            risks.append("HIGH: Weak SEO = poor visibility")
+            risk_level = "High" if risk_level not in ["Critical", "High"] else risk_level
         if content.get("content_quality_score", 0) < 50:
-            risks.append("Thin or shallow content on key pages")
+            risks.append("MEDIUM: Thin content limiting authority")
+            risk_level = "Medium" if risk_level == "Low" else risk_level
         if technical.get("page_speed_score", 0) < 70:
-            risks.append("Performance regressions on mobile (LCP > 2.5s)")
-        if breakdown.get("social", 0) < 5:
-            risks.append("Low social presence (limited platforms/OG tags)")
+            risks.append("MEDIUM: Performance issues affecting UX")
+            risk_level = "Medium" if risk_level == "Low" else risk_level
         if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
-            risks.append("SPA not properly rendered for search engines")
+            risks.append("MEDIUM: SPA rendering issues for SEO")
+            risk_level = "Medium" if risk_level == "Low" else risk_level
         
         risk_assessment = {
             "name": "Risk Assessment",
-            "value": "Risks evaluated",
-            "description": "Key risks to monitor",
-            "items": risks or ["No material risks detected"],
-            "risk_level": "High" if len(risks) > 3 else "Medium" if risks else "Low"
+            "value": f"{risk_level} Risk Level",
+            "description": "Potential vulnerabilities and threats",
+            "items": risks or ["No significant risks identified"],
+            "risk_level": risk_level,
+            "action_required": (
+                "Immediate action required" if risk_level in ["Critical", "High"] else
+                "Plan mitigation within 30 days" if risk_level == "Medium" else
+                "Monitor regularly"
+            )
         }
-
+        
         # 5. Market trends
         trends = [
-            "EEAT & first-party data importance growing",
-            "Core Web Vitals and page experience remain ranking signals",
-            "Short-form video and UGC drive discovery"
+            "E-E-A-T (Experience, Expertise, Authoritativeness, Trust) crucial for rankings",
+            "Core Web Vitals & page experience remain key ranking signals",
+            "Mobile-first indexing - mobile UX is primary consideration",
+            "AI-generated content detection - focus on unique, valuable content"
         ]
         
         if basic.get('spa_detected'):
-            trends.append("SPAs require careful SEO implementation for visibility")
+            trends.append("SPAs need proper SSR/prerendering for SEO visibility")
         
         market_trends = {
             "name": "Market Trends",
-            "value": "Trends analyzed",
-            "description": "Relevant market trends",
+            "value": f"{len(trends)} key trends",
+            "description": "Current digital marketing landscape",
             "items": trends,
-            "trends": trends,  # Backend compatibility
-            "status": "modern" if score >= 55 else "developing"
+            "trends": trends,
+            "status": "aligned" if score >= 60 else "needs_attention",
+            "relevance": "High - these directly impact your competitive position"
         }
-
+        
         # 6. Estimated traffic rank
         traffic_category = (
-            "High Traffic" if score >= 70 else
-            "Medium Traffic" if score >= 45 else
-            "Low Traffic"
+            "High Traffic Potential" if score >= 70 else
+            "Medium Traffic Potential" if score >= 50 else
+            "Low Traffic Potential"
         )
+        
+        monthly_estimate = (
+            "5,000-15,000" if score >= 70 else
+            "1,000-5,000" if score >= 50 else
+            "100-1,000"
+        )
+        
         estimated_traffic_rank = {
-            "name": "Traffic Estimate",
-            "value": "Estimate available",
-            "description": "Traffic estimation based on digital maturity",
+            "name": "Traffic Potential",
+            "value": traffic_category,
+            "description": "Estimated organic traffic capacity",
             "category": traffic_category,
+            "monthly_estimate": f"{monthly_estimate} monthly visitors",
             "confidence": "Medium",
-            "factors": ["Content depth", "SEO basics", "Mobile performance"]
+            "factors": [
+                f"Digital maturity: {score}/100",
+                f"Content depth: {content.get('word_count', 0)} words",
+                f"SEO score: {int((seo_pts/seo_w)*100)}/100",
+                f"Mobile optimization: {int((mob_pts/mob_w)*100)}/100"
+            ],
+            "growth_potential": f"+{growth_delta} points = {int(growth_delta * 2)}% more traffic potential"
         }
-
+        
         # 7. Mobile-first readiness
         mobile_ready = mob_pts >= int(mob_w * 0.6)
+        mobile_score_pct = int((mob_pts / max(1, mob_w)) * 100) if mob_pts > 0 else 0
+        
+        mobile_issues = []
+        mobile_recs = []
+        if not mobile_ready:
+            if not basic.get('has_mobile_viewport'):
+                mobile_issues.append("Missing viewport meta tag")
+                mobile_recs.append("Add <meta name='viewport' content='width=device-width, initial-scale=1'>")
+            if mobile_score_pct < 50:
+                mobile_issues.append("Poor responsive design coverage")
+                mobile_recs.append("Implement responsive CSS with media queries")
+            if technical.get('page_speed_score', 0) < 70:
+                mobile_issues.append("Slow mobile page load")
+                mobile_recs.append("Optimize images and defer non-critical JS")
+        
         mobile_first_index_ready = {
             "name": "Mobile-First Readiness",
-            "value": "Yes" if mobile_ready else "No",
-            "description": "Google Mobile-First indexing readiness",
-            "status": "ready" if mobile_ready else "not_ready",
-            "mobile_score": int((mob_pts / mob_w) * 100) if mob_pts > 0 else 0,
-            "issues": [] if mobile_ready else ["Viewport / responsiveness improvements required"],
-            "recommendations": ([] if mobile_ready else [
-                "Add viewport meta",
-                "Increase responsive coverage (media queries)",
-                "Optimize mobile LCP elements"
-            ])
+            "value": "Ready" if mobile_ready else "Not Ready",
+            "description": "Google mobile-first indexing compliance",
+            "status": "ready" if mobile_ready else "needs_improvement",
+            "mobile_score": mobile_score_pct,
+            "issues": mobile_issues,
+            "recommendations": mobile_recs,
+            "impact": "Critical - Google primarily uses mobile version for indexing and ranking"
         }
-
+        
         # 8. Core Web Vitals
         ps = int(technical.get("page_speed_score", 0))
         passed = ps >= 70
         cwv_status = "pass" if passed else "needs_improvement"
-        cwv_grade = ("A" if ps >= 90 else "B" if ps >= 80 else 
-                    "C" if ps >= 70 else "D" if ps >= 60 else "E")
-
-        # Laske todelliset arvot page_speed_score:n perusteella
-        # LCP (Largest Contentful Paint): 0-5000ms
-        # Hyvä < 2500ms, Kohtalainen 2500-4000ms, Huono > 4000ms
-        lcp_ms = int(5000 - (ps * 27.5))  # 100 → 2250ms, 0 → 5000ms
-        lcp_ms = max(1500, min(5500, lcp_ms))
-
-        # TBT (Total Blocking Time): 0-600ms  
-        # Hyvä < 200ms, Kohtalainen 200-600ms, Huono > 600ms
-        tbt_ms = int(600 - (ps * 5))  # 100 → 100ms, 0 → 600ms
-        tbt_ms = max(50, min(700, tbt_ms))
-
-        # CLS (Cumulative Layout Shift): 0-0.5
-        # Hyvä < 0.1, Kohtalainen 0.1-0.25, Huono > 0.25
-        cls = round((0.5 - (ps * 0.0045)), 2)  # 100 → 0.05, 0 → 0.5
-        cls = max(0.01, min(0.6, cls))
-
+        cwv_grade = (
+            "A" if ps >= 90 else
+            "B" if ps >= 80 else
+            "C" if ps >= 70 else
+            "D" if ps >= 60 else
+            "E"
+        )
+        
+        # Estimate metrics based on page speed score
+        lcp_ms = max(1500, min(5500, int(5000 - (ps * 27.5))))
+        tbt_ms = max(50, min(700, int(600 - (ps * 5))))
+        cls = max(0.01, min(0.6, round((0.5 - (ps * 0.0045)), 2)))
+        
+        cwv_recs = []
+        if lcp_ms > 2500:
+            cwv_recs.append("Optimize hero images (use WebP, compression)")
+        if tbt_ms > 200:
+            cwv_recs.append("Defer non-critical JavaScript")
+        if cls > 0.1:
+            cwv_recs.append("Reserve space for images/ads to prevent layout shifts")
+        if ps < 80:
+            cwv_recs.append("Enable browser caching and compression")
+        
         core_web_vitals_assessment = {
             "name": "Core Web Vitals",
-            "value": "Pass" if passed else "Needs improvement",
-            "description": "Website performance metrics",
+            "value": f"{cwv_status.replace('_', ' ').title()} ({cwv_grade})",
+            "description": "Google's UX performance metrics",
             "status": cwv_status,
             "score": ps,
             "grade": cwv_grade,
             "metrics": {
                 "lcp_ms": lcp_ms,
+                "lcp_status": "Good" if lcp_ms <= 2500 else "Needs Improvement" if lcp_ms <= 4000 else "Poor",
                 "tbt_ms": tbt_ms,
-                "cls": cls
+                "tbt_status": "Good" if tbt_ms <= 200 else "Needs Improvement" if tbt_ms <= 600 else "Poor",
+                "cls": cls,
+                "cls_status": "Good" if cls <= 0.1 else "Needs Improvement" if cls <= 0.25 else "Poor"
             },
-            "recommendations": [
-                "Optimize hero images (modern formats, compression)" if lcp_ms > 2500 else None,
-                "Defer non-critical JS and enable lazy-loading" if tbt_ms > 200 else None,
-                "Fix layout shifts - reserve space for images/ads" if cls > 0.1 else None,
-                "Minify CSS/JS and leverage HTTP caching"
-            ]
+            "recommendations": cwv_recs or ["Performance is good - maintain current standards"],
+            "impact": "Core Web Vitals are a confirmed ranking factor"
         }
-
         
         # 9. Technology stack
         detected = ["HTML5", "CSS3", "JavaScript"]
@@ -4885,7 +5852,8 @@ async def generate_enhanced_features(
         
         framework_map = {
             'react': 'React', 'nextjs': 'Next.js', 'vue': 'Vue.js',
-            'angular': 'Angular', 'svelte': 'Svelte', 'nuxt': 'Nuxt.js'
+            'angular': 'Angular', 'svelte': 'Svelte', 'nuxt': 'Nuxt.js',
+            'gatsby': 'Gatsby'
         }
         
         frameworks_detected = []
@@ -4895,6 +5863,7 @@ async def generate_enhanced_features(
                 detected.append(fw_normalized)
                 frameworks_detected.append(fw_normalized)
         
+        # Media tech
         media_technologies = []
         for media in (content.get("media_types") or []):
             if media and media.lower() not in ['images', 'image']:
@@ -4902,29 +5871,42 @@ async def generate_enhanced_features(
                     detected.append(media)
                     media_technologies.append(media)
         
+        # Analytics
         analytics_tools = []
         if technical.get("has_analytics"):
             if "Google Analytics" not in detected:
                 detected.append("Google Analytics")
                 analytics_tools.append("Google Analytics")
         
+        modernity = basic.get('modernity_score', 0)
+        tech_status = (
+            "Cutting edge" if modernity >= 80 else
+            "Modern" if modernity >= 60 else
+            "Standard" if modernity >= 40 else
+            "Legacy"
+        )
+        
         technology_stack = {
             "name": "Technology Stack",
             "value": f"{len(detected)} technologies detected",
-            "description": "Website technology stack analysis with SPA detection",
+            "description": "Technical implementation and framework analysis",
             "detected": detected,
             "categories": {
                 "frontend": ["HTML5", "CSS3", "JavaScript"] + frameworks_detected,
+                "frameworks": frameworks_detected,
                 "media": media_technologies,
                 "analytics": analytics_tools
             },
-            "modernity": "modern" if basic.get('modernity_score', 0) > 60 else "standard"
+            "modernity": tech_status,
+            "modernity_score": modernity,
+            "assessment": (
+                "Modern, well-maintained stack" if modernity >= 60 else
+                "Standard implementation, consider modernization" if modernity >= 40 else
+                "Legacy technology, modernization recommended"
+            )
         }
-
         
-        
-
-        # PALAUTA KAIKKI 10 ENHANCED FEATURES
+        # Return all features
         return {
             "industry_benchmarking": industry_benchmarking,
             "competitor_gaps": competitor_gaps,
@@ -4934,187 +5916,288 @@ async def generate_enhanced_features(
             "estimated_traffic_rank": estimated_traffic_rank,
             "mobile_first_index_ready": mobile_first_index_ready,
             "core_web_vitals_assessment": core_web_vitals_assessment,
-            "technology_stack": technology_stack,
-            
+            "technology_stack": technology_stack
         }
-
+        
     except Exception as e:
         logger.error(f"Enhanced features generation failed: {e}")
+        # Return minimal fallback
         return {
             "industry_benchmarking": {"name": "Industry Benchmarking", "value": "N/A"},
-            "competitor_gaps": {"name": "Competitor Gaps", "value": "N/A"},
+            "competitor_gaps": {"name": "Competitive Gaps", "value": "N/A"},
             "growth_opportunities": {"name": "Growth Opportunities", "value": "N/A"},
             "risk_assessment": {"name": "Risk Assessment", "value": "N/A"},
             "market_trends": {"name": "Market Trends", "value": "N/A"},
-            "estimated_traffic_rank": {"name": "Traffic Estimate", "value": "N/A"},
+            "estimated_traffic_rank": {"name": "Traffic Potential", "value": "N/A"},
             "mobile_first_index_ready": {"name": "Mobile-First Readiness", "value": "N/A"},
             "core_web_vitals_assessment": {"name": "Core Web Vitals", "value": "N/A"},
-            "technology_stack": {"name": "Technology Stack", "value": "N/A", "detected": []},
-            "ai_search_visibility": {"name": "AI Search Visibility", "value": "N/A"}  # ← LISÄTTY
+            "technology_stack": {"name": "Technology Stack", "value": "N/A"}
         }
+    
+# ✅ END OF generate_enhanced_features()
 
 def generate_smart_actions(ai_analysis: AIAnalysis, technical: Dict[str, Any], content: Dict[str, Any], basic: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Generate prioritized smart actions with RICE scoring.
+    RICE = Reach × Impact × Confidence / Effort
+    """
     actions: List[Dict[str, Any]] = []
     breakdown = basic.get('score_breakdown', {})
-
-    # --- existing rules, kept but concise ---
+    
+    # Security check
     if breakdown.get('security', 0) <= 5:
         actions.append({
             "title": "Enable HTTPS and security headers",
             "description": "Install SSL certificate and configure CSP, X-Frame-Options, HSTS.",
-            "priority": "critical", "effort": "medium", "impact": "critical",
-            "estimated_score_increase": 12, "category": "security", "estimated_time": "1-3 days"
+            "priority": "critical",
+            "effort": "medium",
+            "impact": "critical",
+            "estimated_score_increase": 12,
+            "category": "security",
+            "estimated_time": "1-3 days",
+            "cost_estimate": "€50-200"
         })
-
+    
+    # Content check
     if breakdown.get('content', 0) <= 8:
         actions.append({
             "title": "Develop comprehensive content",
-            "description": "Create in-depth pillar content (2000+ words) targeting core topics.",
-            "priority": "critical", "effort": "high", "impact": "critical",
-            "estimated_score_increase": 15, "category": "content", "estimated_time": "2-4 weeks"
+            "description": "Create 3-5 pillar pages (2000+ words) targeting core topics and keywords.",
+            "priority": "critical",
+            "effort": "high",
+            "impact": "critical",
+            "estimated_score_increase": 15,
+            "category": "content",
+            "estimated_time": "2-4 weeks",
+            "cost_estimate": "€1,000-3,000"
         })
-
+    
+    # SEO check
     if breakdown.get('seo_basics', 0) < 12:
         actions.append({
             "title": "Optimize SEO fundamentals",
-            "description": "Improve titles, meta descriptions, H1/H2 structure, canonical tags.",
-            "priority": "high", "effort": "medium", "impact": "high",
-            "estimated_score_increase": 10, "category": "seo", "estimated_time": "1-2 weeks"
+            "description": "Fix titles (50-60 chars), meta descriptions (150-160 chars), H1/H2 structure, canonicals.",
+            "priority": "high",
+            "effort": "medium",
+            "impact": "high",
+            "estimated_score_increase": 10,
+            "category": "seo",
+            "estimated_time": "1-2 weeks",
+            "cost_estimate": "€500-1,500"
         })
-
+    
+    # Mobile check
     if breakdown.get('mobile', 0) < 10:
         actions.append({
             "title": "Implement responsive design",
-            "description": "Add viewport meta + CSS media queries; test on key devices.",
-            "priority": "high", "effort": "medium", "impact": "high",
-            "estimated_score_increase": 8, "category": "mobile", "estimated_time": "1-2 weeks"
+            "description": "Add viewport meta, responsive CSS, test on devices, fix touch targets.",
+            "priority": "high",
+            "effort": "medium",
+            "impact": "high",
+            "estimated_score_increase": 8,
+            "category": "mobile",
+            "estimated_time": "1-2 weeks",
+            "cost_estimate": "€1,000-3,000"
         })
-
+    
+    # Analytics check
     if not technical.get('has_analytics', False):
         actions.append({
             "title": "Install Google Analytics 4",
-            "description": "Set up GA4 + conversion events; verify data layer.",
-            "priority": "high", "effort": "low", "impact": "medium",
-            "estimated_score_increase": 5, "category": "analytics", "estimated_time": "1-2 days"
+            "description": "Set up GA4, define 3-5 conversion events, create dashboard.",
+            "priority": "high",
+            "effort": "low",
+            "impact": "medium",
+            "estimated_score_increase": 5,
+            "category": "analytics",
+            "estimated_time": "2-4 hours",
+            "cost_estimate": "€0 (free tool)"
         })
-
+    
+    # SPA check
     if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
         actions.append({
             "title": "Implement SPA SEO optimization",
-            "description": "Add server-side rendering or prerendering for search engines.",
-            "priority": "high", "effort": "high", "impact": "high",
-            "estimated_score_increase": 12, "category": "spa", "estimated_time": "2-3 weeks"
+            "description": "Add SSR/prerendering for search engines or static site generation.",
+            "priority": "high",
+            "effort": "high",
+            "impact": "high",
+            "estimated_score_increase": 12,
+            "category": "spa",
+            "estimated_time": "2-3 weeks",
+            "cost_estimate": "€2,000-5,000"
         })
-
+    
+    # Social check
     if breakdown.get('social', 0) < 6:
         actions.append({
             "title": "Build social media presence",
-            "description": "Create/refresh profiles and add sharing buttons site-wide.",
-            "priority": "medium", "effort": "medium", "impact": "medium",
-            "estimated_score_increase": 6, "category": "social", "estimated_time": "1-2 weeks"
+            "description": "Create profiles on LinkedIn, Facebook, Instagram + add sharing buttons.",
+            "priority": "medium",
+            "effort": "medium",
+            "impact": "medium",
+            "estimated_score_increase": 6,
+            "category": "social",
+            "estimated_time": "1-2 weeks",
+            "cost_estimate": "€500-1,500"
         })
-
+    
+    # Performance check
     if breakdown.get('performance', 0) < 3:
         actions.append({
             "title": "Optimize website performance",
-            "description": "Compress images, minify CSS/JS, implement lazy-loading.",
-            "priority": "medium", "effort": "medium", "impact": "medium",
-            "estimated_score_increase": 4, "category": "performance", "estimated_time": "3-5 days"
+            "description": "Compress images, minify CSS/JS, enable lazy-loading, use CDN.",
+            "priority": "medium",
+            "effort": "medium",
+            "impact": "medium",
+            "estimated_score_increase": 4,
+            "category": "performance",
+            "estimated_time": "3-5 days",
+            "cost_estimate": "€500-2,000"
         })
-
+    
+    # Technical check
     if breakdown.get('technical', 0) < 10:
         actions.append({
             "title": "Improve technical SEO",
-            "description": "Add sitemap.xml, robots.txt, and key schema markup.",
-            "priority": "low", "effort": "low", "impact": "medium",
-            "estimated_score_increase": 3, "category": "technical", "estimated_time": "2-3 days"
+            "description": "Add sitemap.xml, robots.txt, schema markup (Organization, FAQ).",
+            "priority": "low",
+            "effort": "low",
+            "impact": "medium",
+            "estimated_score_increase": 3,
+            "category": "technical",
+            "estimated_time": "2-3 days",
+            "cost_estimate": "€200-500"
         })
-
+    
+    # Default action if none found
     if not actions:
         actions.append({
             "title": "Content optimization",
-            "description": "Update existing pages for UX & engagement; add internal links.",
-            "priority": "low", "effort": "medium", "impact": "low",
-            "estimated_score_increase": 2, "category": "content", "estimated_time": "1 week"
+            "description": "Update existing pages for better UX, add internal links, refresh dates.",
+            "priority": "low",
+            "effort": "medium",
+            "impact": "low",
+            "estimated_score_increase": 2,
+            "category": "content",
+            "estimated_time": "1 week",
+            "cost_estimate": "€300-800"
         })
-
-    # --- enrichment: So what / Why now / What to do + RICE + signals ---
-    def _confidence_label(val: int) -> str:
-        return "H" if val >= 75 else "M" if val >= 50 else "L"
-
+    
+    # Enrichment function with RICE scoring
     def enrich(a: Dict[str, Any]) -> Dict[str, Any]:
-        cat = a.get("category","")
+        cat = a.get("category", "")
+        
+        # Business context
         so_what = {
             "security": "Protects users and prevents SEO/trust penalties.",
             "content": "Drives qualified traffic and improves conversion.",
             "seo": "Improves discoverability and click-through.",
-            "mobile": "Mobile users get faster UX → better CR.",
+            "mobile": "Mobile users get faster UX → better conversion.",
             "analytics": "Enables learning loops and ROI tracking.",
             "spa": "Ensures bots can index content → visibility.",
             "social": "Adds social proof and new discovery channels.",
             "performance": "Faster pages reduce bounce and lift revenue.",
             "technical": "Prevents crawl/canonicalization issues."
         }.get(cat, "Improves user outcomes and revenue.")
-
+        
         why_now = {
-            "security": "HTTP/weak headers can hurt rankings and flags in browsers.",
-            "content": "Competitors publish weekly; gap widens every month.",
+            "security": "HTTP/weak headers hurt rankings NOW.",
+            "content": "Competitors publish weekly; gap widens.",
             "seo": "Meta & structure are fast compounding wins.",
-            "mobile": "Core Web Vitals remain a ranking/UX signal.",
+            "mobile": "Core Web Vitals are a ranking factor.",
             "analytics": "Every day without data is lost learning.",
-            "spa": "Client-only rendering risks invisibility in search.",
-            "social": "UGC/short-form channels compound reach now."
+            "spa": "Client-only rendering risks invisibility.",
+            "social": "UGC/short-form channels compound reach."
         }.get(cat, "Opportunity cost grows each week.")
-
+        
         what_to_do = {
-            "security": "Issue TLS cert; enable HSTS; add CSP & X-Frame-Options.",
-            "content": "Ship 6 pillar pages + clusters; FAQs; internal links.",
-            "seo": "Fix top 10 titles/meta; add canonicals; H1/H2 structure.",
-            "mobile": "Add viewport; fix CLS; compress hero images.",
-            "analytics": "Install GA4; define 3–5 conversion events; verify.",
-            "spa": "Add SSR/prerender for critical routes or static export.",
-            "social": "Add OG/Twitter tags; sitewide share; refresh profiles.",
-            "performance": "Defer non-critical JS; preload critical; lazy-load.",
-            "technical": "Publish sitemap.xml/robots.txt; add schema markup."
-        }.get(cat, "Ship the smallest change that moves the metric.")
-
-        # RICE (karkea) + owner/ETA
-        reach = max(50, int(basic.get('digital_maturity_score',0)/2) + content.get('content_quality_score',0)//2)
-        conf = min(10, max(3, basic.get('digital_maturity_score',0)//12))
+            "security": "Issue TLS cert; enable HSTS; add CSP.",
+            "content": "Ship 6 pillar pages + FAQs + internal links.",
+            "seo": "Fix top 10 titles/meta; add canonicals.",
+            "mobile": "Add viewport; fix CLS; compress hero.",
+            "analytics": "Install GA4; define 3–5 events; verify.",
+            "spa": "Add SSR/prerender for critical routes.",
+            "social": "Add OG/Twitter tags; sitewide share.",
+            "performance": "Defer non-critical JS; lazy-load.",
+            "technical": "Publish sitemap; add schema markup."
+        }.get(cat, "Ship smallest change that moves metric.")
+        
+        # RICE scoring
+        maturity = basic.get('digital_maturity_score', 0)
+        content_score = content.get('content_quality_score', 0)
+        
+        reach = max(50, int(maturity / 2) + content_score // 2)  # 0-100
+        conf = min(10, max(3, maturity // 12))  # 3-10
+        
         eff_map = {"low": 1, "medium": 2, "high": 3}
-        effort_n = eff_map.get(a.get("effort","medium"), 2)
-        impact_w = {"low":2,"medium":3,"high":4,"critical":5}.get(a.get("impact","medium"),3)
+        effort_n = eff_map.get(a.get("effort", "medium"), 2)
+        
+        impact_w = {"low": 2, "medium": 3, "high": 4, "critical": 5}.get(a.get("impact", "medium"), 3)
+        
         rice = int((reach * impact_w * conf) / max(1, effort_n))
-
-        sig: List[str] = []
+        
+        # Evidence signals
+        sig = []
         if cat == "mobile":
-            if not basic.get('has_mobile_viewport'): sig.append("No viewport meta")
-            if technical.get('page_speed_score', 100) < 70: sig.append("Low page speed score")
+            if not basic.get('has_mobile_viewport'):
+                sig.append("No viewport meta")
+            if technical.get('page_speed_score', 100) < 70:
+                sig.append("Low page speed")
         if cat == "seo":
-            if not basic.get('meta_description'): sig.append("Missing/short meta description")
-            if not basic.get('title'): sig.append("Missing/short <title>")
+            if not basic.get('meta_description'):
+                sig.append("Missing meta description")
+            if not basic.get('title'):
+                sig.append("Missing title tag")
         if cat == "spa" and basic.get('rendering_method') == 'http':
             sig.append("SPA client-rendered only")
-
+        
+        # Determine owner
+        owner = "CMO" if cat in ["seo", "content", "social", "performance"] else "CTO"
+        
+        # Estimate days
+        eta_days = (
+            5 if a.get("effort") == "low" else
+            10 if a.get("effort") == "medium" else
+            20
+        )
+        
+        # Evidence confidence
+        evidence_conf = (
+            "H" if maturity >= 75 else
+            "M" if maturity >= 50 else
+            "L"
+        )
+        
         a.update({
             "so_what": so_what,
             "why_now": why_now,
             "what_to_do": what_to_do,
-            "owner": "CMO" if cat in ["seo","content","social","performance"] else "CTO",
-            "eta_days": 5 if a.get("effort")=="low" else 10 if a.get("effort")=="medium" else 20,
+            "owner": owner,
+            "eta_days": eta_days,
             "reach": reach,
             "confidence": conf,
             "rice_score": rice,
             "signals": sig or None,
-            "evidence_confidence": _confidence_label(basic.get('digital_maturity_score',0))
+            "evidence_confidence": evidence_conf
         })
+        
         return a
-
+    
+    # Enrich all actions
     actions = [enrich(a) for a in actions]
-
+    
+    # Sort by priority (critical first) then RICE score
     priority_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
-    actions.sort(key=lambda x: (priority_order.get(x['priority'], 4), -x.get('rice_score', 0), -x.get('estimated_score_increase', 0)))
-    return actions[:8]
+    actions.sort(
+        key=lambda x: (
+            priority_order.get(x['priority'], 4),
+            -x.get('rice_score', 0),
+            -x.get('estimated_score_increase', 0)
+        )
+    )
+    
+    return actions[:8]  # Top 8 actions
 
 # ============================================================================
 # MAIN ENDPOINTS
@@ -5162,7 +6245,9 @@ async def login(request: LoginRequest):
     # ✅ VERIFY PASSWORD
     logger.info(f"🔐 Verifying password for: {user.get('username')} (key: {user_key})")
     
-    if not verify_password(request.password, user["hashed_password"]):
+    # FIX: verify_password can return None, must explicitly check for False
+    password_valid = verify_password(request.password, user["hashed_password"])
+    if password_valid is False or not password_valid:
         logger.error(f"❌ INVALID PASSWORD for: {request.username}")
         raise HTTPException(401, "Invalid credentials")
     
@@ -5323,27 +6408,43 @@ async def verify_magic_link_get(token: str, req: Request):
 
        
 # ============================================================================
-# GOOGLE OAUTH ENDPOINTS - FIXED VERSION
+# GOOGLE OAUTH ENDPOINTS - COMPLETE FIXED VERSION
 # ============================================================================
 
 @app.get("/auth/google/login")
 async def google_login(request: Request):
-    """Initiate Google OAuth login"""
+    """Initiate Google OAuth login flow"""
+    
+    if not oauth:
+        raise HTTPException(503, "Google OAuth not configured")
+    
     if not os.getenv('GOOGLE_CLIENT_ID'):
         raise HTTPException(503, "Google OAuth not configured")
     
-    # Hardcode HTTPS redirect URI for production
-    redirect_uri = "https://fastapi-production-51f9.up.railway.app/auth/google/callback"
-    logger.info(f"🔐 Initiating Google OAuth login, redirect_uri: {redirect_uri}")
-    
-    return await oauth.google.authorize_redirect(request, redirect_uri)
+    try:
+        # ✅ KORJAUS: Käytä GOOGLE_REDIRECT_URI env-muuttujaa
+        redirect_uri = os.getenv(
+            'GOOGLE_REDIRECT_URI',
+            'https://fastapi-production-51f9.up.railway.app/auth/google/callback'
+        )
+        
+        logger.info(f"🔐 Initiating Google OAuth login")
+        logger.info(f"📍 Redirect URI: {redirect_uri}")
+        
+        return await oauth.google.authorize_redirect(request, redirect_uri)
+        
+    except Exception as e:
+        logger.error(f"❌ Google OAuth login failed: {e}")
+        import traceback
+        logger.error(f"📋 Traceback: {traceback.format_exc()}")
+        raise HTTPException(500, f"OAuth initialization failed: {str(e)}")
 
 
 @app.get("/auth/google/callback")
 async def google_callback(request: Request, background_tasks: BackgroundTasks):
-    """Handle Google OAuth callback"""
+    """Handle Google OAuth callback and create user session"""
     try:
-        if not os.getenv('GOOGLE_CLIENT_ID'):
+        if not oauth or not os.getenv('GOOGLE_CLIENT_ID'):
             raise HTTPException(503, "Google OAuth not configured")
         
         # Get access token from Google
@@ -5364,14 +6465,14 @@ async def google_callback(request: Request, background_tasks: BackgroundTasks):
         if not email:
             raise HTTPException(400, "Email not provided by Google")
         
-        # ✅ FIX: Check DATABASE FIRST for existing user and role
+        # ✅ STEP 1: Check DATABASE FIRST for existing user and role
         existing_user = None
         existing_username = None
         is_new_user = True
-        role = "user"  # Default
+        role = "user"  # Default role
         username = email.split('@')[0]
         
-        # Check database first
+        # Check database first (highest priority)
         try:
             from database import get_user_from_db, DATABASE_ENABLED
             
@@ -5388,7 +6489,7 @@ async def google_callback(request: Request, background_tasks: BackgroundTasks):
         except Exception as db_error:
             logger.warning(f"⚠️ Database lookup error: {db_error}")
         
-        # If not in DB, check memory (USERS_DB)
+        # ✅ STEP 2: If not in DB, check memory (USERS_DB)
         if not existing_user:
             for uname, udata in USERS_DB.items():
                 if udata.get("email") == email:
@@ -5399,7 +6500,7 @@ async def google_callback(request: Request, background_tasks: BackgroundTasks):
                     logger.info(f"📋 Found user in memory: {username} with role: {role}")
                     break
         
-        # Add to user_store
+        # ✅ STEP 3: Add to user_store (temporary session store)
         if email not in user_store:
             user_store[email] = {
                 "username": username,
@@ -5415,25 +6516,17 @@ async def google_callback(request: Request, background_tasks: BackgroundTasks):
             }
             logger.info(f"✅ Added Google OAuth user to user_store: {email}")
         
-        # Add to USERS_DB if needed
+        # ✅ STEP 4: Create new user if not exists
         if not existing_user:
-            # ✅ ULTIMATE FIX: Create a short, deterministic password
-            import hashlib
-            
-            # Use first 16 chars of SHA256 hash - guaranteed to be short and safe
-            password_hash_base = hashlib.sha256(google_id.encode()).hexdigest()[:16]
-            safe_password = f"g_{password_hash_base}"  # Total: 18 chars (way under 72!)
-            
-            logger.info(f"🔐 Creating OAuth password (length: {len(safe_password)} chars)")
-            
-            # ✅ USE THE EXISTING pwd_context - DON'T CREATE A NEW ONE!
-            # The pwd_context is already defined at the top of main.py
             try:
+                # Create safe password for OAuth users
+                safe_password = f"oauth_google_{google_id[:16]}"
+                
                 # Ensure it's a string (not bytes)
                 if not isinstance(safe_password, str):
                     safe_password = safe_password.decode('utf-8')
                 
-                # Hash using the EXISTING pwd_context
+                # Hash password using existing pwd_context
                 hashed_password = pwd_context.hash(safe_password)
                 logger.info(f"✅ Password hashed successfully")
                 
@@ -5441,13 +6534,14 @@ async def google_callback(request: Request, background_tasks: BackgroundTasks):
                 logger.error(f"❌ Password hashing failed: {hash_error}")
                 # Ultra-simple fallback
                 try:
-                    simple_password = "oauth123"
-                    hashed_password = pwd_context.hash(simple_password)
-                    logger.warning(f"⚠️ Used ultra-simple fallback password")
+                    fallback_password = f"oauth_{username}"
+                    hashed_password = pwd_context.hash(fallback_password)
+                    logger.warning(f"⚠️ Used fallback password")
                 except Exception as fallback_error:
                     logger.error(f"❌ Even fallback failed: {fallback_error}")
                     raise HTTPException(500, "Failed to create user password hash")
             
+            # ✅ STEP 5: Save to USERS_DB (memory)
             USERS_DB[username] = {
                 "username": username,
                 "email": email,
@@ -5457,54 +6551,53 @@ async def google_callback(request: Request, background_tasks: BackgroundTasks):
             }
             logger.info(f"✅ Added Google OAuth user to USERS_DB: {username}")
             
-            # ✅ PERSIST TO DATABASE
+            # ✅ STEP 6: Persist to database (if available)
             try:
-                # Import database function if available
-                try:
-                    from database import create_user_in_db, DATABASE_ENABLED
-                    
-                    if DATABASE_ENABLED:
-                        success = create_user_in_db(
-                            username=username,
-                            hashed_password=hashed_password,
-                            role=role,
-                            search_limit=10,
-                            email=email
-                        )
-                        if success:
-                            logger.info(f"✅ Persisted Google OAuth user to database: {username}")
-                        else:
-                            logger.warning(f"⚠️ Failed to persist to database: {username}")
+                from database import create_user_in_db, DATABASE_ENABLED
+                
+                if DATABASE_ENABLED:
+                    success = create_user_in_db(
+                        username=username,
+                        hashed_password=hashed_password,
+                        role=role,
+                        search_limit=10,
+                        email=email
+                    )
+                    if success:
+                        logger.info(f"✅ Persisted Google OAuth user to database: {username}")
                     else:
-                        logger.info("ℹ️ Database not enabled, user stored in memory only")
-                        
-                except ImportError:
-                    logger.warning("⚠️ Database module not available, user stored in memory only")
+                        logger.warning(f"⚠️ Failed to persist to database: {username}")
+                else:
+                    logger.info("ℹ️ Database not enabled, user stored in memory only")
                     
+            except ImportError:
+                logger.warning("⚠️ Database module not available, user stored in memory only")
             except Exception as db_error:
                 logger.error(f"⚠️ Database error: {db_error}")
                 # Continue anyway - user is in memory
             
-            # ✅ NEW: Send email notification for new user
-            logger.info(f"📧 New Google OAuth user detected, sending notification for: {email}")
-            background_tasks.add_task(
-                on_user_registered,
-                user_email=email,
-                user_name=name,
-                method="google"
-            )
-
+            # ✅ STEP 7: Send new user notification
+            if is_new_user:
+                logger.info(f"📧 New Google OAuth user, sending notification for: {email}")
+                try:
+                    background_tasks.add_task(
+                        on_user_registered,
+                        user_email=email,
+                        user_name=name,
+                        method="google"
+                    )
+                except Exception as email_error:
+                    logger.warning(f"⚠️ Failed to send notification: {email_error}")
         
-        # Create JWT access token for our API
+        # ✅ STEP 8: Create JWT access token for API
         access_token = create_access_token({
-            "sub": username,
-            "role": role  # ✅ Now uses DB role!
+            "sub": username,  # Use username (not email) for consistency
+            "role": role      # Use role from DB or default
         })
         
         logger.info(f"✅ Google OAuth login successful for {email} with role: {role}")
         
-        # ✅ REDIRECT DIRECTLY TO DASHBOARD WITH HASH PARAMETERS
-        # Add timestamp to URL to bust One.com cache!
+        # ✅ STEP 9: Redirect to frontend dashboard with token in hash
         import time
         timestamp = int(time.time())
         
@@ -5517,7 +6610,7 @@ async def google_callback(request: Request, background_tasks: BackgroundTasks):
             f"&role={role}"
         )
         
-        logger.info(f"🎯 Redirecting to dashboard with token hash: {redirect_url[:80]}...")
+        logger.info(f"🎯 Redirecting to dashboard: {redirect_url[:80]}...")
         
         return RedirectResponse(url=redirect_url)
         
@@ -5527,6 +6620,7 @@ async def google_callback(request: Request, background_tasks: BackgroundTasks):
         logger.error(f"❌ Google OAuth callback failed: {e}")
         import traceback
         logger.error(f"📋 Traceback: {traceback.format_exc()}")
+        
         # Redirect to frontend with error
         frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')
         return RedirectResponse(url=f"{frontend_url}/login?error=google_auth_failed")
@@ -5594,7 +6688,7 @@ async def _perform_comprehensive_analysis_internal(
     force_playwright: bool = False,
     user: Optional[UserInfo] = None,
     revenue_input: Optional[RevenueInputRequest] = None
-) -> Dict[str, Any]:
+) -> Dict[str, Any]:  
     """
     Internal analysis core - NO QUOTA CHECK.
     Used by both public API and background tasks.
@@ -5605,6 +6699,7 @@ async def _perform_comprehensive_analysis_internal(
         language: Language code (en/fi)
         force_playwright: Force SPA rendering
         user: Optional user info for metadata
+        revenue_input: Optional user revenue data for business impact calculation
     
     Returns:
         Complete analysis result dict
@@ -5618,7 +6713,9 @@ async def _perform_comprehensive_analysis_internal(
     url = clean_url(url)
     
     # Check cache
-    cache_key = get_cache_key(url, "ai_comprehensive_v6.1.1_complete")
+    # FIX 11: Updated cache version to v6.3.1_fixed to invalidate old cache
+    # with incorrect accessibility scores (45/15 bug) and modern features bugs
+    cache_key = get_cache_key(url, "ai_comprehensive_v6.3.1_fixed")
     cached_result = await get_from_cache(cache_key)
     if cached_result:
         logger.info(f"Cache hit for {url}")
@@ -5654,7 +6751,7 @@ async def _perform_comprehensive_analysis_internal(
         headers=httpx.Headers({})
     )
     
-    # ✅ KORJAUS 1: Käytä `basic_analysis` eikä `result`
+    # Enrich technical audit with modern features
     if 'modern_features' in basic_analysis.get('detailed_findings', {}):
         modern_features = basic_analysis['detailed_findings']['modern_features']
         logger.info(f"✅ Found modern_features: {len(modern_features.get('detected_frameworks', []))} frameworks")
@@ -5665,7 +6762,6 @@ async def _perform_comprehensive_analysis_internal(
         
         logger.info(f"✅ Enriched technical_audit with: {technical_audit['detected_frameworks']}")
     else:
-        # ✅ KORJAUS 2: Oikea sisennys
         logger.warning(
             f"⚠️ modern_features NOT FOUND in detailed_findings! "
             f"Available keys: {list(basic_analysis.get('detailed_findings', {}).keys())}"
@@ -5675,7 +6771,7 @@ async def _perform_comprehensive_analysis_internal(
         technical_audit['detected_frameworks'] = []
         technical_audit['modern_js_features'] = 0
     
-    # ✅ KORJAUS 3: Siirrä analyysit oikeaan paikkaan (ei `else`-blokin sisään!)
+    # Perform remaining analyses
     content_analysis = await analyze_content_quality(html_content)
     ux_analysis = await analyze_ux_elements(html_content)
     social_analysis = await analyze_social_media_presence(url, html_content)
@@ -5700,8 +6796,9 @@ async def _perform_comprehensive_analysis_internal(
     
     # AI Search Visibility
     if hasattr(ai_analysis, 'ai_search_visibility') and ai_analysis.ai_search_visibility:
-        ai_vis_dict = (ai_analysis.ai_search_visibility.dict() 
-                      if hasattr(ai_analysis.ai_search_visibility, 'dict') 
+        # FIX 10: Use Pydantic V2 model_dump() instead of deprecated dict()
+        ai_vis_dict = (ai_analysis.ai_search_visibility.model_dump() 
+                      if hasattr(ai_analysis.ai_search_visibility, 'model_dump') 
                       else ai_analysis.ai_search_visibility)
         enhanced_features["ai_search_visibility"] = ai_vis_dict
     
@@ -5710,11 +6807,10 @@ async def _perform_comprehensive_analysis_internal(
         ai_analysis, technical_audit, content_analysis, basic_analysis
     )
     
-    # ✅ EXTRACT DATA FOR ROOT-LEVEL FIELDS
-    # Extract modern_features from basic_analysis
+    # Extract modern features for detailed analysis
     modern_features = basic_analysis.get('detailed_findings', {}).get('modern_features', {})
     
-    # Extract interaction patterns from detect_interactive_elements (if available)
+    # Extract interaction patterns
     interaction_data = None
     try:
         soup = BeautifulSoup(html_content, 'html.parser')
@@ -5726,7 +6822,7 @@ async def _perform_comprehensive_analysis_internal(
             'interactivity_score': 0
         }
     
-    # Build mobile_reasons based on mobile score
+    # Build mobile reasons
     mobile_score_value = basic_analysis.get('detailed_findings', {}).get('mobile_score_raw', 0)
     mobile_reasons = []
     if mobile_score_value < 60:
@@ -5737,11 +6833,12 @@ async def _perform_comprehensive_analysis_internal(
         if not basic_analysis.get('detailed_findings', {}).get('responsive_design', {}).get('media_queries'):
             mobile_reasons.append('No media queries found')
     
-    # Construct result
+    # ✅ CONSTRUCT RESULT - KORJATTU RAKENNE
     result = {
         "success": True,
         "company_name": company_name or get_domain_from_url(url),
         "analysis_date": datetime.now().isoformat(),
+        
         "basic_analysis": {
             "company": company_name or get_domain_from_url(url),
             "website": url,
@@ -5757,29 +6854,53 @@ async def _perform_comprehensive_analysis_internal(
             "rendering_method": basic_analysis.get('rendering_method', 'http'),
             "modernity_score": basic_analysis.get('modernity_score', 0)
         },
-        # ✅ ADD ROOT-LEVEL FIELDS FOR FRONTEND
+        
+        # Root-level fields for frontend
         "mobile_reasons": mobile_reasons,
         "modernity_score": basic_analysis.get('modernity_score', 0),
         "spa_detected": basic_analysis.get('spa_detected', False),
         "rendering_method": basic_analysis.get('rendering_method', 'http'),
         "technology_level": basic_analysis.get('technology_level', 'standard'),
-        "ai_analysis": ai_analysis.dict(),
+        "ai_analysis": ai_analysis.model_dump(),  # FIX 10: Pydantic V2
+        
         "detailed_analysis": {
             "social_media": social_analysis,
             "technical_audit": technical_audit,
             "content_analysis": content_analysis,
             "ux_analysis": ux_analysis,
             "competitive_analysis": competitive_analysis,
-            # ✅ ADD MISSING FIELDS AT ROOT LEVEL OF detailed_analysis
+            
+            # ✅ KORJATTU: Accessibility score ilman nested dict-virhettä
+            "accessibility_score": ux_analysis.get('accessibility_score', 0),
+            
+            "accessibility_details": {
+                "base_score": ux_analysis.get('accessibility_score', 0),
+                "issues": ux_analysis.get('accessibility_issues', []),
+                "features": modern_features.get('accessibility_features', {
+                    'has_aria_labels': False,
+                    'has_skip_links': False,
+                    'alt_text_coverage_percent': 0,
+                    'aria_label_count': 0,
+                    'aria_role_count': 0,
+                    'images_total': 0,
+                    'images_with_alt': 0,
+                }),
+                "recommendations": _generate_accessibility_recommendations(
+                    ux_analysis.get('accessibility_score', 0),
+                    ux_analysis.get('accessibility_issues', []),
+                    modern_features.get('accessibility_features', {})
+                ),
+                "wcag_compliance_estimate": _estimate_wcag_level(
+                    ux_analysis.get('accessibility_score', 0),
+                    modern_features.get('accessibility_features', {})
+                ),
+            },
+            
+            # ✅ KORJATTU: Nämä olivat duplikaattina - nyt vain kerran
             "missing_modern_features": modern_features.get('missing_modern_features', []),
             "interaction_patterns": interaction_data.get('interaction_patterns', []) if interaction_data else [],
-            # ✅ FIXED: Scale ux_analysis.accessibility_score (0-100) to modern_features scale (0-15)
-            "accessibility_score": (
-                modern_features.get('accessibility_score', 0) 
-                if modern_features.get('accessibility_score', 0) > 0 
-                else int((ux_analysis.get('accessibility_score', 0) / 100) * 15)
-            ),
         },
+        
         "smart": {
             "actions": smart_actions,
             "scores": {
@@ -5793,7 +6914,9 @@ async def _perform_comprehensive_analysis_internal(
                 "percentile": enhanced_features['industry_benchmarking']['details'].get('percentile', 50)
             }
         },
+        
         "enhanced_features": enhanced_features,
+        
         "metadata": {
             "version": APP_VERSION,
             "scoring_version": "configurable_v1_complete",
@@ -5976,6 +7099,105 @@ async def update_task_progress(
         update_data["message"] = message
     
     task_queue.update_task(task_id, update_data)
+
+    # ============================================================================
+# ACCESSIBILITY HELPER FUNCTIONS
+# ============================================================================
+
+def _generate_accessibility_recommendations(
+    score: int, 
+    issues: List[str], 
+    features: Dict[str, Any]
+) -> List[str]:
+    """Generate actionable accessibility recommendations based on analysis"""
+    recommendations = []
+    
+    # 🚨 KRIITTISET PUUTTEET (score < 40)
+    if score < 40:
+        recommendations.append("🚨 CRITICAL: Implement comprehensive WCAG 2.1 AA compliance")
+        recommendations.append("🔍 Conduct full accessibility audit with screen readers")
+    
+    # 📋 ISSUE-POHJAISET SUOSITUKSET
+    for issue in issues:
+        if 'missing alt text' in issue.lower():
+            count = issue.split()[0]  # Esim. "2 images" -> "2"
+            recommendations.append(f"📸 Add descriptive alt text to {count} images")
+        
+        if 'missing lang' in issue.lower():
+            recommendations.append("🌍 Add lang attribute to <html> tag (e.g., lang='en' or lang='fi')")
+        
+        if 'aria' in issue.lower() and 'limited' in issue.lower():
+            recommendations.append("♿ Implement ARIA labels for interactive elements (buttons, forms, navigation)")
+    
+    # 🎯 FEATURE-POHJAISET SUOSITUKSET
+    if not features.get('has_skip_links'):
+        recommendations.append("⏭️ Add skip navigation links for keyboard users (<a href='#main'>Skip to content</a>)")
+    
+    alt_coverage = features.get('alt_text_coverage_percent', 0)
+    if 0 < alt_coverage < 90:
+        recommendations.append(f"📊 Improve alt text coverage from {alt_coverage:.0f}% to 100%")
+    elif alt_coverage == 0 and features.get('images_total', 0) > 0:
+        recommendations.append("📸 Add alt text to ALL images (currently 0% coverage)")
+    
+    if not features.get('has_aria_labels') and features.get('aria_label_count', 0) == 0:
+        recommendations.append("♿ Add ARIA labels to improve screen reader support (aria-label, aria-labelledby)")
+    
+    # ✅ POSITIIVINEN PALAUTE (jos score >= 70 ja ei suosituksia)
+    if not recommendations and score >= 70:
+        recommendations.append("✅ Accessibility fundamentals are solid")
+        recommendations.append("🎯 Consider advanced WCAG 2.1 AAA features (enhanced contrast, extended timeouts)")
+    
+    # 🎓 YLEISET PARANNUKSET (jos score 40-70)
+    if 40 <= score < 70 and len(recommendations) < 3:
+        recommendations.append("🎓 Review WCAG 2.1 guidelines at https://www.w3.org/WAI/WCAG21/quickref/")
+        recommendations.append("🧪 Test with screen readers (NVDA, JAWS, VoiceOver)")
+    
+    return recommendations[:6]  # Max 6 suositusta
+
+
+def _estimate_wcag_level(score: int, features: Dict[str, Any]) -> str:
+    """
+    Estimate WCAG compliance level based on score and features
+    
+    WCAG Levels:
+    - Level A: Basic accessibility (minimum)
+    - Level AA: Industry standard (recommended)
+    - Level AAA: Enhanced accessibility (gold standard)
+    
+    Returns:
+        - "AAA" (90-100 points + all features)
+        - "AA" (70-89 points + most features)
+        - "AA (partial)" (50-69 points)
+        - "A (partial)" (30-49 points)
+        - "Non-compliant" (<30 points)
+    """
+    
+    # Tarkista kriittiset ominaisuudet
+    has_alt_text = features.get('alt_text_coverage_percent', 0) >= 90
+    has_aria = features.get('has_aria_labels', False)
+    has_skip = features.get('has_skip_links', False)
+    
+    critical_features_count = sum([has_alt_text, has_aria, has_skip])
+    
+    # AAA-taso (erittäin korkea)
+    if score >= 90 and critical_features_count == 3:
+        return "AAA"
+    
+    # AA-taso (hyvä)
+    elif score >= 70 and critical_features_count >= 2:
+        return "AA"
+    
+    # AA (osittainen)
+    elif score >= 50:
+        return "AA (partial)"
+    
+    # A (osittainen)
+    elif score >= 30:
+        return "A (partial)"
+    
+    # Ei vaatimusten mukainen
+    else:
+        return "Non-compliant"
 
 
 # ============================================================================
@@ -6546,60 +7768,8 @@ async def get_discovery_results(
 
 
 # ============================================================================
-# USER DISCOVERIES LIST
+# USER DISCOVERIES LIST - Moved to line ~7897
 # ============================================================================
-
-@app.get("/api/v1/my-discoveries", tags=["Competitor Discovery"])
-async def get_my_discoveries(
-    user: UserInfo = Depends(require_user),
-    limit: int = 20,
-    status: Optional[str] = None
-):
-    """
-    Get list of user's discovery tasks.
-    
-    Args:
-        limit: Maximum number of tasks to return
-        status: Filter by status (pending, running, completed, failed)
-    """
-    
-    if not task_queue:
-        raise HTTPException(503, "Task queue not available")
-    
-    try:
-        # Get user's tasks from Redis
-        user_tasks = task_queue.get_user_tasks(user.username, limit=limit)
-        
-        # Filter by status if requested
-        if status:
-            user_tasks = [t for t in user_tasks if t.get("status") == status]
-        
-        # Enrich with summary data
-        enriched_tasks = []
-        for task in user_tasks:
-            task_id = task.get("task_id")
-            results = task_queue.get_results(task_id)
-            
-            enriched_tasks.append({
-                "task_id": task_id,
-                "status": task.get("status"),
-                "progress": task.get("progress", 0),
-                "created_at": task.get("created_at"),
-                "completed_at": task.get("completed_at"),
-                "industry": task.get("industry"),
-                "total_competitors": task.get("total", 0),
-                "successful": len([r for r in results if r.get("status") == "success"]),
-                "failed": len([r for r in results if r.get("status") == "failed"])
-            })
-        
-        return {
-            "discoveries": enriched_tasks,
-            "total": len(enriched_tasks)
-        }
-        
-    except Exception as e:
-        logger.error(f"Failed to get user discoveries: {e}")
-        raise HTTPException(500, "Failed to retrieve discoveries")
 
 
 # ============================================================================
@@ -7723,7 +8893,23 @@ async def _get_ai_differentiation_insights(
 ) -> Dict[str, Any]:
     """Pyydä AI:lta syvällisiä erottuvuus-insighteja"""
     
+    # LISÄÄ TÄMÄ TARKISTUS HETI ALKUUN
+    
+    if not openai_client:
+        logger.warning("OpenAI client not available, returning default insights")
+        return {
+            "positioning_summary": "AI analysis not available",
+            "unique_selling_points": [],
+            "target_customer_profile": "Analysis requires OpenAI",
+            "messaging_strategy": "Analysis requires OpenAI",
+            "immediate_opportunities": [],
+            "strategic_vulnerabilities": [],
+            "12_month_roadmap": []
+        }
+    
     prompt_lang = "fi" if language == "fi" else "en"
+    
+    # TÄSTÄ ETEENPÄIN ALKUPERÄINEN KOODI JATKUU NORMAALISTI...
     
     # Rakenna kontekstuaalinen prompt
     industry_str = f"Toimiala: {industry_context}\n" if industry_context else ""
@@ -8082,6 +9268,11 @@ def _find_content_market_gaps(summaries: List[Dict]) -> List[Dict[str, Any]]:
 async def _find_service_gaps_with_ai(summaries: List[Dict], language: str) -> List[Dict[str, Any]]:
     """Käytä AI:ta tunnistamaan palvelu- ja liiketoimintaaukot"""
     
+    # LISÄÄ TÄMÄ TARKISTUS HETI ALKUUN
+    if not openai_client:
+        logger.warning("OpenAI client not available, returning empty gaps")
+        return []
+    
     # Rakenna yhteenveto kaikista yrityksistä
     companies_summary = "\n".join([
         f"- {s['company']}: Pisteet {s['score']}/100, Sisältö: {s['content_strategy']['content_depth']}, "
@@ -8090,6 +9281,7 @@ async def _find_service_gaps_with_ai(summaries: List[Dict], language: str) -> Li
     ])
     
     prompt_lang = "fi" if language == "fi" else "en"
+    
     
     if prompt_lang == "fi":
         prompt = f"""Analysoi näiden {len(summaries)} yrityksen perusteella, mitä ASIAKKAAT kaipaavat mutta kukaan ei tarjoa:
@@ -8350,7 +9542,7 @@ def _identify_quick_wins(matrix: Dict, gaps: List[Dict]) -> List[Dict[str, Any]]
                 'expected_result': gap.get('estimated_advantage', 'Merkittävä etu')
             })
     
-    return quick_wins[:3]  # ✅ OIKEA RETURN!
+    return quick_wins[:3]  
 
 async def _get_ai_strategic_recommendations(
     your_analysis: Dict,
@@ -8361,12 +9553,19 @@ async def _get_ai_strategic_recommendations(
 ) -> List[Dict[str, Any]]:
     """Pyydä AI:lta strategisia suosituksia"""
     
+    # LISÄÄ TÄMÄ TARKISTUS HETI ALKUUN
+    if not openai_client:
+        logger.warning("OpenAI client not available, returning empty recommendations")
+        return []
+    
     your_summary = _extract_detailed_summary(your_analysis)
     positioning = matrix.get('ai_insights', {})
     
     top_gaps = [g['gap_title'] + ': ' + g['description'] for g in gaps[:3]]
     
     prompt_lang = "fi" if language == "fi" else "en"
+    
+    
     
     if prompt_lang == "fi":
         prompt = f"""Olet digitaalisen liiketoiminnan strateginen neuvonantaja. Analysoi tilanne ja anna 3 strategista suositusta:
@@ -8501,7 +9700,56 @@ def _calculate_recommendation_priority(rec: Dict) -> int:
     return score
 
 
-
+@app.delete("/api/v1/discoveries/{task_id}")
+async def delete_discovery(
+    task_id: str,
+    user: UserInfo = Depends(require_user)
+):
+    """
+    Delete a discovery task (soft delete - mark as deleted)
+    User can only delete their own discoveries
+    """
+    
+    if not task_queue:
+        raise HTTPException(503, "Task queue not available")
+    
+    try:
+        # Check task exists and belongs to user
+        task_key = f"task:{task_id}"
+        task_data = redis_client.get(task_key)
+        
+        if not task_data:
+            raise HTTPException(404, "Discovery not found")
+        
+        task = json.loads(task_data)
+        
+        # Permission check
+        if task.get("username") != user.username and user.role not in ["admin", "super_user"]:
+            raise HTTPException(403, "Access denied")
+        
+        # Soft delete: mark as deleted instead of removing
+        task["deleted"] = True
+        task["deleted_at"] = datetime.now().isoformat()
+        
+        redis_client.setex(
+            task_key,
+            86400,  # Keep for 24h for audit
+            json.dumps(task)
+        )
+        
+        logger.info(f"User {user.username} deleted discovery {task_id}")
+        
+        return {
+            "success": True,
+            "message": "Discovery deleted successfully",
+            "task_id": task_id
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete discovery: {e}")
+        raise HTTPException(500, f"Failed to delete discovery: {str(e)}")
 
 # ============================================================================
 # MAIN APPLICATION ENTRY POINT
@@ -8522,7 +9770,6 @@ if __name__ == "__main__":
     logger.info(f"🌐 Starting server on {host}:{port}")
     logger.info(f"🔍 Framework detection mode: {'Wappalyzer' if WAPPALYZER_AVAILABLE else 'Regex fallback'}")
     
-    # ⬇️ KORJAUS: Kaikki nämä pitää olla if __name__ blokin sisällä
     if not WAPPALYZER_AVAILABLE:
         logger.warning("⚠️  Install Wappalyzer for better framework detection: pip install python-Wappalyzer")
     if SECRET_KEY.startswith("brandista-key-"):
