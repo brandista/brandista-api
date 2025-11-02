@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Brandista Competitive Intelligence API - Complete Unified Version
-Version: 6.3.6 - Production Ready
+Version: 6.3.7 - Production Ready
 Author: Brandista Team
 Date: 2025
 Description: Complete production-ready website analysis with configurable scoring system and comprehensive SPA support
@@ -7824,60 +7824,10 @@ async def get_discovery_results(
 # USER DISCOVERIES LIST
 # ============================================================================
 
-@app.get("/api/v1/my-discoveries", tags=["Competitor Discovery"])
-async def get_my_discoveries(
-    user: UserInfo = Depends(require_user),
-    limit: int = 20,
-    status: Optional[str] = None
-):
-    """
-    Get list of user's discovery tasks.
-    
-    Args:
-        limit: Maximum number of tasks to return
-        status: Filter by status (pending, running, completed, failed)
-    """
-    
-    if not task_queue:
-        raise HTTPException(503, "Task queue not available")
-    
-    try:
-        # Get user's tasks from Redis
-        user_tasks = task_queue.get_user_tasks(user.username, limit=limit)
-        
-        # Filter by status if requested
-        if status:
-            user_tasks = [t for t in user_tasks if t.get("status") == status]
-        
-        # Enrich with summary data
-        enriched_tasks = []
-        for task in user_tasks:
-            task_id = task.get("task_id")
-            results = task_queue.get_results(task_id)
-            
-            enriched_tasks.append({
-                "task_id": task_id,
-                "status": task.get("status"),
-                "progress": task.get("progress", 0),
-                "created_at": task.get("created_at"),
-                "completed_at": task.get("completed_at"),
-                "industry": task.get("industry"),
-                "total_competitors": task.get("total", 0),
-                "successful": len([r for r in results if r.get("status") == "success"]),
-                "failed": len([r for r in results if r.get("status") == "failed"])
-            })
-        
-        return {
-            "discoveries": enriched_tasks,
-            "total": len(enriched_tasks)
-        }
-        
-    except Exception as e:
-        logger.error(f"Failed to get user discoveries: {e}")
-        raise HTTPException(500, "Failed to retrieve discoveries")
-
-
 # ============================================================================
+# USER DISCOVERIES LIST - See working version at line ~7950
+# ============================================================================
+
 # MAIN ANALYSIS ENDPOINT
 # ============================================================================
 
@@ -8060,61 +8010,12 @@ async def get_my_discoveries(
 # ============================================================================
 # Lisää tämä heti get_my_discoveries jälkeen
 
-@app.get("/api/v1/discovery-results/{task_id}")
-async def get_discovery_results(
-    task_id: str,
-    user: UserInfo = Depends(require_user)
-):
-    """
-    Get full results for a specific discovery task
-    Allows user to view detailed analysis of a past discovery
-    """
-    
-    if not task_queue:
-        raise HTTPException(503, "Task queue not available")
-    
-    try:
-        # Tarkista että task kuuluu käyttäjälle
-        task_key = f"task:{task_id}"
-        task_data = redis_client.get(task_key)
-        
-        if not task_data:
-            raise HTTPException(404, "Discovery not found")
-        
-        task = json.loads(task_data)
-        
-        if task.get("username") != user.username:
-            raise HTTPException(403, "Access denied")
-        
-        # Hae task status ja tulokset
-        status = task_queue.get_task_status(task_id)
-        
-        if status.get("status") == "not_found":
-            raise HTTPException(404, "Discovery not found")
-        
-        return {
-            "task_id": task_id,
-            "status": status.get("status"),
-            "url": task.get("data", {}).get("url"),
-            "industry": task.get("data", {}).get("industry"),
-            "total": status.get("total", 0),
-            "progress": status.get("progress", 0),
-            "results": status.get("results", []),
-            "analyses": status.get("analyses", []),  # Full analysis data
-            "created_at": status.get("created_at"),
-            "completed_at": status.get("completed_at")
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to fetch discovery results: {e}")
-        raise HTTPException(500, f"Failed to fetch discovery results: {str(e)}")
-
 # ============================================================================
 # ANALYSIS CORE - INTERNAL HELPER
+# ============================================================================
+# (Discovery results endpoint is above at line ~7726)
 
-## ============================================================================
+# ============================================================================
 # SYSTEM AND ADMIN ENDPOINTS
 # ============================================================================
 
