@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Brandista Competitive Intelligence API - Complete Unified Version
-Version: 6.3.5 - Production Ready
+Version: 6.3.6 - Production Ready
 Author: Brandista Team
 Date: 2025
 Description: Complete production-ready website analysis with configurable scoring system and comprehensive SPA support
@@ -12,6 +12,7 @@ Description: Complete production-ready website analysis with configurable scorin
 # STANDARD LIBRARY IMPORTS
 # ============================================================================
 import os
+import sys
 import re
 import hashlib
 import logging
@@ -103,6 +104,25 @@ try:
 except ImportError:
     AI_GENERATOR_AVAILABLE = False
     logger.warning("AI content generator module not available")
+
+# ============================================================================
+# STRIPE PAYMENT MODULE
+# ============================================================================
+try:
+    from stripe_module import (
+        stripe_manager,
+        SubscriptionTier,
+        create_customer,
+        create_checkout_session,
+        handle_webhook
+    )
+    STRIPE_AVAILABLE = True
+    logger.info("Stripe payment module loaded successfully")
+except ImportError:
+    STRIPE_AVAILABLE = False
+    stripe_manager = None
+    SubscriptionTier = None
+    logger.warning("Stripe module not available - payment features disabled")
 
 # ============================================================================
 # OPTIONAL DEPENDENCIES
@@ -7250,6 +7270,32 @@ async def discover_competitors(
             "Please wait for completion or check status."
         )
     
+    # === 1.5. CHECK SUBSCRIPTION LIMITS ===
+    if STRIPE_AVAILABLE and stripe_manager:
+        user_data = USERS_DB.get(user.email, {})
+        tier_str = user_data.get("subscription_tier", "free")
+        try:
+            tier = SubscriptionTier(tier_str)
+        except ValueError:
+            tier = SubscriptionTier.FREE
+        
+        # Get current usage
+        discoveries_this_month = user_data.get("discoveries_this_month", 0)
+        
+        # Get limits
+        limits = stripe_manager.get_tier_limits(tier)
+        discovery_limit = limits.get("discoveries_per_month", 3)
+        
+        # Check if within limit (skip for unlimited tiers)
+        if discovery_limit != -1 and discoveries_this_month >= discovery_limit:
+            raise HTTPException(
+                402,  # Payment Required
+                f"Monthly discovery limit reached ({discovery_limit} discoveries for {tier.value} plan). "
+                f"Please upgrade your plan to continue."
+            )
+        
+        logger.info(f"Usage check: {user.username} - {discoveries_this_month}/{discovery_limit} discoveries used")
+    
     # === 2. VALIDATE USER URL ===
     try:
         user_domain = urlparse(request.url).netloc.replace("www.", "")
@@ -7571,6 +7617,13 @@ async def discover_competitors(
         # ✅ Start background task
         asyncio.create_task(process_discovery())
         
+        # === 8.5. INCREMENT USAGE COUNTER ===
+        if STRIPE_AVAILABLE and stripe_manager:
+            user_data = USERS_DB.get(user.email)
+            if user_data:
+                user_data["discoveries_this_month"] = user_data.get("discoveries_this_month", 0) + 1
+                logger.info(f"📊 Incremented discovery count for {user.username}: {user_data['discoveries_this_month']}")
+        
         # === 9. RETURN IMMEDIATE RESPONSE ===
         return {
             "success": True,
@@ -7768,8 +7821,60 @@ async def get_discovery_results(
 
 
 # ============================================================================
-# USER DISCOVERIES LIST - Moved to line ~7897
+# USER DISCOVERIES LIST
 # ============================================================================
+
+@app.get("/api/v1/my-discoveries", tags=["Competitor Discovery"])
+async def get_my_discoveries(
+    user: UserInfo = Depends(require_user),
+    limit: int = 20,
+    status: Optional[str] = None
+):
+    """
+    Get list of user's discovery tasks.
+    
+    Args:
+        limit: Maximum number of tasks to return
+        status: Filter by status (pending, running, completed, failed)
+    """
+    
+    if not task_queue:
+        raise HTTPException(503, "Task queue not available")
+    
+    try:
+        # Get user's tasks from Redis
+        user_tasks = task_queue.get_user_tasks(user.username, limit=limit)
+        
+        # Filter by status if requested
+        if status:
+            user_tasks = [t for t in user_tasks if t.get("status") == status]
+        
+        # Enrich with summary data
+        enriched_tasks = []
+        for task in user_tasks:
+            task_id = task.get("task_id")
+            results = task_queue.get_results(task_id)
+            
+            enriched_tasks.append({
+                "task_id": task_id,
+                "status": task.get("status"),
+                "progress": task.get("progress", 0),
+                "created_at": task.get("created_at"),
+                "completed_at": task.get("completed_at"),
+                "industry": task.get("industry"),
+                "total_competitors": task.get("total", 0),
+                "successful": len([r for r in results if r.get("status") == "success"]),
+                "failed": len([r for r in results if r.get("status") == "failed"])
+            })
+        
+        return {
+            "discoveries": enriched_tasks,
+            "total": len(enriched_tasks)
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get user discoveries: {e}")
+        raise HTTPException(500, "Failed to retrieve discoveries")
 
 
 # ============================================================================
@@ -7900,8 +8005,10 @@ async def get_my_discoveries(
                         "id": task_id,
                         "task_id": task_id,
                         "url": discovery_data.get("url", ""),
+                        "user_url": discovery_data.get("url", ""),  # ✅ LISÄTTY: Frontend lukee tämän
                         "domain": discovery_data.get("url", "").replace("https://", "").replace("http://", "").split("/")[0],
                         "industry": discovery_data.get("industry"),
+                        "data": discovery_data,  # ✅ LISÄTTY: Koko data-objekti frontendille
                         "status": status.get("status", "unknown"),
                         "competitors_found": len([r for r in results if r.get("status") == "success"]),
                         "total": status.get("total", 0),
@@ -8050,6 +8157,7 @@ async def health_check():
             "openai_available": bool(openai_client),
             "playwright_available": PLAYWRIGHT_AVAILABLE,
             "playwright_enabled": PLAYWRIGHT_ENABLED,
+            "stripe_available": STRIPE_AVAILABLE,
             "cache_size": len(analysis_cache),
             "enhanced_features": 9,
             "complete_models": True
@@ -8066,6 +8174,296 @@ async def get_config(user: UserInfo = Depends(require_admin)):
         "seo_thresholds": SCORING_CONFIG.seo_thresholds,
         "version": APP_VERSION
     }
+
+# ============================================================================
+# STRIPE PAYMENT ENDPOINTS
+# ============================================================================
+
+@app.post("/api/subscription/checkout")
+async def create_subscription_checkout(
+    tier: str,
+    user: UserInfo = Depends(require_user)
+):
+    """
+    Create Stripe Checkout session for subscription
+    
+    Args:
+        tier: Subscription tier (starter, pro, enterprise)
+    
+    Returns:
+        Checkout URL to redirect user to Stripe
+    """
+    if not STRIPE_AVAILABLE:
+        raise HTTPException(503, "Payment system not available")
+    
+    # Validate tier
+    try:
+        subscription_tier = SubscriptionTier(tier.lower())
+    except ValueError:
+        raise HTTPException(400, f"Invalid tier: {tier}")
+    
+    # Get user data
+    user_data = USERS_DB.get(user.email)
+    if not user_data:
+        raise HTTPException(404, "User not found")
+    
+    # Get or create Stripe customer ID
+    stripe_customer_id = user_data.get("stripe_customer_id")
+    
+    if not stripe_customer_id:
+        # Create new Stripe customer
+        stripe_customer_id = await create_customer(user.email, user.username)
+        if not stripe_customer_id:
+            raise HTTPException(500, "Failed to create customer")
+        
+        # Save to database
+        user_data["stripe_customer_id"] = stripe_customer_id
+        logger.info(f"Created Stripe customer for {user.email}: {stripe_customer_id}")
+    
+    # Create checkout session
+    base_url = os.getenv("APP_BASE_URL", "http://localhost:8000")
+    checkout_url = await create_checkout_session(
+        customer_id=stripe_customer_id,
+        tier=subscription_tier,
+        success_url=f"{base_url}/subscription/success?session_id={{CHECKOUT_SESSION_ID}}",
+        cancel_url=f"{base_url}/subscription/cancel"
+    )
+    
+    if not checkout_url:
+        raise HTTPException(500, "Failed to create checkout session")
+    
+    logger.info(f"Created checkout for {user.email} - tier: {tier}")
+    
+    return {
+        "checkout_url": checkout_url,
+        "tier": tier
+    }
+
+
+@app.get("/api/subscription/current")
+async def get_current_subscription(user: UserInfo = Depends(require_user)):
+    """
+    Get user's current subscription status and usage limits
+    
+    Returns:
+        Subscription info, tier, limits, and current usage
+    """
+    if not STRIPE_AVAILABLE:
+        # Return free tier info if Stripe not available
+        return {
+            "tier": "free",
+            "status": "active",
+            "limits": stripe_manager.get_tier_limits(SubscriptionTier.FREE) if stripe_manager else {
+                "discoveries_per_month": 3,
+                "competitors_per_discovery": 10,
+                "exports_per_month": 5
+            },
+            "usage": {
+                "discoveries_per_month": 0,
+                "exports_per_month": 0
+            },
+            "stripe_available": False
+        }
+    
+    user_data = USERS_DB.get(user.email)
+    if not user_data:
+        raise HTTPException(404, "User not found")
+    
+    # Get tier (default to free)
+    tier_str = user_data.get("subscription_tier", "free")
+    try:
+        tier = SubscriptionTier(tier_str)
+    except ValueError:
+        tier = SubscriptionTier.FREE
+    
+    # Get limits
+    limits = stripe_manager.get_tier_limits(tier)
+    
+    # Get current usage
+    current_usage = {
+        "discoveries_per_month": user_data.get("discoveries_this_month", 0),
+        "exports_per_month": user_data.get("exports_this_month", 0),
+        "competitors_per_discovery": 0  # Not tracked per-request
+    }
+    
+    # Calculate remaining
+    remaining = {}
+    for key, limit in limits.items():
+        if limit == -1:  # Unlimited
+            remaining[key] = -1
+        else:
+            remaining[key] = max(0, limit - current_usage.get(key, 0))
+    
+    # Check if within limits
+    within_limits = stripe_manager.is_within_limits(tier, current_usage)
+    
+    return {
+        "tier": tier.value,
+        "status": user_data.get("subscription_status", "inactive"),
+        "subscription_id": user_data.get("subscription_id"),
+        "current_period_end": user_data.get("current_period_end"),
+        "cancel_at_period_end": user_data.get("cancel_at_period_end", False),
+        "limits": limits,
+        "usage": current_usage,
+        "remaining": remaining,
+        "within_limits": within_limits,
+        "stripe_available": True
+    }
+
+
+@app.get("/api/subscription/manage")
+async def manage_subscription(user: UserInfo = Depends(require_user)):
+    """
+    Get Stripe Billing Portal URL for user to manage their subscription
+    
+    Returns:
+        Portal URL to redirect user to Stripe Customer Portal
+    """
+    if not STRIPE_AVAILABLE:
+        raise HTTPException(503, "Payment system not available")
+    
+    user_data = USERS_DB.get(user.email)
+    if not user_data:
+        raise HTTPException(404, "User not found")
+    
+    stripe_customer_id = user_data.get("stripe_customer_id")
+    if not stripe_customer_id:
+        raise HTTPException(400, "No subscription found")
+    
+    base_url = os.getenv("APP_BASE_URL", "http://localhost:8000")
+    portal_url = await stripe_manager.create_billing_portal_session(
+        customer_id=stripe_customer_id,
+        return_url=f"{base_url}/settings"
+    )
+    
+    if not portal_url:
+        raise HTTPException(500, "Failed to create portal session")
+    
+    logger.info(f"Created billing portal for {user.email}")
+    
+    return {
+        "portal_url": portal_url
+    }
+
+
+@app.post("/api/webhooks/stripe")
+async def stripe_webhook(request: Request):
+    """
+    Stripe webhook handler
+    
+    Handles subscription events from Stripe:
+    - customer.subscription.created
+    - customer.subscription.updated
+    - customer.subscription.deleted
+    - invoice.payment_succeeded
+    - invoice.payment_failed
+    
+    This endpoint must be registered in Stripe Dashboard:
+    https://dashboard.stripe.com/webhooks
+    """
+    if not STRIPE_AVAILABLE:
+        raise HTTPException(503, "Payment system not available")
+    
+    # Get raw body and signature
+    payload = await request.body()
+    signature = request.headers.get("stripe-signature")
+    
+    if not signature:
+        logger.warning("Webhook received without signature")
+        raise HTTPException(400, "No signature provided")
+    
+    # Verify and handle webhook
+    result = await handle_webhook(payload, signature)
+    
+    if not result:
+        logger.error("Webhook verification failed")
+        raise HTTPException(400, "Invalid webhook signature")
+    
+    if result.get("status") != "success":
+        logger.error(f"Webhook handling error: {result.get('error')}")
+        raise HTTPException(500, "Webhook handling failed")
+    
+    # Update database based on webhook data
+    updates = result.get("updates", {})
+    event_type = result.get("event_type")
+    
+    logger.info(f"Processing webhook: {event_type}")
+    
+    try:
+        # Find user by subscription_id or customer_id
+        subscription_id = updates.get("subscription_id")
+        customer_id = updates.get("customer_id")
+        
+        user_email = None
+        for email, user_data in USERS_DB.items():
+            if (subscription_id and user_data.get("subscription_id") == subscription_id) or \
+               (customer_id and user_data.get("stripe_customer_id") == customer_id):
+                user_email = email
+                break
+        
+        if not user_email:
+            logger.warning(f"User not found for webhook {event_type}")
+            return {"status": "ok", "message": "User not found but webhook acknowledged"}
+        
+        user_data = USERS_DB[user_email]
+        
+        # Update user data based on event
+        if event_type in ["customer.subscription.created", "customer.subscription.updated"]:
+            user_data["subscription_id"] = updates.get("subscription_id", user_data.get("subscription_id"))
+            user_data["subscription_status"] = updates.get("status", "active")
+            user_data["subscription_tier"] = updates.get("tier", user_data.get("subscription_tier", "free"))
+            user_data["current_period_end"] = updates.get("current_period_end")
+            user_data["cancel_at_period_end"] = updates.get("cancel_at_period_end", False)
+            
+            logger.info(f"Updated subscription for {user_email}: {updates.get('tier')} - {updates.get('status')}")
+        
+        elif event_type == "customer.subscription.deleted":
+            user_data["subscription_status"] = "cancelled"
+            user_data["subscription_tier"] = "free"
+            user_data["cancelled_at"] = updates.get("cancelled_at")
+            
+            logger.info(f"Subscription cancelled for {user_email}")
+        
+        elif event_type == "invoice.payment_succeeded":
+            user_data["last_payment_date"] = datetime.now().isoformat()
+            user_data["last_payment_amount"] = updates.get("amount_paid", 0)
+            
+            logger.info(f"Payment succeeded for {user_email}: ${updates.get('amount_paid', 0)/100}")
+        
+        elif event_type == "invoice.payment_failed":
+            user_data["payment_failed"] = True
+            user_data["payment_failed_count"] = user_data.get("payment_failed_count", 0) + 1
+            
+            logger.warning(f"Payment failed for {user_email} (attempt {user_data['payment_failed_count']})")
+        
+        elif event_type == "customer.created":
+            user_data["stripe_customer_id"] = updates.get("customer_id")
+            
+            logger.info(f"Stripe customer created: {user_email}")
+        
+        # Sync to file if available
+        if hasattr(sys.modules[__name__], 'sync_hardcoded_users_to_db'):
+            try:
+                sync_hardcoded_users_to_db(USERS_DB)
+            except Exception as e:
+                logger.warning(f"Failed to sync users to file: {e}")
+        
+        return {
+            "status": "ok",
+            "event_type": event_type,
+            "user": user_email,
+            "updated": True
+        }
+    
+    except Exception as e:
+        logger.error(f"Error processing webhook: {e}")
+        # Still return 200 to acknowledge webhook
+        return {
+            "status": "ok",
+            "error": str(e),
+            "acknowledged": True
+        }
+
 
 @app.post("/admin/reset-all")
 async def admin_reset_all(user: UserInfo = Depends(require_admin)):
