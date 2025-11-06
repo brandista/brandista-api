@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Brandista Competitive Intelligence API - Complete Unified Version
-Version: 6.3.7 - Production Ready
+Version: 6.4.0 - Production Ready
 Author: Brandista Team
 Date: 2025
 Description: Complete production-ready website analysis with configurable scoring system and comprehensive SPA support
@@ -1907,11 +1907,24 @@ class RoleSummaries(BaseModel):
     CMO: Optional[str] = None
     CTO: Optional[str] = None
 
+class ActionItem(BaseModel):
+    """Enhanced action item with detailed implementation guidance"""
+    week: str                                    # e.g. "Week 1" or "Week 1-2"
+    title: str                                   # e.g. "🔒 SSL Certificate Installation"
+    description: str                             # Detailed what & why
+    steps: List[str] = []                        # Concrete step-by-step actions
+    owner: str                                   # "Developer", "Marketing", "Content"
+    time_estimate: str                           # e.g. "2-4 hours"
+    dependencies: List[str] = []                 # What needs to be done first
+    success_metric: str                          # How to measure completion
+    priority: str                                # "Critical", "High", "Medium", "Low"
+
 class Plan90D(BaseModel):
-    wave_1: List[str] = []            # days 0–30
-    wave_2: List[str] = []            # days 31–60
-    wave_3: List[str] = []            # days 61–90
+    wave_1: List[ActionItem] = []            # Weeks 1-4: Foundation
+    wave_2: List[ActionItem] = []            # Weeks 5-8: Content & SEO
+    wave_3: List[ActionItem] = []            # Weeks 9-12: Scale
     one_thing_this_week: Optional[str] = None
+    summary: Optional[Dict[str, Any]] = None  # Total actions, hours, critical path
 
 class RiskItem(BaseModel):
     risk: str
@@ -2051,11 +2064,7 @@ class RoleSummaries(BaseModel):
     CMO: Optional[str] = None
     CTO: Optional[str] = None
 
-class Plan90D(BaseModel):
-    wave_1: List[str] = []            # days 0–30
-    wave_2: List[str] = []            # days 31–60
-    wave_3: List[str] = []            # days 61–90
-    one_thing_this_week: Optional[str] = None
+
 
 class RiskItem(BaseModel):
     risk: str
@@ -4047,182 +4056,573 @@ def build_role_summaries(url: str, basic: Dict[str, Any], impact: BusinessImpact
     )
 
 def build_plan_90d(basic: Dict[str, Any], content: Dict[str, Any], technical: Dict[str, Any], language: str = 'en') -> Plan90D:
-    """Build a realistic week-by-week 90-day execution plan dynamically based on actual gaps"""
+    """Build enhanced 90-day execution plan with detailed ActionItems"""
+    
     score = basic.get('digital_maturity_score', 0)
     breakdown = basic.get('score_breakdown', {})
     
-    # Translations dictionary - TÄYSI TOTEUTUS
-    translations = {
+    # Determine priorities
+    has_ssl = technical.get('has_ssl', True)
+    has_analytics = technical.get('has_analytics', False)
+    mobile_score = breakdown.get('mobile', 0)
+    seo_score = breakdown.get('seo_basics', 0)
+    content_score = breakdown.get('content', 0)
+    security_score = breakdown.get('security', 0)
+    
+    # Action templates with full details
+    actions_en = {
+        'ssl_setup': ActionItem(
+            week="Week 1",
+            title="🔒 SSL Certificate Installation & Security",
+            description="Install SSL certificate and configure HTTPS to secure your website and improve SEO rankings. Google requires HTTPS for top rankings.",
+            steps=[
+                "Purchase SSL certificate (Let's Encrypt free or paid from Cloudflare/DigiCert)",
+                "Install certificate on web server (cPanel/Plesk/manual)",
+                "Configure automatic HTTP→HTTPS redirect (301 permanent)",
+                "Update internal links to use HTTPS",
+                "Test all pages load correctly over HTTPS",
+                "Set up HSTS header (max-age=31536000)",
+                "Submit HTTPS version to Google Search Console"
+            ],
+            owner="Developer",
+            time_estimate="3-5 hours",
+            dependencies=[],
+            success_metric="All pages accessible via HTTPS, no mixed content warnings, SSL Labs grade A",
+            priority="Critical"
+        ),
+        'analytics_setup': ActionItem(
+            week="Week 1",
+            title="📊 Google Analytics 4 & Conversion Tracking",
+            description="Install GA4 to start collecting data immediately. You need 30 days of data before making optimization decisions.",
+            steps=[
+                "Create GA4 property in Google Analytics",
+                "Install GA4 tag via GTM or direct embed",
+                "Define 3-5 key conversion events (form submit, purchase, newsletter signup)",
+                "Configure enhanced measurement (scroll, outbound clicks, file downloads)",
+                "Link to Google Search Console",
+                "Set up custom events for critical user actions",
+                "Create basic dashboard: traffic sources, popular pages, conversions",
+                "Test events firing correctly (use GA4 DebugView)",
+                "Set up weekly automated email reports"
+            ],
+            owner="Marketing",
+            time_estimate="4-6 hours",
+            dependencies=[],
+            success_metric="GA4 collecting data, 3+ conversion events tracked, 0 errors in DebugView",
+            priority="Critical"
+        ),
+        'seo_foundation': ActionItem(
+            week="Week 2-3",
+            title="🎯 SEO Foundation: Titles, Metas & Technical Basics",
+            description="Fix low-hanging SEO fruit on your top 10 pages. These changes can show results in 2-4 weeks.",
+            steps=[
+                "Identify top 10 pages by traffic (Google Analytics)",
+                "Audit titles: 50-60 chars, include primary keyword, brand at end",
+                "Audit meta descriptions: 150-160 chars, compelling copy, include keyword",
+                "Fix missing H1 tags (exactly 1 per page)",
+                "Fix heading hierarchy (H1→H2→H3, no skipping levels)",
+                "Add alt text to all images (descriptive, include keywords where natural)",
+                "Check for duplicate titles/metas, make each unique",
+                "Create XML sitemap if missing",
+                "Submit sitemap to Google Search Console",
+                "Fix broken internal links",
+                "Add schema.org markup for Organization/LocalBusiness"
+            ],
+            owner="Marketing + Developer",
+            time_estimate="8-12 hours",
+            dependencies=["Analytics setup"],
+            success_metric="All top 10 pages have optimized titles/metas, 0 H1 errors, sitemap submitted",
+            priority="High"
+        ),
+        'mobile_optimization': ActionItem(
+            week="Week 3-4",
+            title="📱 Mobile Optimization & Core Web Vitals",
+            description="Ensure mobile users have a fast, smooth experience. 60%+ of traffic is mobile.",
+            steps=[
+                "Add viewport meta tag if missing",
+                "Test on real devices (iPhone, Android) + Chrome DevTools mobile emulator",
+                "Run Google PageSpeed Insights for mobile, target 70+ score",
+                "Compress images: use TinyPNG/ImageOptim, target <200KB per image",
+                "Implement lazy loading for below-fold images",
+                "Minify CSS and JavaScript",
+                "Enable browser caching (set Cache-Control headers)",
+                "Consider CDN for static assets (Cloudflare free tier)",
+                "Fix tap targets: min 48x48px, adequate spacing",
+                "Test forms on mobile: ensure inputs are properly sized",
+                "Optimize font loading (font-display: swap)",
+                "Achieve Core Web Vitals: LCP <2.5s, FID <100ms, CLS <0.1"
+            ],
+            owner="Developer",
+            time_estimate="10-15 hours",
+            dependencies=["SSL setup"],
+            success_metric="Mobile PageSpeed 70+, all Core Web Vitals 'Good', responsive on all devices",
+            priority="High"
+        ),
+        'content_strategy': ActionItem(
+            week="Week 5-6",
+            title="✍️ Content Strategy & Pillar Article Planning",
+            description="Plan high-quality content that attracts and converts your ideal customers.",
+            steps=[
+                "Research 10-15 keywords your customers search",
+                "Analyze search intent: what are users really looking for?",
+                "Identify 3-4 'pillar' topics (broad, high search volume)",
+                "For each pillar, identify 8-10 'cluster' subtopics",
+                "Analyze top 3 ranking competitors for each topic",
+                "Create content brief for first pillar article",
+                "Define content calendar for next 90 days",
+                "Allocate budget: in-house writer vs freelancer vs agency",
+                "Set up editorial workflow: draft→review→optimize→publish"
+            ],
+            owner="Content/Marketing",
+            time_estimate="6-8 hours",
+            dependencies=["Analytics setup", "SEO foundation"],
+            success_metric="Content calendar created, 3 pillar topics researched, first brief complete",
+            priority="High"
+        ),
+        'content_creation': ActionItem(
+            week="Week 7-8",
+            title="📝 Content Creation: First Pillar Articles",
+            description="Create comprehensive, expert-level content that ranks and converts.",
+            steps=[
+                "Write first pillar article (2000-3000 words)",
+                "Include: clear H1, logical H2/H3 structure, images/diagrams, internal links",
+                "Optimize for featured snippet: concise answer at top",
+                "Add FAQ section with 5-8 common questions",
+                "Include CTA: newsletter signup, consultation booking, product demo",
+                "SEO optimize: target keyword in title, URL, H1, first paragraph",
+                "Add internal links to 3-5 related pages",
+                "Source and compress images (<200KB each)",
+                "Write compelling meta description",
+                "Peer review for accuracy and quality",
+                "Publish and share on social media"
+            ],
+            owner="Content",
+            time_estimate="12-16 hours per article",
+            dependencies=["Content strategy"],
+            success_metric="First 2 pillar articles published, 2000+ words each, fully optimized",
+            priority="High"
+        ),
+        'technical_seo': ActionItem(
+            week="Week 7-8",
+            title="⚙️ Technical SEO: Schema, Sitemap & Speed",
+            description="Implement technical improvements that help search engines understand and rank your site.",
+            steps=[
+                "Implement FAQ schema markup on key pages",
+                "Add BreadcrumbList schema for navigation",
+                "Set up structured data testing (Google Rich Results Test)",
+                "Create/update robots.txt",
+                "Generate/update XML sitemap with priority and changefreq",
+                "Submit sitemap to Google Search Console + Bing Webmaster",
+                "Set up Google Search Console: verify property, check for crawl errors",
+                "Fix any crawl errors or coverage issues",
+                "Implement canonical tags to avoid duplicate content",
+                "Set up 301 redirects for any moved/deleted pages"
+            ],
+            owner="Developer",
+            time_estimate="6-8 hours",
+            dependencies=["SEO foundation"],
+            success_metric="Schema validated, sitemap submitted, 0 crawl errors in Search Console",
+            priority="Medium"
+        ),
+        'content_expansion': ActionItem(
+            week="Week 9-10",
+            title="🚀 Content Expansion: Cluster Articles & Link Building",
+            description="Expand content hub with supporting articles and build internal linking structure.",
+            steps=[
+                "Write 4-6 cluster articles (1000-1500 words each)",
+                "Link all cluster articles to main pillar",
+                "Link pillar article to relevant clusters",
+                "Update older content: add links to new articles",
+                "Create topic cluster diagram",
+                "Optimize images for all new articles",
+                "Share new content on social media, LinkedIn",
+                "Reach out to 5-10 relevant sites for backlinks",
+                "Monitor rankings in Google Search Console"
+            ],
+            owner="Content/Marketing",
+            time_estimate="16-20 hours",
+            dependencies=["Content creation"],
+            success_metric="4+ cluster articles published, internal linking complete, 2+ external backlinks",
+            priority="Medium"
+        ),
+        'conversion_optimization': ActionItem(
+            week="Week 10-11",
+            title="💰 Conversion Rate Optimization: Testing & Optimization",
+            description="Optimize your highest-traffic pages to convert more visitors into customers.",
+            steps=[
+                "Identify top 3 landing pages by traffic",
+                "Analyze current conversion rate and user behavior",
+                "Identify friction points: slow loading, unclear CTA, poor mobile UX",
+                "Create A/B test hypotheses",
+                "Set up A/B tests (Google Optimize, VWO, or Optimizely)",
+                "Test variations for 2 weeks minimum",
+                "Analyze results: winner by conversion rate",
+                "Implement winning variation",
+                "Document learnings and apply to other pages"
+            ],
+            owner="Marketing",
+            time_estimate="10-12 hours",
+            dependencies=["Analytics setup", "Mobile optimization"],
+            success_metric="3 A/B tests running, 1+ winning variation implemented",
+            priority="Medium"
+        ),
+        'advanced_tracking': ActionItem(
+            week="Week 11",
+            title="📈 Advanced Analytics: Dashboards & Attribution",
+            description="Set up comprehensive tracking and reporting to measure ROI and guide decisions.",
+            steps=[
+                "Create custom GA4 dashboard",
+                "Set up goal funnels: identify drop-off points",
+                "Configure enhanced e-commerce tracking",
+                "Set up Google Tag Manager",
+                "Implement event tracking",
+                "Set up custom dimensions",
+                "Create automated weekly report",
+                "Set up alerts for traffic drops, conversion drops",
+                "Document analytics setup for team"
+            ],
+            owner="Marketing + Developer",
+            time_estimate="8-10 hours",
+            dependencies=["Analytics setup"],
+            success_metric="Custom dashboard live, enhanced tracking implemented, automated reports active",
+            priority="Medium"
+        ),
+        'review_optimize': ActionItem(
+            week="Week 12",
+            title="🎯 90-Day Review & Q2 Planning",
+            description="Review results, document wins, identify next priorities for continued growth.",
+            steps=[
+                "Compile metrics: traffic change, ranking improvements",
+                "Compare: pre-implementation vs current scores",
+                "Document quick wins: what worked best",
+                "Identify ongoing issues",
+                "Calculate ROI: revenue increase vs investment",
+                "Survey team: what went well, what was challenging",
+                "Plan Q2 priorities: 3-5 key initiatives",
+                "Schedule quarterly check-ins",
+                "Celebrate wins with team!"
+            ],
+            owner="All",
+            time_estimate="4-6 hours",
+            dependencies=["All previous tasks"],
+            success_metric="Complete 90-day report, ROI calculated, Q2 roadmap defined",
+            priority="High"
+        ),
+    }
+    
+    # Finnish translations (simplified for space)
+    actions_fi = {
+        'ssl_setup': ActionItem(
+            week="Viikko 1",
+            title="🔒 SSL-sertifikaatin asennus & Turvallisuus",
+            description="Asenna SSL-sertifikaatti ja konfiguroi HTTPS suojataksesi sivuston.",
+            steps=[
+                "Hanki SSL-sertifikaatti (Let's Encrypt ilmainen)",
+                "Asenna palvelimelle",
+                "Konfiguroi HTTP→HTTPS uudelleenohjaus",
+                "Päivitä sisäiset linkit",
+                "Testaa kaikki sivut",
+                "Aseta HSTS-header",
+                "Lähetä Search Consoleen"
+            ],
+            owner="Kehittäjä",
+            time_estimate="3-5 tuntia",
+            dependencies=[],
+            success_metric="Kaikki sivut HTTPS:llä, SSL Labs arvosana A",
+            priority="Critical"
+        ),
+        'analytics_setup': ActionItem(
+            week="Viikko 1",
+            title="📊 Google Analytics 4 asennus",
+            description="Asenna GA4 aloittaaksesi datan keräämisen.",
+            steps=[
+                "Luo GA4 property",
+                "Asenna GA4-tagi",
+                "Määrittele 3-5 konversiota",
+                "Konfiguroi enhanced measurement",
+                "Linkitä Search Consoleen",
+                "Luo dashboard",
+                "Testaa DebugView:llä",
+                "Aseta raportit"
+            ],
+            owner="Markkinointi",
+            time_estimate="4-6 tuntia",
+            dependencies=[],
+            success_metric="GA4 kerää dataa, konversiot seurataan",
+            priority="Critical"
+        ),
+        'seo_foundation': ActionItem(
+            week="Viikko 2-3",
+            title="🎯 SEO-perusta: Otsikot & Metat",
+            description="Korjaa SEO:n low-hanging fruit 10 sivullasi.",
+            steps=[
+                "Tunnista top 10 sivua",
+                "Auditoi otsikot: 50-60 merkkiä",
+                "Auditoi meta-kuvaukset",
+                "Korjaa H1-tagit",
+                "Korjaa otsikkohierarkia",
+                "Lisää alt-tekstit",
+                "Luo XML-sivukartta",
+                "Lähetä Search Consoleen",
+                "Lisää schema-merkintä"
+            ],
+            owner="Markkinointi + Kehittäjä",
+            time_estimate="8-12 tuntia",
+            dependencies=["Analytics-asennus"],
+            success_metric="Top 10 sivua optimoitu",
+            priority="High"
+        ),
+        'mobile_optimization': ActionItem(
+            week="Viikko 3-4",
+            title="📱 Mobiilioptimiointi",
+            description="Varmista nopea mobiilikokemus.",
+            steps=[
+                "Lisää viewport meta tag",
+                "Testaa oikeilla laitteilla",
+                "Aja PageSpeed Insights",
+                "Pakkaa kuvat",
+                "Ota lazy loading käyttöön",
+                "Minifioi CSS ja JS",
+                "Aktivoi välimuisti",
+                "Saavuta Core Web Vitals"
+            ],
+            owner="Kehittäjä",
+            time_estimate="10-15 tuntia",
+            dependencies=["SSL-asennus"],
+            success_metric="Mobile PageSpeed 70+",
+            priority="High"
+        ),
+        'content_strategy': ActionItem(
+            week="Viikko 5-6",
+            title="✍️ Sisältöstrategia",
+            description="Suunnittele laadukas sisältö.",
+            steps=[
+                "Tutki 10-15 avainsanaa",
+                "Analysoi hakuintentio",
+                "Tunnista 3-4 pilari-aihetta",
+                "Tunnista klusteriaiheet",
+                "Analysoi kilpailijat",
+                "Luo sisältöbriifi",
+                "Määrittele kalenteri"
+            ],
+            owner="Sisältö/Markkinointi",
+            time_estimate="6-8 tuntia",
+            dependencies=["Analytics-asennus", "SEO-perusta"],
+            success_metric="Kalenteri luotu, 3 aihetta tutkittu",
+            priority="High"
+        ),
+        'content_creation': ActionItem(
+            week="Viikko 7-8",
+            title="📝 Sisällöntuotanto",
+            description="Luo kattavaa sisältöä.",
+            steps=[
+                "Kirjoita ensimmäinen pilariartikkeli",
+                "Sisällytä H1, H2/H3, kuvat",
+                "Optimoi featured snippetille",
+                "Lisää FAQ-osio",
+                "Sisällytä CTA",
+                "SEO-optimoi",
+                "Julkaise ja jaa"
+            ],
+            owner="Sisältö",
+            time_estimate="12-16 tuntia",
+            dependencies=["Sisältöstrategia"],
+            success_metric="2 artikkelia julkaistu, 2000+ sanaa",
+            priority="High"
+        ),
+        'technical_seo': ActionItem(
+            week="Viikko 7-8",
+            title="⚙️ Tekninen SEO",
+            description="Toteuta teknisiä parannuksia.",
+            steps=[
+                "Toteuta FAQ schema",
+                "Lisää BreadcrumbList",
+                "Testaa structured data",
+                "Luo/päivitä robots.txt",
+                "Generoi XML sitemap",
+                "Lähetä sitemap",
+                "Korjaa crawl errorsit"
+            ],
+            owner="Kehittäjä",
+            time_estimate="6-8 tuntia",
+            dependencies=["SEO-perusta"],
+            success_metric="Schema validoitu, 0 errorsia",
+            priority="Medium"
+        ),
+        'content_expansion': ActionItem(
+            week="Viikko 9-10",
+            title="🚀 Sisällön laajentaminen",
+            description="Laajenna sisältöhubia.",
+            steps=[
+                "Kirjoita 4-6 klusteriartikkelia",
+                "Linkitä artikkelit pilariin",
+                "Päivitä vanhempi sisältö",
+                "Luo klusterikaavio",
+                "Jaa sosiaalisessa mediassa",
+                "Hanki backlinkkejä"
+            ],
+            owner="Sisältö/Markkinointi",
+            time_estimate="16-20 tuntia",
+            dependencies=["Sisällöntuotanto"],
+            success_metric="4+ artikkelia, 2+ backlinkkiä",
+            priority="Medium"
+        ),
+        'conversion_optimization': ActionItem(
+            week="Viikko 10-11",
+            title="💰 Konversion optimointi",
+            description="Optimoi konversioprosenttia.",
+            steps=[
+                "Tunnista top 3 aloitussivua",
+                "Analysoi käyttäytyminen",
+                "Tunnista kitkakohdat",
+                "Luo A/B-testihypoteesit",
+                "Aseta testit",
+                "Analysoi tulokset",
+                "Toteuta voittaja"
+            ],
+            owner="Markkinointi",
+            time_estimate="10-12 tuntia",
+            dependencies=["Analytics-asennus", "Mobiilioptimiointi"],
+            success_metric="3 testiä, 1+ voittaja toteutettu",
+            priority="Medium"
+        ),
+        'advanced_tracking': ActionItem(
+            week="Viikko 11",
+            title="📈 Edistynyt analytiikka",
+            description="Aseta kattava seuranta.",
+            steps=[
+                "Luo custom dashboard",
+                "Aseta goal funnels",
+                "Konfiguroi e-commerce tracking",
+                "Aseta GTM",
+                "Toteuta event tracking",
+                "Dokumentoi asetukset"
+            ],
+            owner="Markkinointi + Kehittäjä",
+            time_estimate="8-10 tuntia",
+            dependencies=["Analytics-asennus"],
+            success_metric="Dashboard live, raportit aktiivisia",
+            priority="Medium"
+        ),
+        'review_optimize': ActionItem(
+            week="Viikko 12",
+            title="🎯 90-päivän katsaus",
+            description="Tarkastele tuloksia ja suunnittele Q2.",
+            steps=[
+                "Kokoa mittarit",
+                "Vertaa tuloksia",
+                "Dokumentoi voitot",
+                "Tunnista ongelmat",
+                "Laske ROI",
+                "Suunnittele Q2",
+                "Juhli voitot!"
+            ],
+            owner="Kaikki",
+            time_estimate="4-6 tuntia",
+            dependencies=["Kaikki edelliset"],
+            success_metric="Raportti valmis, Q2 roadmap määritelty",
+            priority="High"
+        ),
+    }
+    
+    actions = actions_fi if language == 'fi' else actions_en
+    
+    # Build waves based on priorities
+    wave_1_tasks = []
+    wave_2_tasks = []
+    wave_3_tasks = []
+    
+    # Wave 1: Foundation (Weeks 1-4)
+    if not has_ssl or security_score < 10:
+        wave_1_tasks.append(actions['ssl_setup'])
+    
+    if not has_analytics:
+        wave_1_tasks.append(actions['analytics_setup'])
+    
+    if seo_score < 15:
+        wave_1_tasks.append(actions['seo_foundation'])
+    
+    if mobile_score < 10:
+        wave_1_tasks.append(actions['mobile_optimization'])
+    
+    # Wave 2: Content & Technical (Weeks 5-8)
+    if content_score < 15:
+        wave_2_tasks.extend([
+            actions['content_strategy'],
+            actions['content_creation']
+        ])
+    
+    wave_2_tasks.append(actions['technical_seo'])
+    
+    # Wave 3: Scale (Weeks 9-12)
+    wave_3_tasks.extend([
+        actions['content_expansion'],
+        actions['conversion_optimization'],
+        actions['advanced_tracking'],
+        actions['review_optimize']
+    ])
+    
+    # Calculate summary
+    total_actions = len(wave_1_tasks) + len(wave_2_tasks) + len(wave_3_tasks)
+    critical_tasks = [t.title for t in wave_1_tasks if t.priority == "Critical"]
+    
+    # Estimate total hours
+    def parse_hours(time_str: str) -> float:
+        # Parse "X-Y hours" or "X-Y tuntia"
+        parts = time_str.split('-')
+        if len(parts) == 2:
+            low = int(parts[0].strip().split()[0])
+            high = int(parts[1].strip().split()[0])
+            return (low + high) / 2
+        return 8.0
+    
+    total_hours = sum([parse_hours(t.time_estimate) for t in wave_1_tasks + wave_2_tasks + wave_3_tasks])
+    hours_range = f"{int(total_hours * 0.8)}-{int(total_hours * 1.2)}"
+    hours_label = "hours" if language == "en" else "tuntia"
+    
+    # Determine one thing this week
+    one_thing_texts = {
         'en': {
-            'actions': {
-                'ssl_install': 'Week 1: Install SSL certificate + enable HTTPS redirect',
-                'security_headers': 'Week 2: Configure security headers (CSP, HSTS, X-Frame-Options)',
-                'ga4_install': 'Week 1: Install GA4 + define 3-5 key conversion events',
-                'seo_audit': 'Week {w}: Audit & fix titles/meta descriptions on top 10 pages',
-                'heading_fix': 'Week {w}: Add missing H1 tags + fix heading hierarchy',
-                'viewport_meta': 'Week {w}: Add viewport meta + test responsive breakpoints',
-                'compress_images': 'Week {w}: Compress images on top 10 pages + enable lazy loading',
-                'content_research': 'Week 5-6: Research & outline 6 pillar content topics (keyword analysis)',
-                'content_write': 'Week 7-8: Write & publish first 3 pillar articles (2000+ words each)',
-                'content_update': 'Week 5-6: Update existing content - refresh dates, add internal links',
-                'faq_schema': 'Week 7: Add FAQ schema markup to key pages',
-                'sitemap_submit': 'Week 8: Build XML sitemap + submit to Search Console',
-                'ssr_research': 'Week 7-8: Research SSR/prerendering options for SPA',
-                'content_publish': 'Week 9-10: Publish remaining 3 pillar articles + 6 cluster posts',
-                'internal_linking': 'Week 11: Build internal linking structure',
-                'ab_testing': 'Week 9-10: A/B test top 3 landing pages (headlines, CTAs)',
-                'ssr_implement': 'Week 10-11: Implement SSR/prerendering for critical routes',
-                'cwv_optimize': 'Week 10: Optimize Core Web Vitals (LCP < 2.5s, CLS < 0.1)',
-                'conversion_tracking': 'Week 11-12: Set up conversion tracking + GA4 dashboard',
-                'review_metrics': 'Week 12: Review metrics, document wins, plan Q2 priorities',
-            },
-            'one_thing': {
-                'ssl': 'Install SSL certificate (blocks everything else)',
-                'analytics': 'Install GA4 tracking (need data to make decisions)',
-                'seo': 'Fix titles & meta on your top 10 pages',
-                'content': 'Outline your first pillar article topic',
-                'default': 'Run Lighthouse audit on top 5 pages, note top 3 issues'
-            }
+            'ssl': 'Install SSL certificate (blocks everything else)',
+            'analytics': 'Install GA4 tracking (need data to make decisions)',
+            'seo': 'Fix titles & meta on your top 10 pages',
+            'content': 'Outline your first pillar article topic',
+            'default': 'Run Lighthouse audit on top 5 pages, note top 3 issues'
         },
         'fi': {
-            'actions': {
-                'ssl_install': 'Viikko 1: Asenna SSL-sertifikaatti + HTTPS-uudelleenohjaus',
-                'security_headers': 'Viikko 2: Määritä turvallisuusotsikot (CSP, HSTS, X-Frame-Options)',
-                'ga4_install': 'Viikko 1: Asenna GA4 + määrittele 3-5 konversiota',
-                'seo_audit': 'Viikko {w}: Tarkasta & korjaa otsikot/meta-kuvaukset 10 sivulla',
-                'heading_fix': 'Viikko {w}: Lisää H1-tagit + korjaa otsikkohierarkia',
-                'viewport_meta': 'Viikko {w}: Lisää viewport meta + testaa responsiivisuus',
-                'compress_images': 'Viikko {w}: Pakkaa kuvat + ota käyttöön lazy loading',
-                'content_research': 'Viikko 5-6: Tutki 6 pilari-sisältöaihetta (avainsanat)',
-                'content_write': 'Viikko 7-8: Kirjoita & julkaise 3 pilariartikkelia (2000+ sanaa)',
-                'content_update': 'Viikko 5-6: Päivitä sisältö - päivämäärät, sisäiset linkit',
-                'faq_schema': 'Viikko 7: Lisää FAQ schema-merkintä avainsivuille',
-                'sitemap_submit': 'Viikko 8: Rakenna XML-sivukartta + lähetä Search Consoleen',
-                'ssr_research': 'Viikko 7-8: Tutki SSR/esirenderöintivaihtoehdot SPA:lle',
-                'content_publish': 'Viikko 9-10: Julkaise loput 3 artikkelia + 6 klusteripostausta',
-                'internal_linking': 'Viikko 11: Rakenna sisäinen linkitysrakenne',
-                'ab_testing': 'Viikko 9-10: A/B-testaa 3 aloitussivua (otsikot, CTA:t)',
-                'ssr_implement': 'Viikko 10-11: Ota käyttöön SSR/esirenderöinti',
-                'cwv_optimize': 'Viikko 10: Optimoi Core Web Vitals (LCP < 2.5s, CLS < 0.1)',
-                'conversion_tracking': 'Viikko 11-12: Aseta konversiontaseuranta + GA4-dashboard',
-                'review_metrics': 'Viikko 12: Tarkista mittarit, dokumentoi voitot',
-            },
-            'one_thing': {
-                'ssl': 'Asenna SSL-sertifikaatti (estää kaiken muun)',
-                'analytics': 'Asenna GA4-seuranta (tarvitaan dataa päätöksiin)',
-                'seo': 'Korjaa otsikot & metat 10 sivullasi',
-                'content': 'Hahmottele ensimmäinen pilariartikkeli',
-                'default': 'Suorita Lighthouse-auditointi 5 sivulle'
-            }
+            'ssl': 'Asenna SSL-sertifikaatti (estää kaiken muun)',
+            'analytics': 'Asenna GA4-seuranta (tarvitaan dataa päätöksiin)',
+            'seo': 'Korjaa otsikot & metat 10 sivullasi',
+            'content': 'Hahmottele ensimmäinen pilariartikkeli',
+            'default': 'Suorita Lighthouse-auditointi 5 sivulle'
         }
     }
     
-    t = translations.get(language, translations['en'])
-    actions = t['actions']
-    one_thing_texts = t['one_thing']
+    texts = one_thing_texts[language]
     
-    # DYNAAMINEN PRIORISOINTI
-    weights = SCORING_CONFIG.weights
-    completion = {
-        'security': (breakdown.get('security', 0) / weights['security']) * 100 if weights['security'] > 0 else 100,
-        'seo': (breakdown.get('seo_basics', 0) / weights['seo_basics']) * 100 if weights['seo_basics'] > 0 else 100,
-        'content': (breakdown.get('content', 0) / weights['content']) * 100 if weights['content'] > 0 else 100,
-        'mobile': (breakdown.get('mobile', 0) / weights['mobile']) * 100 if weights['mobile'] > 0 else 100,
-        'technical': (breakdown.get('technical', 0) / weights['technical']) * 100 if weights['technical'] > 0 else 100,
-    }
-    
-    sorted_priorities = sorted(completion.items(), key=lambda x: x[1])
-    top_priorities = [p[0] for p in sorted_priorities if p[1] < 70][:3]
-    
-    if not technical.get('has_analytics') and 'technical' not in top_priorities:
-        top_priorities.append('analytics')
-    
-    if not top_priorities:
-        top_priorities = ['content', 'mobile', 'technical']
-    
-    # === WAVE 1 (Weeks 1-4): FOUNDATION ===
-    wave_1 = []
-    week = 1
-    
-    if 'security' in top_priorities and completion.get('security', 100) < 30:
-        wave_1.extend([actions['ssl_install'], actions['security_headers']])
-        week = 3
-    
-    if 'analytics' in top_priorities or not technical.get('has_analytics'):
-        wave_1.append(actions['ga4_install'])
-        week = max(week, 2)
-    
-    if 'seo' in top_priorities:
-        wave_1.append(actions['seo_audit'].format(w=week))
-        wave_1.append(actions['heading_fix'].format(w=week+1))
-        week += 2
-    
-    if 'mobile' in top_priorities and completion.get('mobile', 100) < 50:
-        wave_1.append(actions['viewport_meta'].format(w=week))
-    
-    if len(wave_1) < 4:
-        wave_1.append(actions['compress_images'].format(w=4))
-    
-    # === WAVE 2 (Weeks 5-8): CONTENT & TECHNICAL SEO ===
-    wave_2 = []
-    
-    # Sisältöstrategia
-    if 'content' in top_priorities:
-        if content.get('word_count', 0) < 500:
-            wave_2.extend([actions['content_research'], actions['content_write']])
-        else:
-            wave_2.append(actions['content_update'])
-    
-    # Technical SEO - KORJATTU logiikka
-    if 'seo' in top_priorities or 'technical' in top_priorities:
-        # Lisää FAQ schema jos ei jo täynnä
-        if len(wave_2) < 3:
-            wave_2.append(actions['faq_schema'])
-        # Lisää sitemap jos ei jo täynnä
-        if len(wave_2) < 4:
-            wave_2.append(actions['sitemap_submit'])
-    
-    # SPA-ongelma
-    if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
-        if len(wave_2) < 4:
-            wave_2.append(actions['ssr_research'])
-    
-    # Varmista max 4
-    wave_2 = wave_2[:4]
-    
-    # === WAVE 3 (Weeks 9-12): SCALE ===
-    wave_3 = []
-    
-    if 'content' in top_priorities:
-        wave_3.extend([actions['content_publish'], actions['internal_linking']])
+    if not has_ssl or security_score < 10:
+        one_thing = texts['ssl']
+    elif not has_analytics:
+        one_thing = texts['analytics']
+    elif seo_score < 15:
+        one_thing = texts['seo']
+    elif content_score < 15:
+        one_thing = texts['content']
     else:
-        wave_3.append(actions['ab_testing'])
-    
-    if basic.get('spa_detected'):
-        wave_3.append(actions['ssr_implement'])
-    else:
-        wave_3.append(actions['cwv_optimize'])
-    
-    wave_3.extend([actions['conversion_tracking'], actions['review_metrics']])
-    
-    # === ONE THING ===
-    if 'security' in top_priorities and completion.get('security', 100) < 30:
-        one_thing = one_thing_texts['ssl']
-    elif not technical.get('has_analytics'):
-        one_thing = one_thing_texts['analytics']
-    elif 'seo' in top_priorities:
-        one_thing = one_thing_texts['seo']
-    elif 'content' in top_priorities:
-        one_thing = one_thing_texts['content']
-    else:
-        one_thing = one_thing_texts['default']
+        one_thing = texts['default']
     
     return Plan90D(
-        wave_1=wave_1[:5],
-        wave_2=wave_2[:4],
-        wave_3=wave_3[:5],
-        one_thing_this_week=one_thing
+        wave_1=wave_1_tasks[:5],
+        wave_2=wave_2_tasks[:4],
+        wave_3=wave_3_tasks[:5],
+        one_thing_this_week=one_thing,
+        summary={
+            'total_actions': total_actions,
+            'estimated_hours': f"{hours_range} {hours_label}",
+            'critical_path': critical_tasks
+        }
     )
+
 def build_risk_register(basic: Dict[str, Any], technical: Dict[str, Any], content: Dict[str, Any]) -> List[RiskItem]:
     """Build risk register with likelihood, impact, mitigation"""
     risks = []
