@@ -193,6 +193,20 @@ except ImportError as e:
     def get_user_preferences_from_db(username): return None
 
 # ============================================================================
+# ANALYSIS HISTORY DATABASE
+# ============================================================================
+try:
+    from analysis_history_db import AnalysisHistoryDB, AnalysisRecord, UserUsage
+    HISTORY_DB_AVAILABLE = True
+    logger.info("✅ Analysis history module imported successfully")
+except ImportError as e:
+    logger.warning(f"⚠️ Analysis history module not available: {e}")
+    HISTORY_DB_AVAILABLE = False
+    AnalysisHistoryDB = None
+    AnalysisRecord = None
+    UserUsage = None
+
+# ============================================================================
 # CONSTANTS AND VERSION INFO
 # ============================================================================
 APP_VERSION = "6.3.1"
@@ -715,6 +729,7 @@ except ImportError as e:
 analysis_cache: Dict[str, Dict[str, Any]] = {}
 user_search_counts: Dict[str, int] = {}
 magic_link_auth = None
+history_db: Optional[AnalysisHistoryDB] = None  # Analysis history database
 # ============================================================================
 # OPENAI SETUP
 # ============================================================================
@@ -1441,7 +1456,7 @@ from contextlib import asynccontextmanager
 async def lifespan(app: FastAPI):
     """Modern lifespan context manager (replaces deprecated @app.on_event)"""
     # Startup
-    global magic_link_auth, redis_client, task_queue, oauth
+    global magic_link_auth, redis_client, task_queue, oauth, history_db
     
     # 1. Initialize database if enabled
     if DATABASE_ENABLED:
@@ -1473,6 +1488,21 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"❌ Database initialization failed: {e}")
             logger.info("⚠️ Continuing with hardcoded users only")
+    
+    # 1.5. Initialize Analysis History Database
+    if HISTORY_DB_AVAILABLE and os.getenv("DATABASE_URL"):
+        try:
+            history_db = AnalysisHistoryDB(os.getenv("DATABASE_URL"))
+            await history_db.connect()
+            logger.info("✅ Analysis history database initialized")
+        except Exception as e:
+            logger.error(f"❌ Analysis history DB initialization failed: {e}")
+            history_db = None
+    else:
+        if not HISTORY_DB_AVAILABLE:
+            logger.warning("⚠️ Analysis history module not available")
+        if not os.getenv("DATABASE_URL"):
+            logger.warning("⚠️ DATABASE_URL not set - history disabled")
     
     # 2. Initialize Redis and task queue (already done globally but verify)
     if REDIS_URL and not redis_client:
@@ -1562,6 +1592,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"📧 Magic Link: {'ready' if magic_link_auth else 'not available'}")
     logger.info(f"🗄️ Redis: {'connected' if redis_client else 'not connected'}")
     logger.info(f"🗃️ Database: {'connected' if DATABASE_ENABLED else 'not connected'}")
+    logger.info(f"📜 Analysis History: {'enabled' if history_db else 'disabled'}")
     
     # 6. Environment warnings
     
@@ -1572,6 +1603,13 @@ async def lifespan(app: FastAPI):
     yield
     
     # Shutdown (cleanup code here if needed)
+    if history_db:
+        try:
+            await history_db.disconnect()
+            logger.info("🗄️ Analysis history database closed")
+        except Exception as e:
+            logger.error(f"❌ Error closing history DB: {e}")
+    
     logger.info("🛑 Shutting down application")
 
 # Now recreate app WITH lifespan
@@ -7671,6 +7709,16 @@ async def discover_competitors(
         )
     
     # === 1.5. CHECK SUBSCRIPTION LIMITS ===
+    # First check history_db if available (most accurate)
+    if history_db and user.role not in ["admin", "super_user"]:
+        can_proceed, error_msg = await history_db.check_user_limit(
+            user.username,
+            'discovery'
+        )
+        if not can_proceed:
+            raise HTTPException(403, error_msg or "Discovery limit reached")
+    
+    # Then check Stripe limits if available  
     if STRIPE_AVAILABLE and stripe_manager:
         user_data = USERS_DB.get(user.email, {})
         tier_str = user_data.get("subscription_tier", "free")
@@ -7993,6 +8041,32 @@ async def discover_competitors(
                     "duration_seconds": (datetime.now() - start_time).total_seconds()
                 })
                 
+                # === SAVE TO HISTORY DATABASE ===
+                if history_db:
+                    try:
+                        # Get all results from task
+                        task_data = task_queue.get_task(task_id)
+                        competitor_analyses = task_data.get("results", [])
+                        
+                        analysis_id = await history_db.save_competitor_discovery(
+                            user_id=user.username,
+                            url=request.url,
+                            industry=request.industry,
+                            country_code=request.country_code,
+                            max_competitors=request.max_competitors,
+                            search_terms=search_terms,
+                            search_provider="multi_provider",
+                            competitors=competitor_analyses,
+                            summary={
+                                "successful": successful_count,
+                                "failed": failed_count,
+                                "duration_seconds": (datetime.now() - start_time).total_seconds()
+                            }
+                        )
+                        logger.info(f"💾 Discovery saved to history: ID {analysis_id}")
+                    except Exception as e:
+                        logger.error(f"❌ Failed to save discovery to history: {e}")
+                
                 logger.info(
                     f"🏁 Discovery task {task_id} completed for {user.username}: "
                     f"{successful_count}/{required_analyses} successful in "
@@ -8239,16 +8313,29 @@ async def ai_analyze_comprehensive(
 ):
     """Complete comprehensive website analysis with full SPA support."""
     try:
-        # === QUOTA CHECK ===
+        # === QUOTA CHECK - Use database if available ===
         if user.role != "admin":
-            user_limit = USERS_DB.get(user.username, {}).get("search_limit", DEFAULT_USER_LIMIT)
-            current_count = user_search_counts.get(user.username, 0)
-            
-            if user_limit > 0 and current_count >= user_limit:
-                raise HTTPException(
-                    status_code=403, 
-                    detail=f"Search limit reached ({user_limit} searches). Contact admin for more quota."
+            if history_db:
+                # Check quota from database
+                can_proceed, error_msg = await history_db.check_user_limit(
+                    user.username,
+                    'single'
                 )
+                if not can_proceed:
+                    raise HTTPException(
+                        status_code=403,
+                        detail=error_msg or "Analysis limit reached"
+                    )
+            else:
+                # Fallback to in-memory quota
+                user_limit = USERS_DB.get(user.username, {}).get("search_limit", DEFAULT_USER_LIMIT)
+                current_count = user_search_counts.get(user.username, 0)
+                
+                if user_limit > 0 and current_count >= user_limit:
+                    raise HTTPException(
+                        status_code=403, 
+                        detail=f"Search limit reached ({user_limit} searches). Contact admin for more quota."
+                    )
         
         # === URL VALIDATION ===
         url = clean_url(request.url)
@@ -8264,9 +8351,27 @@ async def ai_analyze_comprehensive(
             revenue_input=None
         )
         
+        # === SAVE TO DATABASE ===
+        if history_db:
+            try:
+                analysis_id = await history_db.save_single_analysis(
+                    user_id=user.username,
+                    url=url,
+                    company_name=request.company_name,
+                    language=request.language,
+                    analysis_result=result
+                )
+                logger.info(f"💾 Analysis saved to history: ID {analysis_id}")
+            except Exception as e:
+                logger.error(f"❌ Failed to save analysis to history: {e}")
+                # Continue even if save fails - don't block the analysis
+        
         # === POST-PROCESSING ===
-        if user.role != "admin":
+        if user.role != "admin" and not history_db:
+            # Only use in-memory counter if database not available
+            current_count = user_search_counts.get(user.username, 0)
             user_search_counts[user.username] = current_count + 1
+            user_limit = USERS_DB.get(user.username, {}).get("search_limit", DEFAULT_USER_LIMIT)
             logger.info(
                 f"Quota: {user.username} used {user_search_counts[user.username]}/{user_limit}"
             )
@@ -8416,6 +8521,131 @@ async def get_my_discoveries(
 # (Discovery results endpoint is above at line ~7726)
 
 # ============================================================================
+# ANALYSIS HISTORY ENDPOINTS
+# ============================================================================
+
+@app.get("/api/v1/analysis-history", tags=["History"])
+async def get_analysis_history(
+    limit: int = 20,
+    analysis_type: Optional[str] = None,
+    user: UserInfo = Depends(require_user)
+):
+    """
+    Get user's analysis history.
+    
+    Parameters:
+    - limit: Number of results (max 100)
+    - analysis_type: Filter by 'single' or 'discovery'
+    """
+    if not history_db:
+        raise HTTPException(503, "Analysis history not available")
+    
+    if limit > 100:
+        limit = 100
+    
+    try:
+        history = await history_db.get_user_history(
+            user_id=user.username,
+            limit=limit,
+            analysis_type=analysis_type
+        )
+        
+        return {
+            "history": [
+                {
+                    "id": record.id,
+                    "type": record.analysis_type,
+                    "url": record.url,
+                    "company_name": record.company_name,
+                    "status": record.status,
+                    "score": record.score,
+                    "competitors_count": record.competitors_count,
+                    "created_at": record.created_at.isoformat(),
+                    "completed_at": record.completed_at.isoformat() if record.completed_at else None
+                }
+                for record in history
+            ],
+            "total": len(history)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error fetching history: {e}")
+        raise HTTPException(500, "Failed to fetch history")
+
+
+@app.get("/api/v1/analysis-history/{analysis_id}", tags=["History"])
+async def get_analysis_details(
+    analysis_id: int,
+    user: UserInfo = Depends(require_user)
+):
+    """Get full details of a specific analysis"""
+    if not history_db:
+        raise HTTPException(503, "Analysis history not available")
+    
+    try:
+        details = await history_db.get_analysis_details(
+            analysis_id=analysis_id,
+            user_id=user.username
+        )
+        
+        if not details:
+            raise HTTPException(404, "Analysis not found")
+        
+        return details
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching analysis details: {e}")
+        raise HTTPException(500, "Failed to fetch analysis details")
+
+
+@app.get("/api/v1/user-usage", tags=["History"])
+async def get_user_usage_stats(
+    user: UserInfo = Depends(require_user)
+):
+    """Get user's usage statistics and limits"""
+    if not history_db:
+        raise HTTPException(503, "Usage stats not available")
+    
+    try:
+        usage = await history_db.get_user_usage(user.username)
+        
+        if not usage:
+            return {
+                "single_analyses_this_month": 0,
+                "discoveries_this_month": 0,
+                "total_single_analyses": 0,
+                "total_discoveries": 0,
+                "single_analysis_limit": 100,
+                "discovery_limit": 10
+            }
+        
+        return {
+            "single_analyses_this_month": usage.single_analyses_this_month,
+            "discoveries_this_month": usage.discoveries_this_month,
+            "total_single_analyses": usage.total_single_analyses,
+            "total_discoveries": usage.total_discoveries,
+            "total_competitors_analyzed": usage.total_competitors_analyzed,
+            "single_analysis_limit": usage.single_analysis_limit,
+            "discovery_limit": usage.discovery_limit,
+            "single_analyses_remaining": (
+                usage.single_analysis_limit - usage.single_analyses_this_month
+                if usage.single_analysis_limit > 0
+                else -1  # Unlimited
+            ),
+            "discoveries_remaining": (
+                usage.discovery_limit - usage.discoveries_this_month
+                if usage.discovery_limit > 0
+                else -1  # Unlimited
+            )
+        }
+        
+    except Exception as e:
+        logger.error(f"Error fetching usage stats: {e}")
+        raise HTTPException(500, "Failed to fetch usage stats")
+
+# ============================================================================
 # SYSTEM AND ADMIN ENDPOINTS
 # ============================================================================
 
@@ -8426,7 +8656,12 @@ async def root():
         "endpoints": {
             "health": "/health", 
             "auth": {"login": "/auth/login", "me": "/auth/me"},
-            "analysis": {"comprehensive": "/api/v1/ai-analyze", "basic": "/api/v1/analyze"}
+            "analysis": {"comprehensive": "/api/v1/ai-analyze", "basic": "/api/v1/analyze"},
+            "history": {
+                "list": "/api/v1/analysis-history",
+                "details": "/api/v1/analysis-history/{id}",
+                "usage": "/api/v1/user-usage"
+            } if history_db else {}
         },
         "features": [
             "JWT authentication with role-based access",
@@ -8435,7 +8670,8 @@ async def root():
             "SPA detection and smart rendering",
             "Playwright support for modern web apps",
             "AI-powered insights with OpenAI integration",
-            "Complete frontend compatibility"
+            "Complete frontend compatibility",
+            "Analysis history tracking" if history_db else None
         ],
         "capabilities": {
             "playwright_available": PLAYWRIGHT_AVAILABLE,
@@ -8443,7 +8679,8 @@ async def root():
             "spa_detection": True,
             "modern_web_analysis": True,
             "enhanced_features_count": 9,
-            "openai_available": bool(openai_client)
+            "openai_available": bool(openai_client),
+            "analysis_history": bool(history_db)
         },
         "scoring_system": {"version": "configurable_v1_complete", "weights": SCORING_CONFIG.weights}
     }
@@ -8983,16 +9220,27 @@ async def analyze_competitive_radar(
         required_analyses = 1 + len(request.competitor_urls)
         
         if user.role != "admin":
-            user_limit = USERS_DB.get(user.username, {}).get("search_limit", DEFAULT_USER_LIMIT)
-            current_count = user_search_counts.get(user.username, 0)
-            available = user_limit - current_count
-            
-            if user_limit > 0 and required_analyses > available:
-                raise HTTPException(
-                    403,
-                    f"Competitive Radar requires {required_analyses} analyses. "
-                    f"You have {available} remaining of {user_limit} quota."
+            # Check from history_db if available (most accurate)
+            if history_db:
+                # Competitive radar uses "single" analysis quota
+                can_proceed, error_msg = await history_db.check_user_limit(
+                    user.username,
+                    'single'
                 )
+                if not can_proceed:
+                    raise HTTPException(403, error_msg or "Analysis limit reached")
+            else:
+                # Fallback to in-memory
+                user_limit = USERS_DB.get(user.username, {}).get("search_limit", DEFAULT_USER_LIMIT)
+                current_count = user_search_counts.get(user.username, 0)
+                available = user_limit - current_count
+                
+                if user_limit > 0 and required_analyses > available:
+                    raise HTTPException(
+                        403,
+                        f"Competitive Radar requires {required_analyses} analyses. "
+                        f"You have {available} remaining of {user_limit} quota."
+                    )
         
         logger.info(f"[Radar] Starting analysis for {user.username}: {request.your_url} vs {len(request.competitor_urls)} competitors")
         
