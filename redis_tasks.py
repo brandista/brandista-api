@@ -13,6 +13,10 @@ class RedisTaskQueue:
         self.queue_key = "task_queue"
         self.results_prefix = "task_result:"
         
+        # ✅ KORJAUS: Pidempi TTL (7 päivää)
+        self.task_ttl = 86400 * 7  # 7 days (604800 seconds)
+        self.result_ttl = 86400 * 7  # 7 days
+        
     def create_task(self, task_type: str, data: Dict[str, Any], username: str) -> str:
         """Luo uusi task ja palauttaa task_id"""
         task_id = str(uuid.uuid4())
@@ -27,10 +31,10 @@ class RedisTaskQueue:
             "total": data.get("total", 1)
         }
         
-        # Tallenna task data
+        # ✅ KORJAUS: Käytä pidempi TTL
         self.redis.setex(
             f"{self.tasks_prefix}{task_id}",
-            3600,  # 1h expiry
+            self.task_ttl,  # 7 days instead of 1 hour
             json.dumps(task_data)
         )
         
@@ -44,7 +48,14 @@ class RedisTaskQueue:
         data = self.redis.get(f"{self.tasks_prefix}{task_id}")
         if not data:
             return {"status": "not_found"}
-        return json.loads(data)
+        
+        task_data = json.loads(data)
+        
+        # ✅ LISÄYS: Lisää results suoraan statukseen
+        results = self.get_results(task_id)
+        task_data["results"] = results
+        
+        return task_data
     
     def update_task(self, task_id: str, updates: Dict[str, Any]):
         """Päivitä taskin tila"""
@@ -55,9 +66,10 @@ class RedisTaskQueue:
         task_data.update(updates)
         task_data["updated_at"] = datetime.now().isoformat()
         
+        # ✅ KORJAUS: Päivitä TTL samalla
         self.redis.setex(
             f"{self.tasks_prefix}{task_id}",
-            3600,
+            self.task_ttl,
             json.dumps(task_data)
         )
         return True
@@ -73,7 +85,9 @@ class RedisTaskQueue:
             results = []
         
         results.append(result)
-        self.redis.setex(results_key, 3600, json.dumps(results))
+        
+        # ✅ KORJAUS: Käytä pidempi TTL
+        self.redis.setex(results_key, self.result_ttl, json.dumps(results))
         
         # Päivitä progress
         task_data = self.get_task_status(task_id)
@@ -94,11 +108,18 @@ class RedisTaskQueue:
     
     def check_user_active_tasks(self, username: str) -> int:
         """Montako aktiivista taskia käyttäjällä on"""
-        # Scan kaikkia taskeja (tuotannossa käytä hash rakennetta)
         count = 0
         for key in self.redis.scan_iter(f"{self.tasks_prefix}*"):
-            data = json.loads(self.redis.get(key))
-            if (data.get("username") == username and 
-                data.get("status") in ["pending", "running"]):
+            data = self.redis.get(key)
+            if not data:
+                continue
+            task = json.loads(data)
+            if (task.get("username") == username and 
+                task.get("status") in ["pending", "running"]):
                 count += 1
         return count
+
+    # ✅ LISÄYS: Helper metodi TTL:n tarkistamiseen (debugging)
+    def get_task_ttl(self, task_id: str) -> int:
+        """Palauttaa montako sekuntia taskilla on TTL jäljellä"""
+        return self.redis.ttl(f"{self.tasks_prefix}{task_id}")
