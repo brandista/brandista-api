@@ -2,7 +2,7 @@
 # BRANDISTA COMPETITIVE INTELLIGENCE API - REQUIREMENTS
 # Production-ready dependencies with version pinning
 # Python 3.11+ compatible
-# Last updated: 2025-11-02
+# Last updated: 2025-11-09
 # ============================================================================
 
 # ============================================================================
@@ -60,6 +60,7 @@ textstat==0.7.3
 sqlalchemy>=2.0.0,<3.0.0
 psycopg2-binary==2.9.9
 alembic==1.13.1  # Database migrations
+asyncpg==0.29.0  # Async PostgreSQL driver for analysis history
 
 # ============================================================================
 # CACHING & TASK QUEUE
