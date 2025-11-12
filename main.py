@@ -99,11 +99,20 @@ except ImportError:
     logger.warning("Email notifications module not available")
 
 try:
-    from ai_content_generator import generate_full_ai_insights
+    from ai_content_generator import (
+        generate_full_ai_insights,
+        generate_radical_creativity_analysis,
+        generate_role_based_recommendations,
+        LLMClient,
+        build_structured_context
+    )
     AI_GENERATOR_AVAILABLE = True
 except ImportError:
     AI_GENERATOR_AVAILABLE = False
     logger.warning("AI content generator module not available")
+    # Fallback stubs
+    def generate_radical_creativity_analysis(*args, **kwargs): return None
+    def generate_role_based_recommendations(*args, **kwargs): return None
 
 # ============================================================================
 # STRIPE PAYMENT MODULE
@@ -1841,6 +1850,9 @@ class CompetitiveRadarResponse(BaseModel):
     competitive_score: int
     strategic_recommendations: List[Dict[str, Any]]
     positioning_map: Dict[str, Any]
+    # NEW: AI-enhanced insights
+    creative_boldness: Optional[Dict[str, Any]] = None
+    role_recommendations: Optional[Dict[str, Any]] = None
 
 class ScoreBreakdown(BaseModel):
     # Backend (weighted points)
@@ -7280,6 +7292,84 @@ async def _perform_comprehensive_analysis_internal(
             'interactivity_score': 0
         }
     
+    # === NEW: GENERATE ROLE-BASED RECOMMENDATIONS ===
+    role_recommendations = None
+    
+    if AI_GENERATOR_AVAILABLE and openai_client:
+        try:
+            logger.info("[Analysis] Generating role-based recommendations...")
+            
+            # Build context for AI
+            context, _ = build_structured_context(
+                url=url,
+                basic=basic_analysis,
+                technical=technical_audit,
+                content=content_analysis,
+                ux=ux_analysis,
+                social=social_analysis,
+                html=html_content
+            )
+            
+            # Create LLM client
+            llm_client = LLMClient(api_key=os.getenv("OPENAI_API_KEY"))
+            
+            # Prepare data for role recommendations
+            # Note: For single analysis, we don't have competitors, so competitive_position is simplified
+            competitive_position = {
+                'positioning_quadrant': 'Analysis',
+                'competitive_score': basic_analysis['digital_maturity_score']
+            }
+            
+            # Market gaps from technical/content/UX issues
+            market_gaps = []
+            if not basic_analysis.get('has_ssl'):
+                market_gaps.append({
+                    'gap_title': 'SSL certificate missing',
+                    'priority_score': 100,
+                    'type': 'security'
+                })
+            if content_analysis.get('word_count', 0) < 500:
+                market_gaps.append({
+                    'gap_title': 'Thin content',
+                    'priority_score': 80,
+                    'type': 'content'
+                })
+            if technical_audit.get('page_speed_score', 100) < 60:
+                market_gaps.append({
+                    'gap_title': 'Slow page speed',
+                    'priority_score': 85,
+                    'type': 'performance'
+                })
+            
+            # Empty creative analysis (not available for single site)
+            creative_analysis = {
+                'creative_boldness_score': 50,
+                'classification': 'Not evaluated'
+            }
+            
+            # Impact estimate
+            impact_estimate = {
+                'revenue_uplift_range': 'Estimated based on improvements',
+                'lead_gain_estimate': 'Depends on traffic volume'
+            }
+            
+            # Generate role-based recommendations
+            role_recommendations = await generate_role_based_recommendations(
+                context=context,
+                competitive_position=competitive_position,
+                market_gaps=market_gaps,
+                creative_analysis=creative_analysis,
+                impact_estimate=impact_estimate,
+                language=language,
+                llm_client=llm_client
+            )
+            
+            logger.info("[Analysis] ✅ Role recommendations generated for CEO/CMO/CTO")
+            
+        except Exception as e:
+            logger.error(f"[Analysis] Role recommendations failed: {e}")
+            # Continue without recommendations
+    
     # Build mobile reasons
     mobile_score_value = basic_analysis.get('detailed_findings', {}).get('mobile_score_raw', 0)
     mobile_reasons = []
@@ -7374,6 +7464,9 @@ async def _perform_comprehensive_analysis_internal(
         },
         
         "enhanced_features": enhanced_features,
+        
+        # NEW: Role-based recommendations
+        "role_recommendations": role_recommendations,
         
         "metadata": {
             "version": APP_VERSION,
@@ -9198,6 +9291,30 @@ async def admin_delete_user(username: str, user: UserInfo = Depends(require_admi
     return {"ok": True, "message": f"User '{username}' deleted successfully"}
 
 # ============================================================================
+# HELPER FUNCTIONS FOR AI ENHANCEMENTS
+# ============================================================================
+
+def _detect_messaging_tone(analysis: Dict) -> str:
+    """Detect messaging tone from analysis"""
+    title = analysis.get('basic', {}).get('title', '')
+    description = analysis.get('basic', {}).get('meta_description', '')
+    text = (title + ' ' + description).lower()
+    
+    # Tone detection keywords
+    if any(word in text for word in ['innovative', 'revolutionary', 'disrupt', 'future', 'next-generation']):
+        return 'Innovative'
+    elif any(word in text for word in ['trust', 'reliable', 'professional', 'expert', 'proven']):
+        return 'Professional'
+    elif any(word in text for word in ['easy', 'simple', 'friendly', 'help', 'accessible']):
+        return 'Approachable'
+    elif any(word in text for word in ['luxury', 'premium', 'exclusive', 'elite', 'sophisticated']):
+        return 'Premium'
+    elif any(word in text for word in ['affordable', 'budget', 'value', 'save', 'discount']):
+        return 'Value-focused'
+    else:
+        return 'Neutral'
+
+# ============================================================================
 # KILPAILUETU-TUTKA ENDPOINT - KAUPALLINEN VERSIO
 # ============================================================================
 
@@ -9391,6 +9508,79 @@ async def analyze_competitive_radar(
         
         logger.info(f"[Radar] ✅ Generated {len(strategic_recommendations)} strategic recommendations")
         
+        # === NEW: RADICAL CREATIVITY & ROLE RECOMMENDATIONS ===
+        creative_analysis = None
+        role_recommendations = None
+        
+        if AI_GENERATOR_AVAILABLE and openai_client:
+            try:
+                logger.info("[Radar] Generating radical creativity analysis...")
+                
+                # Extract messaging for creativity analysis
+                your_messaging = {
+                    'headline': your_analysis.get('basic', {}).get('title', ''),
+                    'description': your_analysis.get('basic', {}).get('meta_description', ''),
+                    'tone': _detect_messaging_tone(your_analysis),
+                    'h1': your_analysis.get('basic', {}).get('h1', '')
+                }
+                
+                competitor_messaging = []
+                for comp in competitor_analyses:
+                    competitor_messaging.append({
+                        'headline': comp.get('basic', {}).get('title', ''),
+                        'description': comp.get('basic', {}).get('meta_description', ''),
+                        'tone': _detect_messaging_tone(comp)
+                    })
+                
+                # Build context for AI
+                context, _ = build_structured_context(
+                    url=request.your_url,
+                    basic=your_analysis.get('basic', {}),
+                    technical=your_analysis.get('technical', {}),
+                    content=your_analysis.get('content', {}),
+                    ux=your_analysis.get('ux', {}),
+                    social=your_analysis.get('social', {}),
+                    html=your_analysis.get('html', '')
+                )
+                
+                # Create LLM client
+                llm_client = LLMClient(api_key=os.getenv("OPENAI_API_KEY"))
+                
+                # Generate creativity analysis
+                creative_analysis = await generate_radical_creativity_analysis(
+                    context=context,
+                    your_messaging=your_messaging,
+                    competitor_messaging=competitor_messaging,
+                    language=request.language,
+                    llm_client=llm_client
+                )
+                
+                logger.info(f"[Radar] ✅ Creative boldness: {creative_analysis.get('creative_boldness_score', 0)}/100")
+                
+                # Prepare impact estimate for role recommendations
+                impact_estimate = {
+                    'revenue_uplift_range': 'To be calculated',  # You can enhance this
+                    'lead_gain_estimate': 'To be calculated'
+                }
+                
+                # Generate role-based recommendations
+                logger.info("[Radar] Generating role-based recommendations...")
+                role_recommendations = await generate_role_based_recommendations(
+                    context=context,
+                    competitive_position=positioning,
+                    market_gaps=market_gaps,
+                    creative_analysis=creative_analysis,
+                    impact_estimate=impact_estimate,
+                    language=request.language,
+                    llm_client=llm_client
+                )
+                
+                logger.info("[Radar] ✅ Role recommendations generated for CEO/CMO/CTO")
+                
+            except Exception as e:
+                logger.error(f"[Radar] Enhanced AI insights failed: {e}")
+                # Continue without these insights - they're optional enhancements
+        
        # === 10. RAKENNA RESPONSE ===
         logger.info("[Radar] Building final response...")
 
@@ -9417,14 +9607,18 @@ async def analyze_competitive_radar(
             market_gaps=market_gaps,
             competitive_score=positioning['competitive_score'],
             strategic_recommendations=strategic_recommendations,
-            positioning_map=positioning
+            positioning_map=positioning,
+            # NEW: AI-enhanced insights
+            creative_boldness=creative_analysis,
+            role_recommendations=role_recommendations
         )
 
         logger.info(
             f"[Radar] 🎯 COMPLETE for {user.username}: "
             f"Score={positioning['competitive_score']}, "
             f"Gaps={len(market_gaps)}, "
-            f"Recommendations={len(strategic_recommendations)}"
+            f"Recommendations={len(strategic_recommendations)}, "
+            f"Creative={creative_analysis.get('creative_boldness_score', 'N/A') if creative_analysis else 'N/A'}"
         )
 
         return response
