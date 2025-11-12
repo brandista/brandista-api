@@ -296,7 +296,7 @@ async def generate_ai_swot(
     language: str,
     llm_client: LLMClient
 ) -> Optional[Dict[str, Any]]:
-    """Generate SWOT analysis with strict number guardrails"""
+    """Generate SWOT analysis with growth-oriented, radical creativity lens"""
     
     numbers = context['numbers']
     flags = context['flags']
@@ -304,12 +304,24 @@ async def generate_ai_swot(
     
     lang_instruction = LANGUAGE_INSTRUCTIONS.get(language, LANGUAGE_INSTRUCTIONS['en'])
     
-    prompt = f"""You are a digital strategy analyst. {lang_instruction}
+    # Radical creativity for SWOT
+    swot_framework = """
+**SWOT WITH RADICAL CREATIVITY:**
+- Weaknesses = untapped growth opportunities (not just problems to fix)
+- Opportunities = what new territory/segment can we capture?
+- Think: "changing the reach" not "changing the flavour"
+- Every gap is a chance to build something that didn't exist
+"""
+    
+    prompt = f"""You are a digital strategy analyst with growth mindset. {lang_instruction}
+
+{swot_framework}
 
 **CRITICAL RULES:**
 1. Use ONLY numbers from the context.numbers section below
 2. DO NOT invent, calculate, or estimate any numbers
 3. Reference numbers with their exact context.numbers key
+4. Frame weaknesses as GROWTH OPPORTUNITIES
 
 **Context (READ-ONLY):**
 ```json
@@ -321,13 +333,18 @@ Generate a SWOT analysis based ONLY on the data above. Return valid JSON:
 
 {{
   "strengths": ["List 2-4 strengths with specific numbers from context"],
-  "weaknesses": ["List 2-4 weaknesses with specific numbers from context"],
-  "opportunities": ["List 2-3 growth opportunities"],
-  "threats": ["List 1-2 competitive/market threats"]
+  "weaknesses": ["List 2-4 GROWTH OPPORTUNITIES (frame gaps positively) with numbers"],
+  "opportunities": ["List 2-3 NEW MARKET/SEGMENT opportunities to capture"],
+  "threats": ["List 1-2 competitive threats or market risks"]
 }}
 
 **Example strength:** "Strong security posture (security_score: {numbers['security_score']}/15)"
-**Bad example:** "Has 1,234 visitors per day" ← DO NOT invent numbers!
+
+**Good weakness (growth-oriented):** "Mobile experience gap = opportunity to capture 70% market segment (mobile_score: {numbers['mobile_score']}/15)"
+**Bad weakness:** "Mobile optimization needed" ← Process thinking!
+
+**Good opportunity:** "Untapped AI personalization = convert passive visitors into advocates"
+**Bad opportunity:** "Improve content quality" ← Incremental, not transformative!
 
 Return ONLY the JSON, no explanations.
 """
@@ -363,19 +380,34 @@ async def generate_ai_recommendations(
     language: str,
     llm_client: LLMClient
 ) -> Optional[List[str]]:
-    """Generate actionable recommendations"""
+    """Generate actionable recommendations with radical creativity mindset"""
     
     numbers = context['numbers']
     flags = context['flags']
+    metadata = context['metadata']
     
     lang_instruction = LANGUAGE_INSTRUCTIONS.get(language, LANGUAGE_INSTRUCTIONS['en'])
     
-    prompt = f"""You are a digital optimization consultant. {lang_instruction}
+    # Radical creativity framework
+    creativity_framework = """
+**RADICAL CREATIVITY MINDSET:**
+- Creativity is a GROWTH STRATEGY, not decoration
+- Focus on "changing the reach", not just "changing the flavour"
+- Avoid process thinking traps (analyzing white spots until they turn grey)
+- Recommend actions that drive NEW segments, deeper commitment, REAL growth
+- Replace incremental improvements with transformative possibilities
+"""
+    
+    prompt = f"""You are a digital growth strategist with radical creativity mindset. {lang_instruction}
+
+{creativity_framework}
 
 **CRITICAL RULES:**
 1. Use ONLY scores from context.numbers
-2. Each recommendation must be actionable and specific
-3. Reference exact scores when relevant
+2. Each recommendation must be TRANSFORMATIVE and specific (not just "optimize X")
+3. Focus on business growth, new markets, competitive advantage
+4. Reference exact scores when relevant
+5. Think: "What didn't exist before?" not "How do we improve what exists?"
 
 **Context:**
 ```json
@@ -383,17 +415,21 @@ async def generate_ai_recommendations(
 ```
 
 **Task:**
-Generate exactly 5 prioritized recommendations. Return as JSON array:
+Generate exactly 5 prioritized, GROWTH-ORIENTED recommendations. Return as JSON array:
 
 [
-  "Recommendation 1 with specific context.numbers reference",
+  "Recommendation 1 with growth impact (reference context.numbers)",
   "Recommendation 2...",
   "Recommendation 3...",
   "Recommendation 4...",
   "Recommendation 5..."
 ]
 
-**Example:** "Implement HTTPS immediately (current security_score: {numbers['security_score']}/15)"
+**Good example:** "Transform mobile experience to capture 70% more market (mobile_score: {numbers['mobile_score']}/15 → new segment opportunity)"
+**Bad example:** "Improve mobile responsiveness" ← Too incremental!
+
+**Another good example:** "Launch AI-powered personalization to convert visitors into advocates (current: generic experience)"
+**Bad example:** "Add more content" ← Process thinking, not possibility thinking!
 
 Return ONLY the JSON array, no explanations.
 """
@@ -425,14 +461,25 @@ async def generate_ai_executive_summary(
     language: str,
     llm_client: LLMClient
 ) -> Optional[str]:
-    """Generate executive summary"""
+    """Generate executive summary with growth and possibility focus"""
     
     numbers = context['numbers']
     metadata = context['metadata']
     
     lang_instruction = LANGUAGE_INSTRUCTIONS.get(language, LANGUAGE_INSTRUCTIONS['en'])
     
-    prompt = f"""You are a business analyst writing for C-level executives. {lang_instruction}
+    # Radical creativity lens for executives
+    exec_framework = """
+**EXECUTIVE LENS:**
+- Focus on GROWTH POTENTIAL, not just current gaps
+- Frame weaknesses as market opportunities
+- Think: "What new territory can we capture?" not "What's broken?"
+- Creative permission beats creative intelligence
+"""
+    
+    prompt = f"""You are a growth-oriented business strategist writing for C-level executives. {lang_instruction}
+
+{exec_framework}
 
 **Context:**
 ```json
@@ -442,10 +489,15 @@ async def generate_ai_executive_summary(
 **Task:**
 Write a 2-3 sentence executive summary that:
 1. States the overall_score from context.numbers
-2. Highlights 1-2 key strengths or weaknesses
-3. Mentions one critical priority
+2. Frames gaps as GROWTH OPPORTUNITIES (not just problems)
+3. Highlights untapped potential or new market reach
+4. Ends with possibility thinking, not process thinking
 
-**Example:** "Digital maturity score is {numbers['overall_score']}/100, indicating [assessment]. [Key insight]. [Priority action]."
+**Good example:** "Digital maturity score is {numbers['overall_score']}/100. Current mobile gap represents €X/month opportunity to capture 70% market segment currently unreachable. Transforming digital presence = new revenue streams."
+
+**Bad example:** "Score is low. Need to fix mobile and SEO." ← Process thinking!
+
+**Another good example:** "At {numbers['overall_score']}/100, you're leaving competitors room to own segments you should dominate. Every point gap = lost market share. Time to build what didn't exist."
 
 Return ONLY the summary text, 50-200 words.
 """
@@ -573,42 +625,45 @@ def fallback_swot(context: Dict[str, Any], language: str) -> Dict[str, Any]:
     }
 
 def fallback_recommendations(context: Dict[str, Any], language: str) -> List[str]:
-    """Rule-based recommendations fallback"""
+    """Rule-based recommendations fallback with growth mindset"""
     
     numbers = context['numbers']
     flags = context['flags']
     recommendations = []
     
+    # Growth-oriented fallbacks (not just "fix X")
     if numbers['security_score'] <= 5:
-        recommendations.append("Install SSL certificate immediately")
+        recommendations.append(f"Transform security = build trust that converts (security: {numbers['security_score']}/15 → trust = revenue)")
     
     if numbers['content_score'] <= 8:
-        recommendations.append("Develop comprehensive content strategy")
+        recommendations.append(f"Content strategy that drives new segments, not just fills pages (content: {numbers['content_score']}/15 → reach expansion)")
     
     if not flags['has_analytics']:
-        recommendations.append("Install Google Analytics 4")
+        recommendations.append("Install analytics + personalization = data-driven growth, not just measurement")
     
     if numbers['mobile_score'] < 10:
-        recommendations.append("Implement responsive design")
+        recommendations.append(f"Mobile-first = capture 70% market unreachable today (mobile: {numbers['mobile_score']}/15 → new territory)")
     
     if numbers['seo_score'] < 12:
-        recommendations.append("Optimize SEO fundamentals")
+        recommendations.append(f"SEO transformation = organic growth engine 24/7 (SEO: {numbers['seo_score']}/20 → autopilot revenue)")
     
-    return recommendations[:5] or ["Continue monitoring and optimization"]
+    return recommendations[:5] or ["Digital transformation = create what didn't exist, not just improve what does"]
 
 def fallback_summary(context: Dict[str, Any], language: str) -> str:
-    """Rule-based summary fallback"""
+    """Rule-based summary fallback with growth lens"""
     
     score = context['numbers']['overall_score']
+    gap = 90 - score
     
+    # Frame everything as opportunity, not just status
     if score >= 75:
-        return f"Excellent digital maturity ({score}/100) - industry leader position."
+        return f"Strong position ({score}/100) - opportunity to dominate market segments competitors can't reach. Every point = competitive moat."
     elif score >= 60:
-        return f"Good digital presence ({score}/100) with solid fundamentals."
+        return f"Solid foundation ({score}/100) with {gap}-point growth territory available. Gaps = untapped revenue streams waiting to activate."
     elif score >= 45:
-        return f"Baseline achieved ({score}/100) with clear improvement path."
+        return f"Baseline achieved ({score}/100). {gap} points = market segments you don't own yet. Time to build what competitors haven't imagined."
     else:
-        return f"Early-stage digital maturity ({score}/100) - immediate action required."
+        return f"Early-stage ({score}/100) = massive white space opportunity. {gap} points to capture = transform reach, not just flavour. Creative permission needed."
 
 def fallback_action_priority(context: Dict[str, Any], language: str) -> List[Dict[str, Any]]:
     """Rule-based action priority fallback"""
@@ -769,318 +824,6 @@ async def generate_full_ai_insights(
     logger.info(f"✅ AI insights generated successfully (hash: {context_hash})")
     
     return result
-
-# ============================================================================
-# RADICAL CREATIVITY ANALYSIS
-# ============================================================================
-
-async def generate_radical_creativity_analysis(
-    context: Dict[str, Any],
-    your_messaging: Dict[str, str],
-    competitor_messaging: List[Dict[str, str]],
-    language: str,
-    llm_client: 'LLMClient'
-) -> Dict[str, Any]:
-    """
-    AI-powered analysis of brand creative boldness and differentiation.
-    
-    Args:
-        context: Structured website context
-        your_messaging: Your messaging (headline, description, tone)
-        competitor_messaging: Competitor messaging data
-        language: 'en' or 'fi'
-        llm_client: LLM client instance
-        
-    Returns:
-        Dict with creative_boldness_score (0-100), classification, analysis, opportunities
-    """
-    
-    if not llm_client or not llm_client.client:
-        logger.warning("LLM client not available for creativity analysis")
-        return _fallback_creativity_analysis(language)
-    
-    your_headline = your_messaging.get('headline', 'N/A')
-    your_description = your_messaging.get('description', 'N/A')
-    your_tone = your_messaging.get('tone', 'Unknown')
-    
-    comp_headlines = [c.get('headline', 'N/A') for c in competitor_messaging[:5]]
-    comp_descriptions = [c.get('description', 'N/A') for c in competitor_messaging[:5]]
-    
-    has_custom_imagery = context.get('visuals', {}).get('has_custom_imagery', False)
-    industry = context.get('industry', 'General')
-    
-    lang_instruction = LANGUAGE_INSTRUCTIONS.get(language, LANGUAGE_INSTRUCTIONS['en'])
-    
-    prompt = f"""Analyze this company's CREATIVE BOLDNESS and brand differentiation.
-
-🎯 COMPANY MESSAGING:
-Headline: "{your_headline}"
-Description: "{your_description}"
-Tone: {your_tone}
-
-🔍 COMPETITORS ({len(competitor_messaging)} analyzed):
-Their headlines: {', '.join(f'"{h}"' for h in comp_headlines[:3])}
-Their descriptions: {', '.join(f'"{d[:80]}..."' for d in comp_descriptions[:3])}
-
-📊 INDUSTRY: {industry}
-🎨 Custom imagery: {'Yes' if has_custom_imagery else 'No (stock photos)'}
-
-TASK:
-Evaluate how BOLD and DISTINCTIVE this brand is compared to competitors.
-Be honest - most companies are generic. Don't sugarcoat.
-
-Respond in JSON format:
-{{
-  "creative_boldness_score": <number 0-100, where 0=generic, 50=baseline, 75=bold, 100=disruptive>,
-  "classification": "<Disruptor (85-100) / Differentiator (65-84) / Conventional (40-64) / Generic (0-39)>",
-  "visual_boldness_analysis": "<2-3 sentences about visual identity being bold or safe>",
-  "narrative_boldness_analysis": "<2-3 sentences about messaging distinctiveness vs competitors>",
-  "competitive_creative_position": "<One sentence: where you stand on creativity spectrum vs competitors>",
-  "specific_observations": ["<3-4 concrete observations about what makes this generic OR distinctive>"],
-  "opportunities": ["<3-5 CONCRETE ways to improve creative boldness - be specific>"],
-  "strategic_recommendation": "<Main action: If you did ONE thing to increase boldness score, what would it be?>"
-}}
-
-CRITICAL: Be HONEST, compare to COMPETITORS, give CONCRETE examples, no vague advice.
-{lang_instruction}
-"""
-    
-    try:
-        import json
-        response = await llm_client.client.chat.completions.create(
-            model=llm_client.model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=1500,
-            temperature=0.6,
-            response_format={"type": "json_object"}
-        )
-        
-        result = json.loads(response.choices[0].message.content)
-        result['creative_boldness_score'] = max(0, min(100, int(result.get('creative_boldness_score', 50))))
-        
-        logger.info(f"✅ Creative boldness: {result['creative_boldness_score']}/100 - {result.get('classification', 'Unknown')}")
-        return result
-        
-    except Exception as e:
-        logger.error(f"Creative boldness analysis failed: {e}")
-        return _fallback_creativity_analysis(language)
-
-
-def _fallback_creativity_analysis(language: str) -> Dict[str, Any]:
-    """Fallback if AI analysis fails"""
-    return {
-        "creative_boldness_score": 50,
-        "classification": "Conventional",
-        "visual_boldness_analysis": "Analysis unavailable - AI service did not respond.",
-        "narrative_boldness_analysis": "Could not evaluate messaging distinctiveness automatically.",
-        "competitive_creative_position": "No competitive comparison available",
-        "specific_observations": ["AI analysis failed - manual review recommended"],
-        "opportunities": [
-            "Review visual identity and color palette for distinctiveness",
-            "Analyze competitor messaging to identify differentiation gaps",
-            "Consider bold storytelling approaches"
-        ],
-        "strategic_recommendation": "Conduct manual brand audit to identify creative opportunities"
-    }
-
-
-# ============================================================================
-# ENHANCED ROLE-BASED RECOMMENDATIONS
-# ============================================================================
-
-async def generate_role_based_recommendations(
-    context: Dict[str, Any],
-    competitive_position: Dict[str, Any],
-    market_gaps: List[Dict[str, Any]],
-    creative_analysis: Dict[str, Any],
-    impact_estimate: Dict[str, Any],
-    language: str,
-    llm_client: 'LLMClient'
-) -> Dict[str, Any]:
-    """
-    Generate personalized recommendations for CEO, CMO, and CTO.
-    
-    Each role gets strategic context, priorities, impact, and concrete actions.
-    
-    Args:
-        context: Full analysis context
-        competitive_position: Market positioning data
-        market_gaps: Identified opportunities
-        creative_analysis: Creative boldness assessment
-        impact_estimate: Revenue/lead projections
-        language: 'en' or 'fi'
-        llm_client: LLM client
-        
-    Returns:
-        Dict with 'ceo', 'cmo', 'cto' keys containing role-specific recommendations
-    """
-    
-    if not llm_client or not llm_client.client:
-        logger.warning("LLM client not available for role recommendations")
-        return _fallback_role_recommendations(context, language)
-    
-    score = context['numbers']['overall_score']
-    industry = context.get('industry', 'General')
-    positioning = competitive_position.get('positioning_quadrant', 'Unknown')
-    creative_score = creative_analysis.get('creative_boldness_score', 50)
-    creative_class = creative_analysis.get('classification', 'Conventional')
-    
-    top_gaps = sorted(market_gaps, key=lambda x: x.get('priority_score', 0), reverse=True)[:3]
-    gap_titles = [g.get('gap_title', 'Unknown') for g in top_gaps]
-    
-    revenue_range = impact_estimate.get('revenue_uplift_range', 'Not estimated')
-    lead_estimate = impact_estimate.get('lead_gain_estimate', 'Not estimated')
-    
-    tech_priorities = []
-    if not context['numbers'].get('has_ssl', True):
-        tech_priorities.append("SSL certificate (CRITICAL)")
-    if context['numbers'].get('page_speed_score', 100) < 60:
-        tech_priorities.append("Performance optimization")
-    if context['numbers'].get('mobile_score', 10) < 8:
-        tech_priorities.append("Mobile responsiveness")
-    
-    content_score = context['numbers'].get('content_score', 10)
-    has_blog = context.get('has_blog', False)
-    
-    lang_instruction = LANGUAGE_INSTRUCTIONS.get(language, LANGUAGE_INSTRUCTIONS['en'])
-    
-    prompt = f"""Generate personalized strategic recommendations for three executive roles: CEO, CMO, and CTO.
-
-📊 COMPANY CONTEXT:
-- Digital Maturity Score: {score}/100
-- Market Position: {positioning}
-- Creative Boldness: {creative_score}/100 ({creative_class})
-- Industry: {industry}
-
-💰 BUSINESS IMPACT POTENTIAL:
-- Revenue Uplift: {revenue_range}
-- Lead Generation: {lead_estimate}
-
-🎯 TOP 3 MARKET OPPORTUNITIES:
-1. {gap_titles[0] if len(gap_titles) > 0 else 'N/A'}
-2. {gap_titles[1] if len(gap_titles) > 1 else 'N/A'}
-3. {gap_titles[2] if len(gap_titles) > 2 else 'N/A'}
-
-🔧 TECHNICAL STATE:
-- Priority issues: {', '.join(tech_priorities) if tech_priorities else 'No critical issues'}
-- Performance score: {context['numbers'].get('page_speed_score', 'N/A')}/100
-
-📝 CONTENT STATE:
-- Content score: {content_score}/20
-- Blog: {'Active' if has_blog else 'Missing'}
-
-TASK:
-Create personalized recommendations for each role. Each executive needs to understand:
-1. Their specific priorities
-2. Why it matters (business impact)
-3. What to do (concrete actions)
-4. Timeline and resources needed
-
-Respond in JSON format:
-{{
-  "ceo": {{
-    "strategic_context": "<2-3 sentences: Where we are competitively and why it matters>",
-    "top_priorities": ["<3 strategic priorities for next 90 days - focus on business outcomes>"],
-    "expected_impact": "<Business impact: revenue, market position, competitive advantage>",
-    "key_decisions": ["<2-3 decisions CEO needs to make: budget, hiring, strategic focus>"],
-    "timeline": "<Realistic timeline e.g. '3-6 months to see material impact'>",
-    "risk_assessment": "<Biggest risk if we don't act>"
-  }},
-  
-  "cmo": {{
-    "growth_strategy": "<2-3 sentences: How to drive customer acquisition and revenue>",
-    "channel_priorities": ["<3-4 channel/tactic priorities - be specific>"],
-    "content_roadmap": "<What content to create, why, and expected results>",
-    "brand_positioning": "<How to leverage creative boldness score of {creative_score}/100>",
-    "quick_wins": ["<2-3 things CMO can do in next 30 days for immediate impact>"],
-    "metrics_to_track": ["<3-4 KPIs CMO should monitor weekly>"]
-  }},
-  
-  "cto": {{
-    "technical_priorities": ["<3-5 prioritized technical improvements - ordered critical to nice-to-have>"],
-    "sprint_roadmap": {{
-      "sprint_1_2": "<Weeks 1-2 focus>",
-      "sprint_3_4": "<Weeks 3-4 focus>",
-      "sprint_5_6": "<Weeks 5-6 focus>"
-    }},
-    "performance_targets": "<Specific Core Web Vitals targets to hit>",
-    "tech_debt_assessment": "<Tech debt vs new features ratio recommendation>",
-    "resource_needs": "<Team size/skills needed to execute>",
-    "scalability_plan": "<What breaks first when traffic/business scales?>"
-  }}
-}}
-
-CRITICAL RULES:
-- Be SPECIFIC and ACTIONABLE, not vague
-- Each role gets THEIR perspective - CEO strategic, CMO growth, CTO technical
-- Include NUMBERS where possible (timelines, targets, budgets)
-- Don't repeat same info across roles - tailor to each executive
-{lang_instruction}
-"""
-    
-    try:
-        import json
-        response = await llm_client.client.chat.completions.create(
-            model=llm_client.model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=2000,
-            temperature=0.5,
-            response_format={"type": "json_object"}
-        )
-        
-        result = json.loads(response.choices[0].message.content)
-        logger.info("✅ Role-based recommendations generated for CEO, CMO, CTO")
-        return result
-        
-    except Exception as e:
-        logger.error(f"Role recommendations generation failed: {e}")
-        return _fallback_role_recommendations(context, language)
-
-
-def _fallback_role_recommendations(context: Dict[str, Any], language: str) -> Dict[str, Any]:
-    """Fallback if AI generation fails"""
-    score = context['numbers']['overall_score']
-    
-    return {
-        "ceo": {
-            "strategic_context": f"Current digital maturity: {score}/100. AI analysis unavailable.",
-            "top_priorities": [
-                "Review digital strategy and competitive positioning",
-                "Assess resource allocation for digital improvements",
-                "Define success metrics and accountability"
-            ],
-            "expected_impact": "Impact estimation requires AI analysis",
-            "key_decisions": ["Budget allocation for digital transformation"],
-            "timeline": "3-6 months for material impact",
-            "risk_assessment": "Falling behind competitors in digital capabilities"
-        },
-        "cmo": {
-            "growth_strategy": "Growth strategy requires AI analysis for personalization.",
-            "channel_priorities": ["SEO optimization", "Content marketing", "Social media presence", "Conversion optimization"],
-            "content_roadmap": "Develop content calendar with focus on thought leadership and SEO",
-            "brand_positioning": "Requires creative boldness analysis",
-            "quick_wins": ["Fix meta descriptions", "Add Open Graph tags", "Optimize page titles for SEO"],
-            "metrics_to_track": ["Organic traffic", "Lead quality score", "Conversion rate by channel", "Customer acquisition cost"]
-        },
-        "cto": {
-            "technical_priorities": [
-                "SSL certificate if missing (CRITICAL)",
-                "Performance optimization (Core Web Vitals)",
-                "Mobile responsiveness improvements",
-                "Analytics implementation and monitoring"
-            ],
-            "sprint_roadmap": {
-                "sprint_1_2": "Critical security fixes (SSL, headers)",
-                "sprint_3_4": "Performance optimization (images, caching)",
-                "sprint_5_6": "Mobile UX and responsiveness improvements"
-            },
-            "performance_targets": "LCP < 2.5s, FID < 100ms, CLS < 0.1 (Core Web Vitals 'Good' threshold)",
-            "tech_debt_assessment": "Requires manual technical audit to assess current debt level",
-            "resource_needs": "1-2 full-stack developers for 3 months",
-            "scalability_plan": "Address performance bottlenecks before traffic scaling"
-        }
-    }
-
 
 # ============================================================================
 # TESTING & DEVELOPMENT
