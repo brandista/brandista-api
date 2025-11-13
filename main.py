@@ -9684,6 +9684,15 @@ async def analyze_competitive_radar(
         
         # ✅ Lisää enhanced_swot ja creative_boldness your_analysis.ai_analysis:iin
         if enhanced_swot:
+            # Debug: Näytä mitä SWOT sisältää
+            logger.info(f"[Radar] 📊 Enhanced SWOT contents:")
+            logger.info(f"[Radar]    - Strengths: {len(enhanced_swot.get('strengths', []))}")
+            logger.info(f"[Radar]    - Weaknesses: {len(enhanced_swot.get('weaknesses', []))}")
+            logger.info(f"[Radar]    - Opportunities: {len(enhanced_swot.get('opportunities', []))}")
+            logger.info(f"[Radar]    - Threats: {len(enhanced_swot.get('threats', []))}")
+            if enhanced_swot.get('strengths'):
+                logger.info(f"[Radar]    - First strength: {enhanced_swot['strengths'][0]}")
+            
             your_analysis['ai_analysis']['enhanced_swot'] = enhanced_swot
             logger.info("[Radar] ✅ Added enhanced_swot to your_analysis.ai_analysis")
         
