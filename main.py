@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Brandista Competitive Intelligence API - Complete Unified Version
-Version: 6.4.0 - Production Ready
+Version: 6.4.2 - Production Ready
 Author: Brandista Team
 Date: 2025
 Description: Complete production-ready website analysis with configurable scoring system and comprehensive SPA support
@@ -335,7 +335,7 @@ REDIS_URL = os.getenv("REDIS_URL")
 # INITIALIZE SERVICES
 # ============================================================================
 
-# Global variables
+# Global variables (single source of truth)
 analysis_cache: Dict[str, Dict[str, Any]] = {}
 user_search_counts: Dict[str, int] = {}
 magic_link_auth = None
@@ -343,6 +343,7 @@ oauth = None
 redis_client = None
 task_queue = None
 openai_client = None
+history_db = None  # Type hint added in imports if AnalysisHistoryDB available
 
 # Log initial configuration
 logger.info(f"Starting {APP_NAME} v{APP_VERSION}")
@@ -723,18 +724,15 @@ except ImportError as e:
     def init_database(): pass
 
 # ============================================================================
-# GLOBAL VARIABLES
+# GLOBAL VARIABLES - Already defined above at line 335+
 # ============================================================================
+# NOTE: Global variables defined earlier to avoid duplicates
 
-analysis_cache: Dict[str, Dict[str, Any]] = {}
-user_search_counts: Dict[str, int] = {}
-magic_link_auth = None
-history_db: Optional[AnalysisHistoryDB] = None  # Analysis history database
 # ============================================================================
 # OPENAI SETUP
 # ============================================================================
 
-openai_client = None
+# Use global openai_client defined above
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 if OPENAI_AVAILABLE and os.getenv("OPENAI_API_KEY"):
@@ -793,12 +791,11 @@ async def detect_spa_framework(html_content: str) -> Dict[str, Any]:
     }
 
 # ============================================================================
-# REDIS TASK QUEUE SETUP (MOVED HERE - OUTSIDE FUNCTION!)
+# REDIS TASK QUEUE SETUP
 # ============================================================================
 
+# Use global redis_client and task_queue defined above
 REDIS_URL = os.getenv("REDIS_URL")
-redis_client = None
-task_queue = None
 
 if REDIS_URL:
     try:
@@ -1632,7 +1629,7 @@ app.add_middleware(
         "http://127.0.0.1:3000",
         "https://brandista.eu",
         "https://www.brandista.eu",
-        "https://fastapi-production-51f9.up.railway.app"
+        "https://fastapi-production-51f9.up.railway.app",
         "https://3000-ip92lxeccquecaiidxzl0-6aa4782a.manusvm.computer"
     ],
     allow_credentials=True,
@@ -5184,6 +5181,43 @@ async def generate_ai_insights(
     modernity_score = basic.get('modernity_score', 0)
     
     insights = generate_english_insights(overall, basic, technical, content, ux, social)
+    
+    # ✅ GENERATE ENHANCED SWOT (always, for all analyses)
+    logger.info(f"[AI Insights] Generating enhanced SWOT for {url}")
+    try:
+        # Build minimal analysis dict for SWOT generation
+        temp_analysis = {
+            'basic_analysis': basic,
+            'detailed_analysis': {
+                'technical_audit': technical,
+                'content_analysis': content,
+                'ux_analysis': ux,
+                'social_media': social
+            }
+        }
+        
+        enhanced_swot = await generate_competitive_swot_analysis(
+            temp_analysis,
+            competitor_analyses=None,  # Single analysis, no competitors
+            language=language
+        )
+        
+        # Replace basic SWOT with enhanced SWOT
+        insights['enhanced_swot'] = enhanced_swot
+        
+        # Keep backward compatibility: also keep root-level SWOT as strings
+        # (for old frontend code that might still use them)
+        insights['strengths'] = [s.get('area', s.get('finding', '')) for s in enhanced_swot.get('strengths', [])]
+        insights['weaknesses'] = [w.get('area', w.get('finding', '')) for w in enhanced_swot.get('weaknesses', [])]
+        insights['opportunities'] = [o.get('area', o.get('opportunity', '')) for o in enhanced_swot.get('opportunities', [])]
+        insights['threats'] = [t.get('threat', '') for t in enhanced_swot.get('threats', [])]
+        
+        logger.info(f"[AI Insights] ✅ Enhanced SWOT complete: {len(enhanced_swot.get('strengths', []))} strengths, {len(enhanced_swot.get('weaknesses', []))} weaknesses")
+        
+    except Exception as e:
+        logger.error(f"[AI Insights] ❌ Enhanced SWOT failed: {e}", exc_info=True)
+        # Keep basic SWOT as fallback
+        logger.warning("[AI Insights] Falling back to basic SWOT")
     
     # Enhance with OpenAI if available
     if openai_client:
