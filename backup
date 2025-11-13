@@ -193,6 +193,20 @@ except ImportError as e:
     def get_user_preferences_from_db(username): return None
 
 # ============================================================================
+# ANALYSIS HISTORY DATABASE
+# ============================================================================
+try:
+    from analysis_history_db import AnalysisHistoryDB, AnalysisRecord, UserUsage
+    HISTORY_DB_AVAILABLE = True
+    logger.info("✅ Analysis history module imported successfully")
+except ImportError as e:
+    logger.warning(f"⚠️ Analysis history module not available: {e}")
+    HISTORY_DB_AVAILABLE = False
+    AnalysisHistoryDB = None
+    AnalysisRecord = None
+    UserUsage = None
+
+# ============================================================================
 # CONSTANTS AND VERSION INFO
 # ============================================================================
 APP_VERSION = "6.3.1"
@@ -715,6 +729,7 @@ except ImportError as e:
 analysis_cache: Dict[str, Dict[str, Any]] = {}
 user_search_counts: Dict[str, int] = {}
 magic_link_auth = None
+history_db: Optional[AnalysisHistoryDB] = None  # Analysis history database
 # ============================================================================
 # OPENAI SETUP
 # ============================================================================
@@ -1441,7 +1456,7 @@ from contextlib import asynccontextmanager
 async def lifespan(app: FastAPI):
     """Modern lifespan context manager (replaces deprecated @app.on_event)"""
     # Startup
-    global magic_link_auth, redis_client, task_queue, oauth
+    global magic_link_auth, redis_client, task_queue, oauth, history_db
     
     # 1. Initialize database if enabled
     if DATABASE_ENABLED:
@@ -1473,6 +1488,21 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"❌ Database initialization failed: {e}")
             logger.info("⚠️ Continuing with hardcoded users only")
+    
+    # 1.5. Initialize Analysis History Database
+    if HISTORY_DB_AVAILABLE and os.getenv("DATABASE_URL"):
+        try:
+            history_db = AnalysisHistoryDB(os.getenv("DATABASE_URL"))
+            await history_db.connect()
+            logger.info("✅ Analysis history database initialized")
+        except Exception as e:
+            logger.error(f"❌ Analysis history DB initialization failed: {e}")
+            history_db = None
+    else:
+        if not HISTORY_DB_AVAILABLE:
+            logger.warning("⚠️ Analysis history module not available")
+        if not os.getenv("DATABASE_URL"):
+            logger.warning("⚠️ DATABASE_URL not set - history disabled")
     
     # 2. Initialize Redis and task queue (already done globally but verify)
     if REDIS_URL and not redis_client:
@@ -1562,6 +1592,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"📧 Magic Link: {'ready' if magic_link_auth else 'not available'}")
     logger.info(f"🗄️ Redis: {'connected' if redis_client else 'not connected'}")
     logger.info(f"🗃️ Database: {'connected' if DATABASE_ENABLED else 'not connected'}")
+    logger.info(f"📜 Analysis History: {'enabled' if history_db else 'disabled'}")
     
     # 6. Environment warnings
     
@@ -1572,6 +1603,13 @@ async def lifespan(app: FastAPI):
     yield
     
     # Shutdown (cleanup code here if needed)
+    if history_db:
+        try:
+            await history_db.disconnect()
+            logger.info("🗄️ Analysis history database closed")
+        except Exception as e:
+            logger.error(f"❌ Error closing history DB: {e}")
+    
     logger.info("🛑 Shutting down application")
 
 # Now recreate app WITH lifespan
@@ -1754,6 +1792,11 @@ logger.info(f"📋 Users: {', '.join(USERS_DB.keys())}")
 # ✅ LOG FINAL USER COUNT
 logger.info(f"👥 Total users loaded: {len(USERS_DB)}")
 logger.info(f"📋 Users: {', '.join(USERS_DB.keys())}")
+
+# ============================================================================
+# TRANSLATION MODULE IMPORT
+# ============================================================================
+from translations_module import TRANSLATIONS, t
 
 # ============================================================================
 # COMPLETE PYDANTIC MODELS
@@ -4623,7 +4666,7 @@ def build_plan_90d(basic: Dict[str, Any], content: Dict[str, Any], technical: Di
         }
     )
 
-def build_risk_register(basic: Dict[str, Any], technical: Dict[str, Any], content: Dict[str, Any]) -> List[RiskItem]:
+def build_risk_register(basic: Dict[str, Any], technical: Dict[str, Any], content: Dict[str, Any], language: str = 'en') -> List[RiskItem]:
     """Build risk register with likelihood, impact, mitigation"""
     risks = []
     breakdown = basic.get('score_breakdown', {})
@@ -4631,67 +4674,67 @@ def build_risk_register(basic: Dict[str, Any], technical: Dict[str, Any], conten
     # Content risk
     if content.get('content_quality_score', 0) < 50:
         risks.append(RiskItem(
-            risk="Thin content → weak rankings",
+            risk=t('risk_register', 'thin_content', language),
             likelihood=3,
             impact=3,
-            mitigation="Pillar/cluster content plan",
+            mitigation=t('risk_register', 'thin_content_mitigation', language),
             risk_score=9
         ))
     
     # SPA risk
     if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
         risks.append(RiskItem(
-            risk="SPA client-only rendering → low visibility",
+            risk=t('risk_register', 'spa_risk', language),
             likelihood=3,
             impact=4,
-            mitigation="SSR/prerender critical routes",
+            mitigation=t('risk_register', 'spa_mitigation', language),
             risk_score=12
         ))
     
     # Security risk
     if breakdown.get('security', 0) < 10:
         risks.append(RiskItem(
-            risk="Weak security → trust/SEO penalty",
+            risk=t('risk_register', 'weak_security', language),
             likelihood=2,
             impact=4,
-            mitigation="Install SSL + security headers",
+            mitigation=t('risk_register', 'security_mitigation', language),
             risk_score=8
         ))
     
     # Mobile risk
     if breakdown.get('mobile', 0) < 10:
         risks.append(RiskItem(
-            risk="Poor mobile UX → high bounce rate",
+            risk=t('risk_register', 'poor_mobile', language),
             likelihood=4,
             impact=3,
-            mitigation="Responsive design + CWV optimization",
+            mitigation=t('risk_register', 'mobile_mitigation', language),
             risk_score=12
         ))
     
     return risks
 
 
-def build_snippet_examples(url: str, basic: Dict[str, Any]) -> SnippetExamples:
+def build_snippet_examples(url: str, basic: Dict[str, Any], language: str = 'en') -> SnippetExamples:
     """Build SEO snippet examples"""
     domain = get_domain_from_url(url).capitalize()
     
     return SnippetExamples(
         seo_title=[
-            f"{domain} — fast, modern & reliable",
-            f"{domain}: solutions that drive results",
-            f"{domain} | Everything you need to grow"
+            f"{domain} {t('snippet_examples', 'title_1', language)}",
+            f"{domain}{t('snippet_examples', 'title_2', language)}",
+            f"{domain} {t('snippet_examples', 'title_3', language)}"
         ],
         meta_desc=[
-            f"{domain} helps you get measurable results. Explore features, stories and pricing — start today.",
-            f"Modern {domain} with impact. See how teams ship better experiences. Try now."
+            t('snippet_examples', 'desc_1', language, domain=domain),
+            t('snippet_examples', 'desc_2', language, domain=domain)
         ],
         h1_intro=[
-            f"{domain} that gets the job done.",
-            f"Build, ship and grow with {domain}."
+            t('snippet_examples', 'h1_1', language, domain=domain),
+            t('snippet_examples', 'h1_2', language, domain=domain)
         ],
         product_copy=[
-            "Value prop in 1–2 lines → 2–3 benefits with proof → single CTA.",
-            "Problem → outcome → proof → CTA. Keep it scannable (40–80 words)."
+            t('snippet_examples', 'product_1', language),
+            t('snippet_examples', 'product_2', language)
         ]
     )
 # ============================================================================
@@ -5192,8 +5235,8 @@ async def generate_ai_insights(
         
         role = build_role_summaries(url, basic, impact, language=language)
         plan = build_plan_90d(basic, content, technical, language=language)  
-        risks = build_risk_register(basic, technical, content)
-        snippets = build_snippet_examples(url, basic)
+        risks = build_risk_register(basic, technical, content, language=language)
+        snippets = build_snippet_examples(url, basic, language=language)
 
         insights.update({
             "business_impact": detailed_impact.model_dump(),  # FIX 10: Pydantic V2
@@ -7671,6 +7714,16 @@ async def discover_competitors(
         )
     
     # === 1.5. CHECK SUBSCRIPTION LIMITS ===
+    # First check history_db if available (most accurate)
+    if history_db and user.role not in ["admin", "super_user"]:
+        can_proceed, error_msg = await history_db.check_user_limit(
+            user.username,
+            'discovery'
+        )
+        if not can_proceed:
+            raise HTTPException(403, error_msg or "Discovery limit reached")
+    
+    # Then check Stripe limits if available  
     if STRIPE_AVAILABLE and stripe_manager:
         user_data = USERS_DB.get(user.email, {})
         tier_str = user_data.get("subscription_tier", "free")
@@ -7993,6 +8046,32 @@ async def discover_competitors(
                     "duration_seconds": (datetime.now() - start_time).total_seconds()
                 })
                 
+                # === SAVE TO HISTORY DATABASE ===
+                if history_db:
+                    try:
+                        # Get all results from task
+                        task_data = task_queue.get_task(task_id)
+                        competitor_analyses = task_data.get("results", [])
+                        
+                        analysis_id = await history_db.save_competitor_discovery(
+                            user_id=user.username,
+                            url=request.url,
+                            industry=request.industry,
+                            country_code=request.country_code,
+                            max_competitors=request.max_competitors,
+                            search_terms=search_terms,
+                            search_provider="multi_provider",
+                            competitors=competitor_analyses,
+                            summary={
+                                "successful": successful_count,
+                                "failed": failed_count,
+                                "duration_seconds": (datetime.now() - start_time).total_seconds()
+                            }
+                        )
+                        logger.info(f"💾 Discovery saved to history: ID {analysis_id}")
+                    except Exception as e:
+                        logger.error(f"❌ Failed to save discovery to history: {e}")
+                
                 logger.info(
                     f"🏁 Discovery task {task_id} completed for {user.username}: "
                     f"{successful_count}/{required_analyses} successful in "
@@ -8239,16 +8318,29 @@ async def ai_analyze_comprehensive(
 ):
     """Complete comprehensive website analysis with full SPA support."""
     try:
-        # === QUOTA CHECK ===
+        # === QUOTA CHECK - Use database if available ===
         if user.role != "admin":
-            user_limit = USERS_DB.get(user.username, {}).get("search_limit", DEFAULT_USER_LIMIT)
-            current_count = user_search_counts.get(user.username, 0)
-            
-            if user_limit > 0 and current_count >= user_limit:
-                raise HTTPException(
-                    status_code=403, 
-                    detail=f"Search limit reached ({user_limit} searches). Contact admin for more quota."
+            if history_db:
+                # Check quota from database
+                can_proceed, error_msg = await history_db.check_user_limit(
+                    user.username,
+                    'single'
                 )
+                if not can_proceed:
+                    raise HTTPException(
+                        status_code=403,
+                        detail=error_msg or "Analysis limit reached"
+                    )
+            else:
+                # Fallback to in-memory quota
+                user_limit = USERS_DB.get(user.username, {}).get("search_limit", DEFAULT_USER_LIMIT)
+                current_count = user_search_counts.get(user.username, 0)
+                
+                if user_limit > 0 and current_count >= user_limit:
+                    raise HTTPException(
+                        status_code=403, 
+                        detail=f"Search limit reached ({user_limit} searches). Contact admin for more quota."
+                    )
         
         # === URL VALIDATION ===
         url = clean_url(request.url)
@@ -8264,9 +8356,27 @@ async def ai_analyze_comprehensive(
             revenue_input=None
         )
         
+        # === SAVE TO DATABASE ===
+        if history_db:
+            try:
+                analysis_id = await history_db.save_single_analysis(
+                    user_id=user.username,
+                    url=url,
+                    company_name=request.company_name,
+                    language=request.language,
+                    analysis_result=result
+                )
+                logger.info(f"💾 Analysis saved to history: ID {analysis_id}")
+            except Exception as e:
+                logger.error(f"❌ Failed to save analysis to history: {e}")
+                # Continue even if save fails - don't block the analysis
+        
         # === POST-PROCESSING ===
-        if user.role != "admin":
+        if user.role != "admin" and not history_db:
+            # Only use in-memory counter if database not available
+            current_count = user_search_counts.get(user.username, 0)
             user_search_counts[user.username] = current_count + 1
+            user_limit = USERS_DB.get(user.username, {}).get("search_limit", DEFAULT_USER_LIMIT)
             logger.info(
                 f"Quota: {user.username} used {user_search_counts[user.username]}/{user_limit}"
             )
@@ -8416,6 +8526,131 @@ async def get_my_discoveries(
 # (Discovery results endpoint is above at line ~7726)
 
 # ============================================================================
+# ANALYSIS HISTORY ENDPOINTS
+# ============================================================================
+
+@app.get("/api/v1/analysis-history", tags=["History"])
+async def get_analysis_history(
+    limit: int = 20,
+    analysis_type: Optional[str] = None,
+    user: UserInfo = Depends(require_user)
+):
+    """
+    Get user's analysis history.
+    
+    Parameters:
+    - limit: Number of results (max 100)
+    - analysis_type: Filter by 'single' or 'discovery'
+    """
+    if not history_db:
+        raise HTTPException(503, "Analysis history not available")
+    
+    if limit > 100:
+        limit = 100
+    
+    try:
+        history = await history_db.get_user_history(
+            user_id=user.username,
+            limit=limit,
+            analysis_type=analysis_type
+        )
+        
+        return {
+            "history": [
+                {
+                    "id": record.id,
+                    "type": record.analysis_type,
+                    "url": record.url,
+                    "company_name": record.company_name,
+                    "status": record.status,
+                    "score": record.score,
+                    "competitors_count": record.competitors_count,
+                    "created_at": record.created_at.isoformat(),
+                    "completed_at": record.completed_at.isoformat() if record.completed_at else None
+                }
+                for record in history
+            ],
+            "total": len(history)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error fetching history: {e}")
+        raise HTTPException(500, "Failed to fetch history")
+
+
+@app.get("/api/v1/analysis-history/{analysis_id}", tags=["History"])
+async def get_analysis_details(
+    analysis_id: int,
+    user: UserInfo = Depends(require_user)
+):
+    """Get full details of a specific analysis"""
+    if not history_db:
+        raise HTTPException(503, "Analysis history not available")
+    
+    try:
+        details = await history_db.get_analysis_details(
+            analysis_id=analysis_id,
+            user_id=user.username
+        )
+        
+        if not details:
+            raise HTTPException(404, "Analysis not found")
+        
+        return details
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching analysis details: {e}")
+        raise HTTPException(500, "Failed to fetch analysis details")
+
+
+@app.get("/api/v1/user-usage", tags=["History"])
+async def get_user_usage_stats(
+    user: UserInfo = Depends(require_user)
+):
+    """Get user's usage statistics and limits"""
+    if not history_db:
+        raise HTTPException(503, "Usage stats not available")
+    
+    try:
+        usage = await history_db.get_user_usage(user.username)
+        
+        if not usage:
+            return {
+                "single_analyses_this_month": 0,
+                "discoveries_this_month": 0,
+                "total_single_analyses": 0,
+                "total_discoveries": 0,
+                "single_analysis_limit": 100,
+                "discovery_limit": 10
+            }
+        
+        return {
+            "single_analyses_this_month": usage.single_analyses_this_month,
+            "discoveries_this_month": usage.discoveries_this_month,
+            "total_single_analyses": usage.total_single_analyses,
+            "total_discoveries": usage.total_discoveries,
+            "total_competitors_analyzed": usage.total_competitors_analyzed,
+            "single_analysis_limit": usage.single_analysis_limit,
+            "discovery_limit": usage.discovery_limit,
+            "single_analyses_remaining": (
+                usage.single_analysis_limit - usage.single_analyses_this_month
+                if usage.single_analysis_limit > 0
+                else -1  # Unlimited
+            ),
+            "discoveries_remaining": (
+                usage.discovery_limit - usage.discoveries_this_month
+                if usage.discovery_limit > 0
+                else -1  # Unlimited
+            )
+        }
+        
+    except Exception as e:
+        logger.error(f"Error fetching usage stats: {e}")
+        raise HTTPException(500, "Failed to fetch usage stats")
+
+# ============================================================================
 # SYSTEM AND ADMIN ENDPOINTS
 # ============================================================================
 
@@ -8426,7 +8661,12 @@ async def root():
         "endpoints": {
             "health": "/health", 
             "auth": {"login": "/auth/login", "me": "/auth/me"},
-            "analysis": {"comprehensive": "/api/v1/ai-analyze", "basic": "/api/v1/analyze"}
+            "analysis": {"comprehensive": "/api/v1/ai-analyze", "basic": "/api/v1/analyze"},
+            "history": {
+                "list": "/api/v1/analysis-history",
+                "details": "/api/v1/analysis-history/{id}",
+                "usage": "/api/v1/user-usage"
+            } if history_db else {}
         },
         "features": [
             "JWT authentication with role-based access",
@@ -8435,7 +8675,8 @@ async def root():
             "SPA detection and smart rendering",
             "Playwright support for modern web apps",
             "AI-powered insights with OpenAI integration",
-            "Complete frontend compatibility"
+            "Complete frontend compatibility",
+            "Analysis history tracking" if history_db else None
         ],
         "capabilities": {
             "playwright_available": PLAYWRIGHT_AVAILABLE,
@@ -8443,7 +8684,8 @@ async def root():
             "spa_detection": True,
             "modern_web_analysis": True,
             "enhanced_features_count": 9,
-            "openai_available": bool(openai_client)
+            "openai_available": bool(openai_client),
+            "analysis_history": bool(history_db)
         },
         "scoring_system": {"version": "configurable_v1_complete", "weights": SCORING_CONFIG.weights}
     }
@@ -8961,6 +9203,223 @@ async def admin_delete_user(username: str, user: UserInfo = Depends(require_admi
     return {"ok": True, "message": f"User '{username}' deleted successfully"}
 
 # ============================================================================
+async def analyze_creative_boldness(
+    your_analysis: Dict[str, Any],
+    competitor_analyses: List[Dict[str, Any]],
+    language: str = 'en'
+) -> Dict[str, Any]:
+    """
+    Analyze creative boldness by comparing visual and narrative approaches.
+    
+    Returns:
+        Dict with:
+        - creative_boldness_score (0-100)
+        - classification (Timid/Safe/Bold/Radical)
+        - visual_boldness_analysis
+        - narrative_boldness_analysis
+        - competitive_creative_position
+        - specific_observations
+        - opportunities
+        - strategic_recommendation
+    """
+    
+    # Extract your data
+    your_basic = your_analysis.get('basic_analysis', {})
+    your_content = your_analysis.get('detailed_analysis', {}).get('content_analysis', {})
+    your_ux = your_analysis.get('detailed_analysis', {}).get('ux_analysis', {})
+    your_social = your_analysis.get('detailed_analysis', {}).get('social_media', {})
+    
+    your_score = your_basic.get('digital_maturity_score', 0)
+    your_word_count = your_content.get('word_count', 0)
+    your_heading_count = your_content.get('heading_count', 0)
+    
+    # Calculate competitor averages
+    comp_scores = []
+    comp_word_counts = []
+    comp_heading_counts = []
+    
+    for comp in competitor_analyses:
+        comp_basic = comp.get('basic_analysis', {})
+        comp_content = comp.get('detailed_analysis', {}).get('content_analysis', {})
+        
+        comp_scores.append(comp_basic.get('digital_maturity_score', 0))
+        comp_word_counts.append(comp_content.get('word_count', 0))
+        comp_heading_counts.append(comp_content.get('heading_count', 0))
+    
+    avg_comp_score = sum(comp_scores) / len(comp_scores) if comp_scores else 50
+    avg_comp_words = sum(comp_word_counts) / len(comp_word_counts) if comp_word_counts else 1000
+    avg_comp_headings = sum(comp_heading_counts) / len(comp_heading_counts) if comp_heading_counts else 5
+    
+    # === VISUAL BOLDNESS ANALYSIS ===
+    visual_score = 0
+    visual_factors = []
+    
+    # Layout complexity (headings as proxy)
+    if your_heading_count > avg_comp_headings * 1.5:
+        visual_score += 30
+        visual_factors.append(t('creative_boldness', 'visual_factors.rich_structure', language, 
+                               current=your_heading_count, avg=int(avg_comp_headings)))
+    elif your_heading_count > avg_comp_headings:
+        visual_score += 20
+        visual_factors.append(t('creative_boldness', 'visual_factors.good_structure', language, 
+                               current=your_heading_count))
+    else:
+        visual_score += 10
+        visual_factors.append(t('creative_boldness', 'visual_factors.basic_structure', language, 
+                               current=your_heading_count))
+    
+    # Interactive elements
+    interactive_score = your_ux.get('interactivity_score', 0)
+    if interactive_score >= 7:
+        visual_score += 25
+        visual_factors.append(t('creative_boldness', 'visual_factors.high_interactivity', language))
+    elif interactive_score >= 4:
+        visual_score += 15
+        visual_factors.append(t('creative_boldness', 'visual_factors.moderate_interactivity', language))
+    else:
+        visual_score += 5
+        visual_factors.append(t('creative_boldness', 'visual_factors.limited_interactivity', language))
+    
+    # Social presence
+    social_score = your_social.get('social_score', 0)
+    if social_score >= 80:
+        visual_score += 20
+        visual_factors.append(t('creative_boldness', 'visual_factors.strong_social', language))
+    elif social_score >= 50:
+        visual_score += 10
+        visual_factors.append(t('creative_boldness', 'visual_factors.moderate_social', language))
+    else:
+        visual_score += 5
+        visual_factors.append(t('creative_boldness', 'visual_factors.minimal_social', language))
+    
+    # Modernity
+    modernity = your_basic.get('modernity_score', 0)
+    if modernity >= 80:
+        visual_score += 25
+        visual_factors.append(t('creative_boldness', 'visual_factors.modern_design', language))
+    elif modernity >= 60:
+        visual_score += 15
+        visual_factors.append(t('creative_boldness', 'visual_factors.contemporary_design', language))
+    else:
+        visual_score += 5
+        visual_factors.append(t('creative_boldness', 'visual_factors.traditional_design', language))
+    
+    visual_score = min(100, visual_score)
+    
+    # === NARRATIVE BOLDNESS ANALYSIS ===
+    narrative_score = 0
+    narrative_factors = []
+    
+    # Content depth
+    if your_word_count > avg_comp_words * 1.5:
+        narrative_score += 35
+        narrative_factors.append(t('creative_boldness', 'narrative_factors.comprehensive', language,
+                                  current=your_word_count, avg=int(avg_comp_words)))
+    elif your_word_count > avg_comp_words:
+        narrative_score += 25
+        narrative_factors.append(t('creative_boldness', 'narrative_factors.above_average', language,
+                                  current=your_word_count))
+    else:
+        narrative_score += 10
+        narrative_factors.append(t('creative_boldness', 'narrative_factors.standard', language,
+                                  current=your_word_count))
+    
+    # Content quality
+    content_quality = your_content.get('content_quality_score', 0)
+    if content_quality >= 80:
+        narrative_score += 30
+        narrative_factors.append(t('creative_boldness', 'narrative_factors.excellent_quality', language))
+    elif content_quality >= 60:
+        narrative_score += 20
+        narrative_factors.append(t('creative_boldness', 'narrative_factors.good_quality', language))
+    else:
+        narrative_score += 10
+        narrative_factors.append(t('creative_boldness', 'narrative_factors.basic_quality', language))
+    
+    # SEO storytelling
+    seo_score = your_basic.get('seo_score', 0)
+    if seo_score >= 80:
+        narrative_score += 20
+        narrative_factors.append(t('creative_boldness', 'narrative_factors.strong_seo', language))
+    elif seo_score >= 60:
+        narrative_score += 10
+        narrative_factors.append(t('creative_boldness', 'narrative_factors.decent_seo', language))
+    else:
+        narrative_score += 5
+        narrative_factors.append(t('creative_boldness', 'narrative_factors.weak_seo', language))
+    
+    # Competitive advantage
+    if your_score > avg_comp_score + 10:
+        narrative_score += 15
+        narrative_factors.append(t('creative_boldness', 'narrative_factors.clear_positioning', language))
+    elif your_score > avg_comp_score:
+        narrative_score += 10
+        narrative_factors.append(t('creative_boldness', 'narrative_factors.slight_edge', language))
+    else:
+        narrative_score += 5
+        narrative_factors.append(t('creative_boldness', 'narrative_factors.following_market', language))
+    
+    narrative_score = min(100, narrative_score)
+    
+    # === OVERALL CREATIVE BOLDNESS SCORE ===
+    creative_boldness_score = int((visual_score * 0.5) + (narrative_score * 0.5))
+    
+    # === CLASSIFICATION ===
+    if creative_boldness_score >= 85:
+        classification_key = "radical"
+    elif creative_boldness_score >= 70:
+        classification_key = "bold"
+    elif creative_boldness_score >= 50:
+        classification_key = "safe"
+    else:
+        classification_key = "timid"
+    
+    classification = t('creative_boldness', f'classification.{classification_key}', language)
+    competitive_position = t('creative_boldness', f'competitive_position.{classification_key}', language)
+    
+    # === SPECIFIC OBSERVATIONS ===
+    observations = []
+    
+    if your_word_count > avg_comp_words * 1.3:
+        observations.append(t('creative_boldness', 'observations.content_depth', language))
+    if interactive_score > 7:
+        observations.append(t('creative_boldness', 'observations.high_engagement', language))
+    if modernity >= 80:
+        observations.append(t('creative_boldness', 'observations.modern_design', language))
+    if your_score > avg_comp_score + 15:
+        observations.append(t('creative_boldness', 'observations.competitive_moat', language))
+    
+    if len(observations) == 0:
+        observations.append(t('creative_boldness', 'observations.default', language))
+    
+    # === OPPORTUNITIES ===
+    opportunities = []
+    
+    if visual_score < 70:
+        opportunities.append(t('creative_boldness', 'opportunities.visual', language))
+    if narrative_score < 70:
+        opportunities.append(t('creative_boldness', 'opportunities.narrative', language))
+    if interactive_score < 5:
+        opportunities.append(t('creative_boldness', 'opportunities.interactive', language))
+    if social_score < 60:
+        opportunities.append(t('creative_boldness', 'opportunities.social', language))
+    if your_word_count < avg_comp_words:
+        opportunities.append(t('creative_boldness', 'opportunities.content_depth', language,
+                              current=your_word_count, avg=int(avg_comp_words)))
+    
+    # === STRATEGIC RECOMMENDATION ===
+    strategic_rec = t('creative_boldness', f'strategic_rec.{classification_key}', language)
+    
+    return {
+        "creative_boldness_score": creative_boldness_score,
+        "classification": classification,
+        "visual_boldness_analysis": t('creative_boldness', 'visual_score_label', language, score=visual_score) + " ".join(visual_factors),
+        "narrative_boldness_analysis": t('creative_boldness', 'narrative_score_label', language, score=narrative_score) + " ".join(narrative_factors),
+        "competitive_creative_position": competitive_position,
+        "specific_observations": observations,
+        "opportunities": opportunities,
+        "strategic_recommendation": strategic_rec
+    }
 # KILPAILUETU-TUTKA ENDPOINT - KAUPALLINEN VERSIO
 # ============================================================================
 
@@ -8983,16 +9442,27 @@ async def analyze_competitive_radar(
         required_analyses = 1 + len(request.competitor_urls)
         
         if user.role != "admin":
-            user_limit = USERS_DB.get(user.username, {}).get("search_limit", DEFAULT_USER_LIMIT)
-            current_count = user_search_counts.get(user.username, 0)
-            available = user_limit - current_count
-            
-            if user_limit > 0 and required_analyses > available:
-                raise HTTPException(
-                    403,
-                    f"Competitive Radar requires {required_analyses} analyses. "
-                    f"You have {available} remaining of {user_limit} quota."
+            # Check from history_db if available (most accurate)
+            if history_db:
+                # Competitive radar uses "single" analysis quota
+                can_proceed, error_msg = await history_db.check_user_limit(
+                    user.username,
+                    'single'
                 )
+                if not can_proceed:
+                    raise HTTPException(403, error_msg or "Analysis limit reached")
+            else:
+                # Fallback to in-memory
+                user_limit = USERS_DB.get(user.username, {}).get("search_limit", DEFAULT_USER_LIMIT)
+                current_count = user_search_counts.get(user.username, 0)
+                available = user_limit - current_count
+                
+                if user_limit > 0 and required_analyses > available:
+                    raise HTTPException(
+                        403,
+                        f"Competitive Radar requires {required_analyses} analyses. "
+                        f"You have {available} remaining of {user_limit} quota."
+                    )
         
         logger.info(f"[Radar] Starting analysis for {user.username}: {request.your_url} vs {len(request.competitor_urls)} competitors")
         
@@ -9089,11 +9559,7 @@ async def analyze_competitive_radar(
             f"your_score={your_summary['score']}, "
             f"competitors={[(c['company'], c['score']) for c in comp_summaries]}"
         )
-        # ✅ LISÄÄ TÄMÄ - Yhtenäistä your_analysis samaan muotoon kuin competitors
-        your_analysis_unified = {
-                **your_summary,  # company, score, content_strategy, technical_maturity...
-                'analysis': your_analysis  # full analysis detailed view:tä varten
-            }
+        
         # === 6. SYVÄLLINEN EROTTUVUUSANALYYSI ===
         logger.info("[Radar] Building differentiation matrix...")
         
@@ -9143,28 +9609,58 @@ async def analyze_competitive_radar(
         
         logger.info(f"[Radar] ✅ Generated {len(strategic_recommendations)} strategic recommendations")
         
-       # === 10. RAKENNA RESPONSE ===
+        # === 10. ENHANCED SWOT ANALYSIS ===
+        logger.info("[Radar] Generating enhanced SWOT analysis...")
+        
+        try:
+            enhanced_swot = await generate_competitive_swot_analysis(
+                your_analysis,
+                competitor_analyses,
+                request.language
+            )
+            logger.info("[Radar] ✅ Enhanced SWOT analysis complete")
+        except Exception as e:
+            logger.error(f"[Radar] ❌ Enhanced SWOT failed: {e}")
+            enhanced_swot = None
+        
+        # === 11. CREATIVE BOLDNESS ANALYSIS ===
+        logger.info("[Radar] Analyzing creative boldness...")
+        
+        try:
+            creative_boldness = await analyze_creative_boldness(
+                your_analysis,
+                competitor_analyses,
+                request.language
+            )
+            logger.info(f"[Radar] ✅ Creative boldness score: {creative_boldness.get('creative_boldness_score', 0)}")
+        except Exception as e:
+            logger.error(f"[Radar] ❌ Creative boldness failed: {e}")
+            creative_boldness = None
+        
+       # === 12. RAKENNA RESPONSE ===
         logger.info("[Radar] Building final response...")
 
-        # ✅ KORJAUS: Yhdenmukaista your_analysis summary-muotoon
-        # Rakenna unified structure jossa on sekä summary että täysi analyysi
-        your_analysis_unified = {
-            **your_summary,           # ✅ Summary-kentät (company, score, messaging...)
-            'analysis': your_analysis # ✅ Täysi analyysi sisällä (jos frontend tarvitsee)
-        }
-
-        # ✅ Lisää sama rakenne kilpailijoille
+        # ✅ Kilpailijoille säilytetään summary + analysis rakenne
         comp_summaries_unified = []
         for idx, comp_summary in enumerate(comp_summaries):
             comp_summaries_unified.append({
-                **comp_summary,                    # ✅ Summary-kentät
-                'analysis': competitor_analyses[idx] # ✅ Täysi analyysi sisällä
+                **comp_summary,
+                'analysis': competitor_analyses[idx]
             })
+        
+        # ✅ Lisää enhanced_swot ja creative_boldness your_analysis.ai_analysis:iin
+        if enhanced_swot:
+            your_analysis['ai_analysis']['enhanced_swot'] = enhanced_swot
+            logger.info("[Radar] ✅ Added enhanced_swot to your_analysis.ai_analysis")
+        
+        if creative_boldness:
+            your_analysis['ai_analysis']['creative_boldness'] = creative_boldness
+            logger.info("[Radar] ✅ Added creative_boldness to your_analysis.ai_analysis")
 
-        # ✅ Rakenna response yhdenmukaisen datan kanssa
+        # ✅ Rakenna response - your_analysis suoraan ilman wrapperia
         response = CompetitiveRadarResponse(
-            your_analysis=your_analysis_unified,  # ✅ Unified rakenne
-            competitors=comp_summaries_unified,   # ✅ Unified rakenne
+            your_analysis=your_analysis,          # ✅ KORJATTU: Suoraan täysi analyysi
+            competitors=comp_summaries_unified,
             differentiation_matrix=differentiation_matrix,
             market_gaps=market_gaps,
             competitive_score=positioning['competitive_score'],
