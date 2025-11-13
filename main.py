@@ -1794,6 +1794,11 @@ logger.info(f"👥 Total users loaded: {len(USERS_DB)}")
 logger.info(f"📋 Users: {', '.join(USERS_DB.keys())}")
 
 # ============================================================================
+# TRANSLATION MODULE IMPORT
+# ============================================================================
+from translations_module import TRANSLATIONS, t
+
+# ============================================================================
 # COMPLETE PYDANTIC MODELS
 # ============================================================================
 
@@ -4661,7 +4666,7 @@ def build_plan_90d(basic: Dict[str, Any], content: Dict[str, Any], technical: Di
         }
     )
 
-def build_risk_register(basic: Dict[str, Any], technical: Dict[str, Any], content: Dict[str, Any]) -> List[RiskItem]:
+def build_risk_register(basic: Dict[str, Any], technical: Dict[str, Any], content: Dict[str, Any], language: str = 'en') -> List[RiskItem]:
     """Build risk register with likelihood, impact, mitigation"""
     risks = []
     breakdown = basic.get('score_breakdown', {})
@@ -4669,67 +4674,67 @@ def build_risk_register(basic: Dict[str, Any], technical: Dict[str, Any], conten
     # Content risk
     if content.get('content_quality_score', 0) < 50:
         risks.append(RiskItem(
-            risk="Thin content → weak rankings",
+            risk=t('risk_register', 'thin_content', language),
             likelihood=3,
             impact=3,
-            mitigation="Pillar/cluster content plan",
+            mitigation=t('risk_register', 'thin_content_mitigation', language),
             risk_score=9
         ))
     
     # SPA risk
     if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
         risks.append(RiskItem(
-            risk="SPA client-only rendering → low visibility",
+            risk=t('risk_register', 'spa_risk', language),
             likelihood=3,
             impact=4,
-            mitigation="SSR/prerender critical routes",
+            mitigation=t('risk_register', 'spa_mitigation', language),
             risk_score=12
         ))
     
     # Security risk
     if breakdown.get('security', 0) < 10:
         risks.append(RiskItem(
-            risk="Weak security → trust/SEO penalty",
+            risk=t('risk_register', 'weak_security', language),
             likelihood=2,
             impact=4,
-            mitigation="Install SSL + security headers",
+            mitigation=t('risk_register', 'security_mitigation', language),
             risk_score=8
         ))
     
     # Mobile risk
     if breakdown.get('mobile', 0) < 10:
         risks.append(RiskItem(
-            risk="Poor mobile UX → high bounce rate",
+            risk=t('risk_register', 'poor_mobile', language),
             likelihood=4,
             impact=3,
-            mitigation="Responsive design + CWV optimization",
+            mitigation=t('risk_register', 'mobile_mitigation', language),
             risk_score=12
         ))
     
     return risks
 
 
-def build_snippet_examples(url: str, basic: Dict[str, Any]) -> SnippetExamples:
+def build_snippet_examples(url: str, basic: Dict[str, Any], language: str = 'en') -> SnippetExamples:
     """Build SEO snippet examples"""
     domain = get_domain_from_url(url).capitalize()
     
     return SnippetExamples(
         seo_title=[
-            f"{domain} — fast, modern & reliable",
-            f"{domain}: solutions that drive results",
-            f"{domain} | Everything you need to grow"
+            f"{domain} {t('snippet_examples', 'title_1', language)}",
+            f"{domain}{t('snippet_examples', 'title_2', language)}",
+            f"{domain} {t('snippet_examples', 'title_3', language)}"
         ],
         meta_desc=[
-            f"{domain} helps you get measurable results. Explore features, stories and pricing — start today.",
-            f"Modern {domain} with impact. See how teams ship better experiences. Try now."
+            t('snippet_examples', 'desc_1', language, domain=domain),
+            t('snippet_examples', 'desc_2', language, domain=domain)
         ],
         h1_intro=[
-            f"{domain} that gets the job done.",
-            f"Build, ship and grow with {domain}."
+            t('snippet_examples', 'h1_1', language, domain=domain),
+            t('snippet_examples', 'h1_2', language, domain=domain)
         ],
         product_copy=[
-            "Value prop in 1–2 lines → 2–3 benefits with proof → single CTA.",
-            "Problem → outcome → proof → CTA. Keep it scannable (40–80 words)."
+            t('snippet_examples', 'product_1', language),
+            t('snippet_examples', 'product_2', language)
         ]
     )
 # ============================================================================
@@ -5230,8 +5235,8 @@ async def generate_ai_insights(
         
         role = build_role_summaries(url, basic, impact, language=language)
         plan = build_plan_90d(basic, content, technical, language=language)  
-        risks = build_risk_register(basic, technical, content)
-        snippets = build_snippet_examples(url, basic)
+        risks = build_risk_register(basic, technical, content, language=language)
+        snippets = build_snippet_examples(url, basic, language=language)
 
         insights.update({
             "business_impact": detailed_impact.model_dump(),  # FIX 10: Pydantic V2
@@ -9252,49 +9257,52 @@ async def analyze_creative_boldness(
     # Layout complexity (headings as proxy)
     if your_heading_count > avg_comp_headings * 1.5:
         visual_score += 30
-        visual_factors.append(f"Rich content structure ({your_heading_count} headings vs avg {int(avg_comp_headings)})")
+        visual_factors.append(t('creative_boldness', 'visual_factors.rich_structure', language, 
+                               current=your_heading_count, avg=int(avg_comp_headings)))
     elif your_heading_count > avg_comp_headings:
         visual_score += 20
-        visual_factors.append(f"Good content structure ({your_heading_count} headings)")
+        visual_factors.append(t('creative_boldness', 'visual_factors.good_structure', language, 
+                               current=your_heading_count))
     else:
         visual_score += 10
-        visual_factors.append(f"Basic structure ({your_heading_count} headings)")
+        visual_factors.append(t('creative_boldness', 'visual_factors.basic_structure', language, 
+                               current=your_heading_count))
     
     # Interactive elements
     interactive_score = your_ux.get('interactivity_score', 0)
     if interactive_score >= 7:
         visual_score += 25
-        visual_factors.append("High interactivity (engaging user experience)")
+        visual_factors.append(t('creative_boldness', 'visual_factors.high_interactivity', language))
     elif interactive_score >= 4:
         visual_score += 15
-        visual_factors.append("Moderate interactivity")
+        visual_factors.append(t('creative_boldness', 'visual_factors.moderate_interactivity', language))
     else:
         visual_score += 5
-        visual_factors.append("Limited interactivity")
+        visual_factors.append(t('creative_boldness', 'visual_factors.limited_interactivity', language))
     
     # Social presence
     social_score = your_social.get('social_score', 0)
     if social_score >= 80:
         visual_score += 20
-        visual_factors.append("Strong social media presence")
+        visual_factors.append(t('creative_boldness', 'visual_factors.strong_social', language))
     elif social_score >= 50:
         visual_score += 10
-        visual_factors.append("Moderate social presence")
+        visual_factors.append(t('creative_boldness', 'visual_factors.moderate_social', language))
     else:
         visual_score += 5
-        visual_factors.append("Minimal social presence")
+        visual_factors.append(t('creative_boldness', 'visual_factors.minimal_social', language))
     
     # Modernity
     modernity = your_basic.get('modernity_score', 0)
     if modernity >= 80:
         visual_score += 25
-        visual_factors.append("Modern, cutting-edge design")
+        visual_factors.append(t('creative_boldness', 'visual_factors.modern_design', language))
     elif modernity >= 60:
         visual_score += 15
-        visual_factors.append("Contemporary design")
+        visual_factors.append(t('creative_boldness', 'visual_factors.contemporary_design', language))
     else:
         visual_score += 5
-        visual_factors.append("Traditional design approach")
+        visual_factors.append(t('creative_boldness', 'visual_factors.traditional_design', language))
     
     visual_score = min(100, visual_score)
     
@@ -9305,48 +9313,51 @@ async def analyze_creative_boldness(
     # Content depth
     if your_word_count > avg_comp_words * 1.5:
         narrative_score += 35
-        narrative_factors.append(f"Comprehensive content ({your_word_count} words vs avg {int(avg_comp_words)})")
+        narrative_factors.append(t('creative_boldness', 'narrative_factors.comprehensive', language,
+                                  current=your_word_count, avg=int(avg_comp_words)))
     elif your_word_count > avg_comp_words:
         narrative_score += 25
-        narrative_factors.append(f"Above-average content depth ({your_word_count} words)")
+        narrative_factors.append(t('creative_boldness', 'narrative_factors.above_average', language,
+                                  current=your_word_count))
     else:
         narrative_score += 10
-        narrative_factors.append(f"Standard content depth ({your_word_count} words)")
+        narrative_factors.append(t('creative_boldness', 'narrative_factors.standard', language,
+                                  current=your_word_count))
     
     # Content quality
     content_quality = your_content.get('content_quality_score', 0)
     if content_quality >= 80:
         narrative_score += 30
-        narrative_factors.append("Excellent content quality")
+        narrative_factors.append(t('creative_boldness', 'narrative_factors.excellent_quality', language))
     elif content_quality >= 60:
         narrative_score += 20
-        narrative_factors.append("Good content quality")
+        narrative_factors.append(t('creative_boldness', 'narrative_factors.good_quality', language))
     else:
         narrative_score += 10
-        narrative_factors.append("Basic content quality")
+        narrative_factors.append(t('creative_boldness', 'narrative_factors.basic_quality', language))
     
     # SEO storytelling
     seo_score = your_basic.get('seo_score', 0)
     if seo_score >= 80:
         narrative_score += 20
-        narrative_factors.append("Strong SEO narrative")
+        narrative_factors.append(t('creative_boldness', 'narrative_factors.strong_seo', language))
     elif seo_score >= 60:
         narrative_score += 10
-        narrative_factors.append("Decent SEO presence")
+        narrative_factors.append(t('creative_boldness', 'narrative_factors.decent_seo', language))
     else:
         narrative_score += 5
-        narrative_factors.append("Weak SEO narrative")
+        narrative_factors.append(t('creative_boldness', 'narrative_factors.weak_seo', language))
     
     # Competitive advantage
     if your_score > avg_comp_score + 10:
         narrative_score += 15
-        narrative_factors.append("Clear competitive positioning")
+        narrative_factors.append(t('creative_boldness', 'narrative_factors.clear_positioning', language))
     elif your_score > avg_comp_score:
         narrative_score += 10
-        narrative_factors.append("Slight competitive edge")
+        narrative_factors.append(t('creative_boldness', 'narrative_factors.slight_edge', language))
     else:
         narrative_score += 5
-        narrative_factors.append("Following market standards")
+        narrative_factors.append(t('creative_boldness', 'narrative_factors.following_market', language))
     
     narrative_score = min(100, narrative_score)
     
@@ -9355,62 +9366,55 @@ async def analyze_creative_boldness(
     
     # === CLASSIFICATION ===
     if creative_boldness_score >= 85:
-        classification = "Radical"
-        competitive_position = "Market disruptor - setting new creative standards"
+        classification_key = "radical"
     elif creative_boldness_score >= 70:
-        classification = "Bold"
-        competitive_position = "Creative leader - ahead of market norms"
+        classification_key = "bold"
     elif creative_boldness_score >= 50:
-        classification = "Safe"
-        competitive_position = "Following best practices - room for differentiation"
+        classification_key = "safe"
     else:
-        classification = "Timid"
-        competitive_position = "Playing it safe - significant creative opportunity"
+        classification_key = "timid"
+    
+    classification = t('creative_boldness', f'classification.{classification_key}', language)
+    competitive_position = t('creative_boldness', f'competitive_position.{classification_key}', language)
     
     # === SPECIFIC OBSERVATIONS ===
     observations = []
     
     if your_word_count > avg_comp_words * 1.3:
-        observations.append("Your content depth significantly exceeds competitors")
+        observations.append(t('creative_boldness', 'observations.content_depth', language))
     if interactive_score > 7:
-        observations.append("High engagement through interactive elements")
+        observations.append(t('creative_boldness', 'observations.high_engagement', language))
     if modernity >= 80:
-        observations.append("Modern design language sets you apart")
+        observations.append(t('creative_boldness', 'observations.modern_design', language))
     if your_score > avg_comp_score + 15:
-        observations.append("Overall digital maturity creates competitive moat")
+        observations.append(t('creative_boldness', 'observations.competitive_moat', language))
     
     if len(observations) == 0:
-        observations.append("Opportunity to differentiate through creative approaches")
+        observations.append(t('creative_boldness', 'observations.default', language))
     
     # === OPPORTUNITIES ===
     opportunities = []
     
     if visual_score < 70:
-        opportunities.append("Enhance visual design with modern, bold aesthetics")
+        opportunities.append(t('creative_boldness', 'opportunities.visual', language))
     if narrative_score < 70:
-        opportunities.append("Strengthen narrative with deeper, more engaging content")
+        opportunities.append(t('creative_boldness', 'opportunities.narrative', language))
     if interactive_score < 5:
-        opportunities.append("Add interactive elements to boost engagement")
+        opportunities.append(t('creative_boldness', 'opportunities.interactive', language))
     if social_score < 60:
-        opportunities.append("Amplify social media presence for brand boldness")
+        opportunities.append(t('creative_boldness', 'opportunities.social', language))
     if your_word_count < avg_comp_words:
-        opportunities.append(f"Expand content depth (currently {your_word_count} words vs avg {int(avg_comp_words)})")
+        opportunities.append(t('creative_boldness', 'opportunities.content_depth', language,
+                              current=your_word_count, avg=int(avg_comp_words)))
     
     # === STRATEGIC RECOMMENDATION ===
-    if classification == "Radical":
-        strategic_rec = "Maintain creative leadership while exploring even bolder experimental approaches"
-    elif classification == "Bold":
-        strategic_rec = "Push boundaries further to achieve radical differentiation"
-    elif classification == "Safe":
-        strategic_rec = "Inject more creative risk-taking to stand out from competitors"
-    else:
-        strategic_rec = "Break from conservative patterns - embrace bold, distinctive creative choices"
+    strategic_rec = t('creative_boldness', f'strategic_rec.{classification_key}', language)
     
     return {
         "creative_boldness_score": creative_boldness_score,
         "classification": classification,
-        "visual_boldness_analysis": f"Visual score: {visual_score}/100. " + " ".join(visual_factors),
-        "narrative_boldness_analysis": f"Narrative score: {narrative_score}/100. " + " ".join(narrative_factors),
+        "visual_boldness_analysis": t('creative_boldness', 'visual_score_label', language, score=visual_score) + " ".join(visual_factors),
+        "narrative_boldness_analysis": t('creative_boldness', 'narrative_score_label', language, score=narrative_score) + " ".join(narrative_factors),
         "competitive_creative_position": competitive_position,
         "specific_observations": observations,
         "opportunities": opportunities,
