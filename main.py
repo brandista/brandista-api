@@ -9198,6 +9198,224 @@ async def admin_delete_user(username: str, user: UserInfo = Depends(require_admi
     return {"ok": True, "message": f"User '{username}' deleted successfully"}
 
 # ============================================================================
+async def analyze_creative_boldness(
+    your_analysis: Dict[str, Any],
+    competitor_analyses: List[Dict[str, Any]],
+    language: str = 'en'
+) -> Dict[str, Any]:
+    """
+    Analyze creative boldness by comparing visual and narrative approaches.
+    
+    Returns:
+        Dict with:
+        - creative_boldness_score (0-100)
+        - classification (Timid/Safe/Bold/Radical)
+        - visual_boldness_analysis
+        - narrative_boldness_analysis
+        - competitive_creative_position
+        - specific_observations
+        - opportunities
+        - strategic_recommendation
+    """
+    
+    # Extract your data
+    your_basic = your_analysis.get('basic_analysis', {})
+    your_content = your_analysis.get('detailed_analysis', {}).get('content_analysis', {})
+    your_ux = your_analysis.get('detailed_analysis', {}).get('ux_analysis', {})
+    your_social = your_analysis.get('detailed_analysis', {}).get('social_media', {})
+    
+    your_score = your_basic.get('digital_maturity_score', 0)
+    your_word_count = your_content.get('word_count', 0)
+    your_heading_count = your_content.get('heading_count', 0)
+    
+    # Calculate competitor averages
+    comp_scores = []
+    comp_word_counts = []
+    comp_heading_counts = []
+    
+    for comp in competitor_analyses:
+        comp_basic = comp.get('basic_analysis', {})
+        comp_content = comp.get('detailed_analysis', {}).get('content_analysis', {})
+        
+        comp_scores.append(comp_basic.get('digital_maturity_score', 0))
+        comp_word_counts.append(comp_content.get('word_count', 0))
+        comp_heading_counts.append(comp_content.get('heading_count', 0))
+    
+    avg_comp_score = sum(comp_scores) / len(comp_scores) if comp_scores else 50
+    avg_comp_words = sum(comp_word_counts) / len(comp_word_counts) if comp_word_counts else 1000
+    avg_comp_headings = sum(comp_heading_counts) / len(comp_heading_counts) if comp_heading_counts else 5
+    
+    # === VISUAL BOLDNESS ANALYSIS ===
+    visual_score = 0
+    visual_factors = []
+    
+    # Layout complexity (headings as proxy)
+    if your_heading_count > avg_comp_headings * 1.5:
+        visual_score += 30
+        visual_factors.append(f"Rich content structure ({your_heading_count} headings vs avg {int(avg_comp_headings)})")
+    elif your_heading_count > avg_comp_headings:
+        visual_score += 20
+        visual_factors.append(f"Good content structure ({your_heading_count} headings)")
+    else:
+        visual_score += 10
+        visual_factors.append(f"Basic structure ({your_heading_count} headings)")
+    
+    # Interactive elements
+    interactive_score = your_ux.get('interactivity_score', 0)
+    if interactive_score >= 7:
+        visual_score += 25
+        visual_factors.append("High interactivity (engaging user experience)")
+    elif interactive_score >= 4:
+        visual_score += 15
+        visual_factors.append("Moderate interactivity")
+    else:
+        visual_score += 5
+        visual_factors.append("Limited interactivity")
+    
+    # Social presence
+    social_score = your_social.get('social_score', 0)
+    if social_score >= 80:
+        visual_score += 20
+        visual_factors.append("Strong social media presence")
+    elif social_score >= 50:
+        visual_score += 10
+        visual_factors.append("Moderate social presence")
+    else:
+        visual_score += 5
+        visual_factors.append("Minimal social presence")
+    
+    # Modernity
+    modernity = your_basic.get('modernity_score', 0)
+    if modernity >= 80:
+        visual_score += 25
+        visual_factors.append("Modern, cutting-edge design")
+    elif modernity >= 60:
+        visual_score += 15
+        visual_factors.append("Contemporary design")
+    else:
+        visual_score += 5
+        visual_factors.append("Traditional design approach")
+    
+    visual_score = min(100, visual_score)
+    
+    # === NARRATIVE BOLDNESS ANALYSIS ===
+    narrative_score = 0
+    narrative_factors = []
+    
+    # Content depth
+    if your_word_count > avg_comp_words * 1.5:
+        narrative_score += 35
+        narrative_factors.append(f"Comprehensive content ({your_word_count} words vs avg {int(avg_comp_words)})")
+    elif your_word_count > avg_comp_words:
+        narrative_score += 25
+        narrative_factors.append(f"Above-average content depth ({your_word_count} words)")
+    else:
+        narrative_score += 10
+        narrative_factors.append(f"Standard content depth ({your_word_count} words)")
+    
+    # Content quality
+    content_quality = your_content.get('content_quality_score', 0)
+    if content_quality >= 80:
+        narrative_score += 30
+        narrative_factors.append("Excellent content quality")
+    elif content_quality >= 60:
+        narrative_score += 20
+        narrative_factors.append("Good content quality")
+    else:
+        narrative_score += 10
+        narrative_factors.append("Basic content quality")
+    
+    # SEO storytelling
+    seo_score = your_basic.get('seo_score', 0)
+    if seo_score >= 80:
+        narrative_score += 20
+        narrative_factors.append("Strong SEO narrative")
+    elif seo_score >= 60:
+        narrative_score += 10
+        narrative_factors.append("Decent SEO presence")
+    else:
+        narrative_score += 5
+        narrative_factors.append("Weak SEO narrative")
+    
+    # Competitive advantage
+    if your_score > avg_comp_score + 10:
+        narrative_score += 15
+        narrative_factors.append("Clear competitive positioning")
+    elif your_score > avg_comp_score:
+        narrative_score += 10
+        narrative_factors.append("Slight competitive edge")
+    else:
+        narrative_score += 5
+        narrative_factors.append("Following market standards")
+    
+    narrative_score = min(100, narrative_score)
+    
+    # === OVERALL CREATIVE BOLDNESS SCORE ===
+    creative_boldness_score = int((visual_score * 0.5) + (narrative_score * 0.5))
+    
+    # === CLASSIFICATION ===
+    if creative_boldness_score >= 85:
+        classification = "Radical"
+        competitive_position = "Market disruptor - setting new creative standards"
+    elif creative_boldness_score >= 70:
+        classification = "Bold"
+        competitive_position = "Creative leader - ahead of market norms"
+    elif creative_boldness_score >= 50:
+        classification = "Safe"
+        competitive_position = "Following best practices - room for differentiation"
+    else:
+        classification = "Timid"
+        competitive_position = "Playing it safe - significant creative opportunity"
+    
+    # === SPECIFIC OBSERVATIONS ===
+    observations = []
+    
+    if your_word_count > avg_comp_words * 1.3:
+        observations.append("Your content depth significantly exceeds competitors")
+    if interactive_score > 7:
+        observations.append("High engagement through interactive elements")
+    if modernity >= 80:
+        observations.append("Modern design language sets you apart")
+    if your_score > avg_comp_score + 15:
+        observations.append("Overall digital maturity creates competitive moat")
+    
+    if len(observations) == 0:
+        observations.append("Opportunity to differentiate through creative approaches")
+    
+    # === OPPORTUNITIES ===
+    opportunities = []
+    
+    if visual_score < 70:
+        opportunities.append("Enhance visual design with modern, bold aesthetics")
+    if narrative_score < 70:
+        opportunities.append("Strengthen narrative with deeper, more engaging content")
+    if interactive_score < 5:
+        opportunities.append("Add interactive elements to boost engagement")
+    if social_score < 60:
+        opportunities.append("Amplify social media presence for brand boldness")
+    if your_word_count < avg_comp_words:
+        opportunities.append(f"Expand content depth (currently {your_word_count} words vs avg {int(avg_comp_words)})")
+    
+    # === STRATEGIC RECOMMENDATION ===
+    if classification == "Radical":
+        strategic_rec = "Maintain creative leadership while exploring even bolder experimental approaches"
+    elif classification == "Bold":
+        strategic_rec = "Push boundaries further to achieve radical differentiation"
+    elif classification == "Safe":
+        strategic_rec = "Inject more creative risk-taking to stand out from competitors"
+    else:
+        strategic_rec = "Break from conservative patterns - embrace bold, distinctive creative choices"
+    
+    return {
+        "creative_boldness_score": creative_boldness_score,
+        "classification": classification,
+        "visual_boldness_analysis": f"Visual score: {visual_score}/100. " + " ".join(visual_factors),
+        "narrative_boldness_analysis": f"Narrative score: {narrative_score}/100. " + " ".join(narrative_factors),
+        "competitive_creative_position": competitive_position,
+        "specific_observations": observations,
+        "opportunities": opportunities,
+        "strategic_recommendation": strategic_rec
+    }
 # KILPAILUETU-TUTKA ENDPOINT - KAUPALLINEN VERSIO
 # ============================================================================
 
@@ -9387,7 +9605,35 @@ async def analyze_competitive_radar(
         
         logger.info(f"[Radar] ✅ Generated {len(strategic_recommendations)} strategic recommendations")
         
-       # === 10. RAKENNA RESPONSE ===
+        # === 10. ENHANCED SWOT ANALYSIS ===
+        logger.info("[Radar] Generating enhanced SWOT analysis...")
+        
+        try:
+            enhanced_swot = await generate_competitive_swot_analysis(
+                your_analysis,
+                competitor_analyses,
+                request.language
+            )
+            logger.info("[Radar] ✅ Enhanced SWOT analysis complete")
+        except Exception as e:
+            logger.error(f"[Radar] ❌ Enhanced SWOT failed: {e}")
+            enhanced_swot = None
+        
+        # === 11. CREATIVE BOLDNESS ANALYSIS ===
+        logger.info("[Radar] Analyzing creative boldness...")
+        
+        try:
+            creative_boldness = await analyze_creative_boldness(
+                your_analysis,
+                competitor_analyses,
+                request.language
+            )
+            logger.info(f"[Radar] ✅ Creative boldness score: {creative_boldness.get('creative_boldness_score', 0)}")
+        except Exception as e:
+            logger.error(f"[Radar] ❌ Creative boldness failed: {e}")
+            creative_boldness = None
+        
+       # === 12. RAKENNA RESPONSE ===
         logger.info("[Radar] Building final response...")
 
         # ✅ Kilpailijoille säilytetään summary + analysis rakenne
@@ -9397,6 +9643,15 @@ async def analyze_competitive_radar(
                 **comp_summary,
                 'analysis': competitor_analyses[idx]
             })
+        
+        # ✅ Lisää enhanced_swot ja creative_boldness your_analysis.ai_analysis:iin
+        if enhanced_swot:
+            your_analysis['ai_analysis']['enhanced_swot'] = enhanced_swot
+            logger.info("[Radar] ✅ Added enhanced_swot to your_analysis.ai_analysis")
+        
+        if creative_boldness:
+            your_analysis['ai_analysis']['creative_boldness'] = creative_boldness
+            logger.info("[Radar] ✅ Added creative_boldness to your_analysis.ai_analysis")
 
         # ✅ Rakenna response - your_analysis suoraan ilman wrapperia
         response = CompetitiveRadarResponse(
