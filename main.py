@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Brandista Competitive Intelligence API - Complete Unified Version
-Version: 6.4.3 - Production Ready with Pydantic V2, Enhanced Quota & Security Headers
+Version: 6.4.4 - Production Ready
 Author: Brandista Team
 Date: 2025
 Description: Complete production-ready website analysis with configurable scoring system and comprehensive SPA support
@@ -240,17 +240,7 @@ class ScoringConfig:
             self.technical_thresholds = {
                 'ssl_score': 20, 'mobile_viewport_score': 15, 'mobile_responsive_score': 5,
                 'analytics_score': 10, 'meta_tags_max_score': 15, 'structured_data_multiplier': 2,
-                'security_headers': {
-                    # Core security headers (Tier 1)
-                    'csp': 4,
-                    'x_frame_options': 3,
-                    'strict_transport': 3,
-                    # Enhanced security headers (Tier 2)
-                    'referrer_policy': 1,
-                    'x_content_type_options': 1,
-                    'permissions_policy': 1,
-                    'x_xss_protection': 1
-                }
+                'security_headers': {'csp': 4, 'x_frame_options': 3, 'strict_transport': 3}
             }
         
         if self.seo_thresholds is None:
@@ -1957,24 +1947,8 @@ class RoleSummaries(BaseModel):
     CMO: Optional[str] = None
     CTO: Optional[str] = None
 
-class ActionItem(BaseModel):
-    """Enhanced action item with detailed implementation guidance"""
-    week: str                                    # e.g. "Week 1" or "Week 1-2"
-    title: str                                   # e.g. "🔒 SSL Certificate Installation"
-    description: str                             # Detailed what & why
-    steps: List[str] = []                        # Concrete step-by-step actions
-    owner: str                                   # "Developer", "Marketing", "Content"
-    time_estimate: str                           # e.g. "2-4 hours"
-    dependencies: List[str] = []                 # What needs to be done first
-    success_metric: str                          # How to measure completion
-    priority: str                                # "Critical", "High", "Medium", "Low"
-
-class Plan90D(BaseModel):
-    wave_1: List[ActionItem] = []            # Weeks 1-4: Foundation
-    wave_2: List[ActionItem] = []            # Weeks 5-8: Content & SEO
-    wave_3: List[ActionItem] = []            # Weeks 9-12: Scale
-    one_thing_this_week: Optional[str] = None
-    summary: Optional[Dict[str, Any]] = None  # Total actions, hours, critical path
+# Import Enhanced 90-day plan models and function
+from Enhanced_90day_plan import ActionItem, Plan90D, generate_enhanced_90day_plan
 
 class RiskItem(BaseModel):
     risk: str
@@ -2443,37 +2417,20 @@ async def set_cache(key: str, data: Dict[str, Any]):
 # ============================================================================
 
 def check_security_headers_from_headers(headers: httpx.Headers) -> Dict[str, bool]:
-    """
-    Check security headers from HTTP response headers.
-    Enhanced to include Tier 2 security best practices.
-    """
     def has(h: str) -> bool:
         return h in headers
-    
     return {
         'csp': has('content-security-policy'),
         'x_frame_options': has('x-frame-options'),
-        'strict_transport': has('strict-transport-security'),
-        'referrer_policy': has('referrer-policy'),
-        'x_content_type_options': has('x-content-type-options'),
-        'permissions_policy': has('permissions-policy'),
-        'x_xss_protection': has('x-xss-protection')
+        'strict_transport': has('strict-transport-security')
     }
 
 def check_security_headers_in_html(html: str) -> Dict[str, bool]:
-    """
-    Check security headers defined in HTML meta tags.
-    Enhanced to include Tier 2 security best practices.
-    """
     hl = html.lower()
     return {
         'csp': 'content-security-policy' in hl,
         'x_frame_options': 'x-frame-options' in hl,
-        'strict_transport': 'strict-transport-security' in hl,
-        'referrer_policy': 'referrer-policy' in hl,
-        'x_content_type_options': 'x-content-type-options' in hl,
-        'permissions_policy': 'permissions-policy' in hl,
-        'x_xss_protection': 'x-xss-protection' in hl
+        'strict_transport': 'strict-transport-security' in hl
     }
 
 def check_clean_urls(url: str) -> bool:
@@ -2818,17 +2775,9 @@ async def analyze_basic_metrics_enhanced(
             score_components['security'] += 10
             details['https'] = True
             sh = check_security_headers_from_headers(headers) if headers is not None else check_security_headers_in_html(html)
-            # Core security headers (Tier 1)
             if sh['csp']: score_components['security'] += 2
             if sh['x_frame_options']: score_components['security'] += 1
             if sh['strict_transport']: score_components['security'] += 2
-            
-            # Enhanced security headers (Tier 2) - smaller points but important for best practices
-            if sh.get('referrer_policy'): score_components['security'] += 0.5
-            if sh.get('x_content_type_options'): score_components['security'] += 0.5
-            if sh.get('permissions_policy'): score_components['security'] += 0.5
-            if sh.get('x_xss_protection'): score_components['security'] += 0.5
-            
             details['security_headers'] = sh
         else:
             details['https'] = False
@@ -3135,34 +3084,10 @@ async def analyze_technical_aspects(url: str, html: str, headers: Optional[httpx
     else:
         sh = check_security_headers_in_html(html) if 'check_security_headers_in_html' in globals() else {}
     
-    sec_cfg = getattr(SCORING_CONFIG, 'technical_thresholds', {}).get('security_headers', {
-        'csp': 4,
-        'x_frame_options': 3,
-        'strict_transport': 3,
-        'referrer_policy': 1,
-        'x_content_type_options': 1,
-        'permissions_policy': 1,
-        'x_xss_protection': 1
-    }) if 'SCORING_CONFIG' in globals() else {
-        'csp': 4,
-        'x_frame_options': 3,
-        'strict_transport': 3,
-        'referrer_policy': 1,
-        'x_content_type_options': 1,
-        'permissions_policy': 1,
-        'x_xss_protection': 1
-    }
-    
-    # Core security headers (Tier 1)
+    sec_cfg = getattr(SCORING_CONFIG, 'technical_thresholds', {}).get('security_headers', {'csp':4,'x_frame_options':3,'strict_transport':3}) if 'SCORING_CONFIG' in globals() else {'csp':4,'x_frame_options':3,'strict_transport':3}
     if sh.get('csp'): tech_score += sec_cfg.get('csp', 4)
     if sh.get('x_frame_options'): tech_score += sec_cfg.get('x_frame_options', 3)
     if sh.get('strict_transport'): tech_score += sec_cfg.get('strict_transport', 3)
-    
-    # Enhanced security headers (Tier 2)
-    if sh.get('referrer_policy'): tech_score += sec_cfg.get('referrer_policy', 1)
-    if sh.get('x_content_type_options'): tech_score += sec_cfg.get('x_content_type_options', 1)
-    if sh.get('permissions_policy'): tech_score += sec_cfg.get('permissions_policy', 1)
-    if sh.get('x_xss_protection'): tech_score += sec_cfg.get('x_xss_protection', 1)
 
     # Performance indicators
     performance_indicators = []
@@ -3839,12 +3764,10 @@ def compute_business_impact_with_input(
     metrics_used = {}
     annual_revenue = 450_000  # Default EU SME average
     
-    # ✅ KORJAUS: Handle both Pydantic model AND dict (Pydantic V2)
+    # ✅ KORJAUS: Handle both Pydantic model AND dict
     if revenue_input:
         # Convert to dict if it's a Pydantic model
-        if hasattr(revenue_input, 'model_dump'):
-            rev_data = revenue_input.model_dump()
-        elif hasattr(revenue_input, 'dict'):  # Fallback for older Pydantic
+        if hasattr(revenue_input, 'dict'):
             rev_data = revenue_input.dict()
         elif isinstance(revenue_input, dict):
             rev_data = revenue_input
@@ -4156,573 +4079,6 @@ def build_role_summaries(url: str, basic: Dict[str, Any], impact: BusinessImpact
         CTO=cto_summary
     )
 
-def build_plan_90d(basic: Dict[str, Any], content: Dict[str, Any], technical: Dict[str, Any], language: str = 'en') -> Plan90D:
-    """Build enhanced 90-day execution plan with detailed ActionItems"""
-    
-    score = basic.get('digital_maturity_score', 0)
-    breakdown = basic.get('score_breakdown', {})
-    
-    # Determine priorities
-    has_ssl = technical.get('has_ssl', True)
-    has_analytics = technical.get('has_analytics', False)
-    mobile_score = breakdown.get('mobile', 0)
-    seo_score = breakdown.get('seo_basics', 0)
-    content_score = breakdown.get('content', 0)
-    security_score = breakdown.get('security', 0)
-    
-    # Action templates with full details
-    actions_en = {
-        'ssl_setup': ActionItem(
-            week="Week 1",
-            title="🔒 SSL Certificate Installation & Security",
-            description="Install SSL certificate and configure HTTPS to secure your website and improve SEO rankings. Google requires HTTPS for top rankings.",
-            steps=[
-                "Purchase SSL certificate (Let's Encrypt free or paid from Cloudflare/DigiCert)",
-                "Install certificate on web server (cPanel/Plesk/manual)",
-                "Configure automatic HTTP→HTTPS redirect (301 permanent)",
-                "Update internal links to use HTTPS",
-                "Test all pages load correctly over HTTPS",
-                "Set up HSTS header (max-age=31536000)",
-                "Submit HTTPS version to Google Search Console"
-            ],
-            owner="Developer",
-            time_estimate="3-5 hours",
-            dependencies=[],
-            success_metric="All pages accessible via HTTPS, no mixed content warnings, SSL Labs grade A",
-            priority="Critical"
-        ),
-        'analytics_setup': ActionItem(
-            week="Week 1",
-            title="📊 Google Analytics 4 & Conversion Tracking",
-            description="Install GA4 to start collecting data immediately. You need 30 days of data before making optimization decisions.",
-            steps=[
-                "Create GA4 property in Google Analytics",
-                "Install GA4 tag via GTM or direct embed",
-                "Define 3-5 key conversion events (form submit, purchase, newsletter signup)",
-                "Configure enhanced measurement (scroll, outbound clicks, file downloads)",
-                "Link to Google Search Console",
-                "Set up custom events for critical user actions",
-                "Create basic dashboard: traffic sources, popular pages, conversions",
-                "Test events firing correctly (use GA4 DebugView)",
-                "Set up weekly automated email reports"
-            ],
-            owner="Marketing",
-            time_estimate="4-6 hours",
-            dependencies=[],
-            success_metric="GA4 collecting data, 3+ conversion events tracked, 0 errors in DebugView",
-            priority="Critical"
-        ),
-        'seo_foundation': ActionItem(
-            week="Week 2-3",
-            title="🎯 SEO Foundation: Titles, Metas & Technical Basics",
-            description="Fix low-hanging SEO fruit on your top 10 pages. These changes can show results in 2-4 weeks.",
-            steps=[
-                "Identify top 10 pages by traffic (Google Analytics)",
-                "Audit titles: 50-60 chars, include primary keyword, brand at end",
-                "Audit meta descriptions: 150-160 chars, compelling copy, include keyword",
-                "Fix missing H1 tags (exactly 1 per page)",
-                "Fix heading hierarchy (H1→H2→H3, no skipping levels)",
-                "Add alt text to all images (descriptive, include keywords where natural)",
-                "Check for duplicate titles/metas, make each unique",
-                "Create XML sitemap if missing",
-                "Submit sitemap to Google Search Console",
-                "Fix broken internal links",
-                "Add schema.org markup for Organization/LocalBusiness"
-            ],
-            owner="Marketing + Developer",
-            time_estimate="8-12 hours",
-            dependencies=["Analytics setup"],
-            success_metric="All top 10 pages have optimized titles/metas, 0 H1 errors, sitemap submitted",
-            priority="High"
-        ),
-        'mobile_optimization': ActionItem(
-            week="Week 3-4",
-            title="📱 Mobile Optimization & Core Web Vitals",
-            description="Ensure mobile users have a fast, smooth experience. 60%+ of traffic is mobile.",
-            steps=[
-                "Add viewport meta tag if missing",
-                "Test on real devices (iPhone, Android) + Chrome DevTools mobile emulator",
-                "Run Google PageSpeed Insights for mobile, target 70+ score",
-                "Compress images: use TinyPNG/ImageOptim, target <200KB per image",
-                "Implement lazy loading for below-fold images",
-                "Minify CSS and JavaScript",
-                "Enable browser caching (set Cache-Control headers)",
-                "Consider CDN for static assets (Cloudflare free tier)",
-                "Fix tap targets: min 48x48px, adequate spacing",
-                "Test forms on mobile: ensure inputs are properly sized",
-                "Optimize font loading (font-display: swap)",
-                "Achieve Core Web Vitals: LCP <2.5s, FID <100ms, CLS <0.1"
-            ],
-            owner="Developer",
-            time_estimate="10-15 hours",
-            dependencies=["SSL setup"],
-            success_metric="Mobile PageSpeed 70+, all Core Web Vitals 'Good', responsive on all devices",
-            priority="High"
-        ),
-        'content_strategy': ActionItem(
-            week="Week 5-6",
-            title="✍️ Content Strategy & Pillar Article Planning",
-            description="Plan high-quality content that attracts and converts your ideal customers.",
-            steps=[
-                "Research 10-15 keywords your customers search",
-                "Analyze search intent: what are users really looking for?",
-                "Identify 3-4 'pillar' topics (broad, high search volume)",
-                "For each pillar, identify 8-10 'cluster' subtopics",
-                "Analyze top 3 ranking competitors for each topic",
-                "Create content brief for first pillar article",
-                "Define content calendar for next 90 days",
-                "Allocate budget: in-house writer vs freelancer vs agency",
-                "Set up editorial workflow: draft→review→optimize→publish"
-            ],
-            owner="Content/Marketing",
-            time_estimate="6-8 hours",
-            dependencies=["Analytics setup", "SEO foundation"],
-            success_metric="Content calendar created, 3 pillar topics researched, first brief complete",
-            priority="High"
-        ),
-        'content_creation': ActionItem(
-            week="Week 7-8",
-            title="📝 Content Creation: First Pillar Articles",
-            description="Create comprehensive, expert-level content that ranks and converts.",
-            steps=[
-                "Write first pillar article (2000-3000 words)",
-                "Include: clear H1, logical H2/H3 structure, images/diagrams, internal links",
-                "Optimize for featured snippet: concise answer at top",
-                "Add FAQ section with 5-8 common questions",
-                "Include CTA: newsletter signup, consultation booking, product demo",
-                "SEO optimize: target keyword in title, URL, H1, first paragraph",
-                "Add internal links to 3-5 related pages",
-                "Source and compress images (<200KB each)",
-                "Write compelling meta description",
-                "Peer review for accuracy and quality",
-                "Publish and share on social media"
-            ],
-            owner="Content",
-            time_estimate="12-16 hours per article",
-            dependencies=["Content strategy"],
-            success_metric="First 2 pillar articles published, 2000+ words each, fully optimized",
-            priority="High"
-        ),
-        'technical_seo': ActionItem(
-            week="Week 7-8",
-            title="⚙️ Technical SEO: Schema, Sitemap & Speed",
-            description="Implement technical improvements that help search engines understand and rank your site.",
-            steps=[
-                "Implement FAQ schema markup on key pages",
-                "Add BreadcrumbList schema for navigation",
-                "Set up structured data testing (Google Rich Results Test)",
-                "Create/update robots.txt",
-                "Generate/update XML sitemap with priority and changefreq",
-                "Submit sitemap to Google Search Console + Bing Webmaster",
-                "Set up Google Search Console: verify property, check for crawl errors",
-                "Fix any crawl errors or coverage issues",
-                "Implement canonical tags to avoid duplicate content",
-                "Set up 301 redirects for any moved/deleted pages"
-            ],
-            owner="Developer",
-            time_estimate="6-8 hours",
-            dependencies=["SEO foundation"],
-            success_metric="Schema validated, sitemap submitted, 0 crawl errors in Search Console",
-            priority="Medium"
-        ),
-        'content_expansion': ActionItem(
-            week="Week 9-10",
-            title="🚀 Content Expansion: Cluster Articles & Link Building",
-            description="Expand content hub with supporting articles and build internal linking structure.",
-            steps=[
-                "Write 4-6 cluster articles (1000-1500 words each)",
-                "Link all cluster articles to main pillar",
-                "Link pillar article to relevant clusters",
-                "Update older content: add links to new articles",
-                "Create topic cluster diagram",
-                "Optimize images for all new articles",
-                "Share new content on social media, LinkedIn",
-                "Reach out to 5-10 relevant sites for backlinks",
-                "Monitor rankings in Google Search Console"
-            ],
-            owner="Content/Marketing",
-            time_estimate="16-20 hours",
-            dependencies=["Content creation"],
-            success_metric="4+ cluster articles published, internal linking complete, 2+ external backlinks",
-            priority="Medium"
-        ),
-        'conversion_optimization': ActionItem(
-            week="Week 10-11",
-            title="💰 Conversion Rate Optimization: Testing & Optimization",
-            description="Optimize your highest-traffic pages to convert more visitors into customers.",
-            steps=[
-                "Identify top 3 landing pages by traffic",
-                "Analyze current conversion rate and user behavior",
-                "Identify friction points: slow loading, unclear CTA, poor mobile UX",
-                "Create A/B test hypotheses",
-                "Set up A/B tests (Google Optimize, VWO, or Optimizely)",
-                "Test variations for 2 weeks minimum",
-                "Analyze results: winner by conversion rate",
-                "Implement winning variation",
-                "Document learnings and apply to other pages"
-            ],
-            owner="Marketing",
-            time_estimate="10-12 hours",
-            dependencies=["Analytics setup", "Mobile optimization"],
-            success_metric="3 A/B tests running, 1+ winning variation implemented",
-            priority="Medium"
-        ),
-        'advanced_tracking': ActionItem(
-            week="Week 11",
-            title="📈 Advanced Analytics: Dashboards & Attribution",
-            description="Set up comprehensive tracking and reporting to measure ROI and guide decisions.",
-            steps=[
-                "Create custom GA4 dashboard",
-                "Set up goal funnels: identify drop-off points",
-                "Configure enhanced e-commerce tracking",
-                "Set up Google Tag Manager",
-                "Implement event tracking",
-                "Set up custom dimensions",
-                "Create automated weekly report",
-                "Set up alerts for traffic drops, conversion drops",
-                "Document analytics setup for team"
-            ],
-            owner="Marketing + Developer",
-            time_estimate="8-10 hours",
-            dependencies=["Analytics setup"],
-            success_metric="Custom dashboard live, enhanced tracking implemented, automated reports active",
-            priority="Medium"
-        ),
-        'review_optimize': ActionItem(
-            week="Week 12",
-            title="🎯 90-Day Review & Q2 Planning",
-            description="Review results, document wins, identify next priorities for continued growth.",
-            steps=[
-                "Compile metrics: traffic change, ranking improvements",
-                "Compare: pre-implementation vs current scores",
-                "Document quick wins: what worked best",
-                "Identify ongoing issues",
-                "Calculate ROI: revenue increase vs investment",
-                "Survey team: what went well, what was challenging",
-                "Plan Q2 priorities: 3-5 key initiatives",
-                "Schedule quarterly check-ins",
-                "Celebrate wins with team!"
-            ],
-            owner="All",
-            time_estimate="4-6 hours",
-            dependencies=["All previous tasks"],
-            success_metric="Complete 90-day report, ROI calculated, Q2 roadmap defined",
-            priority="High"
-        ),
-    }
-    
-    # Finnish translations (simplified for space)
-    actions_fi = {
-        'ssl_setup': ActionItem(
-            week="Viikko 1",
-            title="🔒 SSL-sertifikaatin asennus & Turvallisuus",
-            description="Asenna SSL-sertifikaatti ja konfiguroi HTTPS suojataksesi sivuston.",
-            steps=[
-                "Hanki SSL-sertifikaatti (Let's Encrypt ilmainen)",
-                "Asenna palvelimelle",
-                "Konfiguroi HTTP→HTTPS uudelleenohjaus",
-                "Päivitä sisäiset linkit",
-                "Testaa kaikki sivut",
-                "Aseta HSTS-header",
-                "Lähetä Search Consoleen"
-            ],
-            owner="Kehittäjä",
-            time_estimate="3-5 tuntia",
-            dependencies=[],
-            success_metric="Kaikki sivut HTTPS:llä, SSL Labs arvosana A",
-            priority="Critical"
-        ),
-        'analytics_setup': ActionItem(
-            week="Viikko 1",
-            title="📊 Google Analytics 4 asennus",
-            description="Asenna GA4 aloittaaksesi datan keräämisen.",
-            steps=[
-                "Luo GA4 property",
-                "Asenna GA4-tagi",
-                "Määrittele 3-5 konversiota",
-                "Konfiguroi enhanced measurement",
-                "Linkitä Search Consoleen",
-                "Luo dashboard",
-                "Testaa DebugView:llä",
-                "Aseta raportit"
-            ],
-            owner="Markkinointi",
-            time_estimate="4-6 tuntia",
-            dependencies=[],
-            success_metric="GA4 kerää dataa, konversiot seurataan",
-            priority="Critical"
-        ),
-        'seo_foundation': ActionItem(
-            week="Viikko 2-3",
-            title="🎯 SEO-perusta: Otsikot & Metat",
-            description="Korjaa SEO:n low-hanging fruit 10 sivullasi.",
-            steps=[
-                "Tunnista top 10 sivua",
-                "Auditoi otsikot: 50-60 merkkiä",
-                "Auditoi meta-kuvaukset",
-                "Korjaa H1-tagit",
-                "Korjaa otsikkohierarkia",
-                "Lisää alt-tekstit",
-                "Luo XML-sivukartta",
-                "Lähetä Search Consoleen",
-                "Lisää schema-merkintä"
-            ],
-            owner="Markkinointi + Kehittäjä",
-            time_estimate="8-12 tuntia",
-            dependencies=["Analytics-asennus"],
-            success_metric="Top 10 sivua optimoitu",
-            priority="High"
-        ),
-        'mobile_optimization': ActionItem(
-            week="Viikko 3-4",
-            title="📱 Mobiilioptimiointi",
-            description="Varmista nopea mobiilikokemus.",
-            steps=[
-                "Lisää viewport meta tag",
-                "Testaa oikeilla laitteilla",
-                "Aja PageSpeed Insights",
-                "Pakkaa kuvat",
-                "Ota lazy loading käyttöön",
-                "Minifioi CSS ja JS",
-                "Aktivoi välimuisti",
-                "Saavuta Core Web Vitals"
-            ],
-            owner="Kehittäjä",
-            time_estimate="10-15 tuntia",
-            dependencies=["SSL-asennus"],
-            success_metric="Mobile PageSpeed 70+",
-            priority="High"
-        ),
-        'content_strategy': ActionItem(
-            week="Viikko 5-6",
-            title="✍️ Sisältöstrategia",
-            description="Suunnittele laadukas sisältö.",
-            steps=[
-                "Tutki 10-15 avainsanaa",
-                "Analysoi hakuintentio",
-                "Tunnista 3-4 pilari-aihetta",
-                "Tunnista klusteriaiheet",
-                "Analysoi kilpailijat",
-                "Luo sisältöbriifi",
-                "Määrittele kalenteri"
-            ],
-            owner="Sisältö/Markkinointi",
-            time_estimate="6-8 tuntia",
-            dependencies=["Analytics-asennus", "SEO-perusta"],
-            success_metric="Kalenteri luotu, 3 aihetta tutkittu",
-            priority="High"
-        ),
-        'content_creation': ActionItem(
-            week="Viikko 7-8",
-            title="📝 Sisällöntuotanto",
-            description="Luo kattavaa sisältöä.",
-            steps=[
-                "Kirjoita ensimmäinen pilariartikkeli",
-                "Sisällytä H1, H2/H3, kuvat",
-                "Optimoi featured snippetille",
-                "Lisää FAQ-osio",
-                "Sisällytä CTA",
-                "SEO-optimoi",
-                "Julkaise ja jaa"
-            ],
-            owner="Sisältö",
-            time_estimate="12-16 tuntia",
-            dependencies=["Sisältöstrategia"],
-            success_metric="2 artikkelia julkaistu, 2000+ sanaa",
-            priority="High"
-        ),
-        'technical_seo': ActionItem(
-            week="Viikko 7-8",
-            title="⚙️ Tekninen SEO",
-            description="Toteuta teknisiä parannuksia.",
-            steps=[
-                "Toteuta FAQ schema",
-                "Lisää BreadcrumbList",
-                "Testaa structured data",
-                "Luo/päivitä robots.txt",
-                "Generoi XML sitemap",
-                "Lähetä sitemap",
-                "Korjaa crawl errorsit"
-            ],
-            owner="Kehittäjä",
-            time_estimate="6-8 tuntia",
-            dependencies=["SEO-perusta"],
-            success_metric="Schema validoitu, 0 errorsia",
-            priority="Medium"
-        ),
-        'content_expansion': ActionItem(
-            week="Viikko 9-10",
-            title="🚀 Sisällön laajentaminen",
-            description="Laajenna sisältöhubia.",
-            steps=[
-                "Kirjoita 4-6 klusteriartikkelia",
-                "Linkitä artikkelit pilariin",
-                "Päivitä vanhempi sisältö",
-                "Luo klusterikaavio",
-                "Jaa sosiaalisessa mediassa",
-                "Hanki backlinkkejä"
-            ],
-            owner="Sisältö/Markkinointi",
-            time_estimate="16-20 tuntia",
-            dependencies=["Sisällöntuotanto"],
-            success_metric="4+ artikkelia, 2+ backlinkkiä",
-            priority="Medium"
-        ),
-        'conversion_optimization': ActionItem(
-            week="Viikko 10-11",
-            title="💰 Konversion optimointi",
-            description="Optimoi konversioprosenttia.",
-            steps=[
-                "Tunnista top 3 aloitussivua",
-                "Analysoi käyttäytyminen",
-                "Tunnista kitkakohdat",
-                "Luo A/B-testihypoteesit",
-                "Aseta testit",
-                "Analysoi tulokset",
-                "Toteuta voittaja"
-            ],
-            owner="Markkinointi",
-            time_estimate="10-12 tuntia",
-            dependencies=["Analytics-asennus", "Mobiilioptimiointi"],
-            success_metric="3 testiä, 1+ voittaja toteutettu",
-            priority="Medium"
-        ),
-        'advanced_tracking': ActionItem(
-            week="Viikko 11",
-            title="📈 Edistynyt analytiikka",
-            description="Aseta kattava seuranta.",
-            steps=[
-                "Luo custom dashboard",
-                "Aseta goal funnels",
-                "Konfiguroi e-commerce tracking",
-                "Aseta GTM",
-                "Toteuta event tracking",
-                "Dokumentoi asetukset"
-            ],
-            owner="Markkinointi + Kehittäjä",
-            time_estimate="8-10 tuntia",
-            dependencies=["Analytics-asennus"],
-            success_metric="Dashboard live, raportit aktiivisia",
-            priority="Medium"
-        ),
-        'review_optimize': ActionItem(
-            week="Viikko 12",
-            title="🎯 90-päivän katsaus",
-            description="Tarkastele tuloksia ja suunnittele Q2.",
-            steps=[
-                "Kokoa mittarit",
-                "Vertaa tuloksia",
-                "Dokumentoi voitot",
-                "Tunnista ongelmat",
-                "Laske ROI",
-                "Suunnittele Q2",
-                "Juhli voitot!"
-            ],
-            owner="Kaikki",
-            time_estimate="4-6 tuntia",
-            dependencies=["Kaikki edelliset"],
-            success_metric="Raportti valmis, Q2 roadmap määritelty",
-            priority="High"
-        ),
-    }
-    
-    actions = actions_fi if language == 'fi' else actions_en
-    
-    # Build waves based on priorities
-    wave_1_tasks = []
-    wave_2_tasks = []
-    wave_3_tasks = []
-    
-    # Wave 1: Foundation (Weeks 1-4)
-    if not has_ssl or security_score < 10:
-        wave_1_tasks.append(actions['ssl_setup'])
-    
-    if not has_analytics:
-        wave_1_tasks.append(actions['analytics_setup'])
-    
-    if seo_score < 15:
-        wave_1_tasks.append(actions['seo_foundation'])
-    
-    if mobile_score < 10:
-        wave_1_tasks.append(actions['mobile_optimization'])
-    
-    # Wave 2: Content & Technical (Weeks 5-8)
-    if content_score < 15:
-        wave_2_tasks.extend([
-            actions['content_strategy'],
-            actions['content_creation']
-        ])
-    
-    wave_2_tasks.append(actions['technical_seo'])
-    
-    # Wave 3: Scale (Weeks 9-12)
-    wave_3_tasks.extend([
-        actions['content_expansion'],
-        actions['conversion_optimization'],
-        actions['advanced_tracking'],
-        actions['review_optimize']
-    ])
-    
-    # Calculate summary
-    total_actions = len(wave_1_tasks) + len(wave_2_tasks) + len(wave_3_tasks)
-    critical_tasks = [t.title for t in wave_1_tasks if t.priority == "Critical"]
-    
-    # Estimate total hours
-    def parse_hours(time_str: str) -> float:
-        # Parse "X-Y hours" or "X-Y tuntia"
-        parts = time_str.split('-')
-        if len(parts) == 2:
-            low = int(parts[0].strip().split()[0])
-            high = int(parts[1].strip().split()[0])
-            return (low + high) / 2
-        return 8.0
-    
-    total_hours = sum([parse_hours(t.time_estimate) for t in wave_1_tasks + wave_2_tasks + wave_3_tasks])
-    hours_range = f"{int(total_hours * 0.8)}-{int(total_hours * 1.2)}"
-    hours_label = "hours" if language == "en" else "tuntia"
-    
-    # Determine one thing this week
-    one_thing_texts = {
-        'en': {
-            'ssl': 'Install SSL certificate (blocks everything else)',
-            'analytics': 'Install GA4 tracking (need data to make decisions)',
-            'seo': 'Fix titles & meta on your top 10 pages',
-            'content': 'Outline your first pillar article topic',
-            'default': 'Run Lighthouse audit on top 5 pages, note top 3 issues'
-        },
-        'fi': {
-            'ssl': 'Asenna SSL-sertifikaatti (estää kaiken muun)',
-            'analytics': 'Asenna GA4-seuranta (tarvitaan dataa päätöksiin)',
-            'seo': 'Korjaa otsikot & metat 10 sivullasi',
-            'content': 'Hahmottele ensimmäinen pilariartikkeli',
-            'default': 'Suorita Lighthouse-auditointi 5 sivulle'
-        }
-    }
-    
-    texts = one_thing_texts[language]
-    
-    if not has_ssl or security_score < 10:
-        one_thing = texts['ssl']
-    elif not has_analytics:
-        one_thing = texts['analytics']
-    elif seo_score < 15:
-        one_thing = texts['seo']
-    elif content_score < 15:
-        one_thing = texts['content']
-    else:
-        one_thing = texts['default']
-    
-    return Plan90D(
-        wave_1=wave_1_tasks[:5],
-        wave_2=wave_2_tasks[:4],
-        wave_3=wave_3_tasks[:5],
-        one_thing_this_week=one_thing,
-        summary={
-            'total_actions': total_actions,
-            'estimated_hours': f"{hours_range} {hours_label}",
-            'critical_path': critical_tasks
-        }
-    )
 
 def build_risk_register(basic: Dict[str, Any], technical: Dict[str, Any], content: Dict[str, Any], language: str = 'en') -> List[RiskItem]:
     """Build risk register with likelihood, impact, mitigation"""
@@ -5009,30 +4365,12 @@ def _check_authority_markers(technical: Dict[str, Any], basic: Dict[str, Any]) -
     
     # Security headers (additional trust)
     security_headers = technical.get('security_headers', {})
-    
-    # Core security headers (Tier 1)
     if security_headers.get('csp'):
         score += 10
         findings.append("Content Security Policy configured")
     if security_headers.get('strict_transport'):
         score += 10
         findings.append("HSTS enabled")
-    
-    # Enhanced security headers (Tier 2) - shows professional security posture
-    tier2_count = sum([
-        security_headers.get('referrer_policy', False),
-        security_headers.get('x_content_type_options', False),
-        security_headers.get('permissions_policy', False),
-        security_headers.get('x_xss_protection', False)
-    ])
-    
-    if tier2_count >= 3:
-        score += 8
-        findings.append("Enhanced security headers - professional security posture")
-    elif tier2_count >= 1:
-        score += 4
-        findings.append("Partial enhanced security headers")
-        recommendations.append("Add missing Tier 2 security headers (Referrer-Policy, X-Content-Type-Options)")
     
     # Analytics/tracking (shows site is monitored)
     if technical.get('has_analytics', False):
@@ -5234,7 +4572,7 @@ async def analyze_ai_search_visibility(
         chatgpt_readiness_score=chatgpt_score,
         perplexity_readiness_score=perplexity_score,
         overall_ai_search_score=overall_score,
-        factors={name: factor.model_dump() for name, factor in factors.items()},
+        factors={name: factor.dict() for name, factor in factors.items()},
         key_insights=key_insights[:5],
         priority_actions=priority_actions[:5]
     )
@@ -5347,7 +4685,17 @@ async def generate_ai_insights(
         )
         
         role = build_role_summaries(url, basic, impact, language=language)
-        plan = build_plan_90d(basic, content, technical, language=language)  
+        
+        # Use enhanced 90-day plan with intelligent prioritization
+        # Note: competitor_gap will be None for now, but the function handles it gracefully
+        plan = generate_enhanced_90day_plan(
+            basic=basic, 
+            content=content, 
+            technical=technical, 
+            language=language,
+            competitor_gap=None  # TODO: Add competitor analysis data when available
+        )
+        
         risks = build_risk_register(basic, technical, content, language=language)
         snippets = build_snippet_examples(url, basic, language=language)
 
@@ -5587,15 +4935,7 @@ async def generate_competitive_swot_analysis(
             'fix_cost': '€0 (configuration)',
             'priority_score': 85,
             'competitive_gap': 'Missing industry standard headers',
-            'fix_steps': [
-                'Add CSP header (Content-Security-Policy)',
-                'Add X-Frame-Options: DENY or SAMEORIGIN',
-                'Add HSTS (Strict-Transport-Security: max-age=31536000)',
-                'Add Referrer-Policy: strict-origin-when-cross-origin',
-                'Add X-Content-Type-Options: nosniff',
-                'Add Permissions-Policy for feature control',
-                'Test configuration with securityheaders.com'
-            ]
+            'fix_steps': ['Add CSP header', 'Add X-Frame-Options', 'Add HSTS', 'Test configuration']
         })
     
     # Content weakness
@@ -7249,7 +6589,7 @@ async def calculate_revenue_impact(request: RevenueCalculationRequest):
     
     return {
         "success": True,
-        "business_impact": impact.model_dump(),
+        "business_impact": impact.dict(),
         "recommendations": [
             f"Focus on {area}" for area in impact.improvement_areas[:3]
         ],
@@ -8242,32 +7582,14 @@ async def discover_competitors(
         }
         
     except HTTPException:
-        # Clean up task on HTTP errors and refund quota
+        # Clean up task on HTTP errors
         if task_queue:
             task_queue.update_task(task_id, {"status": "failed", "progress": 0})
-        
-        # Refund reserved quota on setup failure
-        if user.role not in ["admin", "super_user"] and 'required_analyses' in locals():
-            user_search_counts[user.username] = max(
-                0,
-                user_search_counts.get(user.username, 0) - required_analyses
-            )
-            logger.info(f"💰 Refunded {required_analyses} credits to {user.username} (setup failed)")
-        
         raise
     except Exception as e:
-        # Clean up task on unexpected errors and refund quota
+        # Clean up task on unexpected errors
         if task_queue:
             task_queue.update_task(task_id, {"status": "failed", "progress": 0})
-        
-        # Refund reserved quota on setup failure
-        if user.role not in ["admin", "super_user"] and 'required_analyses' in locals():
-            user_search_counts[user.username] = max(
-                0,
-                user_search_counts.get(user.username, 0) - required_analyses
-            )
-            logger.info(f"💰 Refunded {required_analyses} credits to {user.username} (error)")
-        
         logger.error(f"Discovery setup failed: {e}", exc_info=True)
         raise HTTPException(500, f"Failed to start discovery: {str(e)}")
 
@@ -9659,7 +8981,13 @@ async def analyze_competitive_radar(
         
         logger.info(f"[Radar] Successfully analyzed: 1 your site + {len(competitor_analyses)} competitors ({len(failed_competitors)} failed)")
         
-        # === 4. EXTRACT SUMMARIES ===
+        # === 4. UPDATE QUOTA ===
+        if user.role != "admin":
+            successful_analyses = 1 + len(competitor_analyses)
+            user_search_counts[user.username] = current_count + successful_analyses
+            logger.info(f"[Radar] Used {successful_analyses} credits for {user.username}")
+        
+        # === 5. EXTRACT SUMMARIES ===
         your_summary = _extract_detailed_summary(your_analysis)
         
         if your_summary is None:
@@ -9693,7 +9021,7 @@ async def analyze_competitive_radar(
             f"competitors={[(c['company'], c['score']) for c in comp_summaries]}"
         )
         
-        # === 5. SYVÄLLINEN EROTTUVUUSANALYYSI ===
+        # === 6. SYVÄLLINEN EROTTUVUUSANALYYSI ===
         logger.info("[Radar] Building differentiation matrix...")
         
         differentiation_matrix = await _build_differentiation_matrix(
@@ -9705,7 +9033,7 @@ async def analyze_competitive_radar(
         
         logger.info(f"[Radar] ✅ Differentiation matrix built with keys: {list(differentiation_matrix.keys())}")
         
-        # === 6. TODELLISET MARKKINAAUKOT (AI-pohjainen) ===
+        # === 7. TODELLISET MARKKINAAUKOT (AI-pohjainen) ===
         logger.info("[Radar] Discovering market gaps...")
         
         market_gaps = await _discover_real_market_gaps(
@@ -9716,7 +9044,7 @@ async def analyze_competitive_radar(
         
         logger.info(f"[Radar] ✅ Found {len(market_gaps)} market gaps")
         
-        # === 7. KILPAILULLINEN ASEMOINTI ===
+        # === 8. KILPAILULLINEN ASEMOINTI ===
         logger.info("[Radar] Calculating market positioning...")
         
         positioning = await _calculate_market_positioning(
@@ -9729,7 +9057,7 @@ async def analyze_competitive_radar(
             f"competitive_score={positioning['competitive_score']}"
         )
         
-        # === 8. STRATEGISET SUOSITUKSET ===
+        # === 9. STRATEGISET SUOSITUKSET ===
         logger.info("[Radar] Generating strategic recommendations...")
         
         strategic_recommendations = await _generate_strategic_recommendations(
@@ -9742,7 +9070,7 @@ async def analyze_competitive_radar(
         
         logger.info(f"[Radar] ✅ Generated {len(strategic_recommendations)} strategic recommendations")
         
-        # === 9. ENHANCED SWOT ANALYSIS ===
+        # === 10. ENHANCED SWOT ANALYSIS ===
         logger.info("[Radar] Generating enhanced SWOT analysis...")
         
         try:
@@ -9756,7 +9084,7 @@ async def analyze_competitive_radar(
             logger.error(f"[Radar] ❌ Enhanced SWOT failed: {e}")
             enhanced_swot = None
         
-        # === 10. CREATIVE BOLDNESS ANALYSIS ===
+        # === 11. CREATIVE BOLDNESS ANALYSIS ===
         logger.info("[Radar] Analyzing creative boldness...")
         
         try:
@@ -9769,6 +9097,45 @@ async def analyze_competitive_radar(
         except Exception as e:
             logger.error(f"[Radar] ❌ Creative boldness failed: {e}")
             creative_boldness = None
+        
+        # === 11.5. REGENERATE 90-DAY PLAN WITH COMPETITOR DATA ===
+        logger.info("[Radar] Regenerating 90-day plan with competitor intelligence...")
+        
+        try:
+            # Calculate competitive gap for Enhanced plan
+            your_score = your_analysis['basic_analysis']['digital_maturity_score']
+            competitor_scores = [c.get('basic_analysis', {}).get('digital_maturity_score', 50) 
+                                for c in competitor_analyses]
+            avg_competitor_score = sum(competitor_scores) / len(competitor_scores) if competitor_scores else your_score
+            
+            competitor_gap_data = {
+                'avg_competitor_score': avg_competitor_score,
+                'gap': avg_competitor_score - your_score,
+                'your_rank': sum(1 for s in competitor_scores if s > your_score) + 1,
+                'total_analyzed': len(competitor_scores) + 1,
+                'market_gaps': market_gaps[:3] if market_gaps else []  # Top 3 gaps for context
+            }
+            
+            # Regenerate with competitive intelligence
+            enhanced_plan = generate_enhanced_90day_plan(
+                basic=your_analysis['basic_analysis'],
+                content=your_analysis.get('content_analysis', {}),
+                technical=your_analysis.get('technical_audit', {}),
+                language=request.language,
+                competitor_gap=competitor_gap_data
+            )
+            
+            # Replace the basic 90-day plan with enhanced version
+            your_analysis['ai_analysis']['plan_90d'] = enhanced_plan.model_dump()
+            
+            logger.info(
+                f"[Radar] ✅ Enhanced 90-day plan regenerated: "
+                f"Gap={competitor_gap_data['gap']:.1f}, "
+                f"Rank={competitor_gap_data['your_rank']}/{competitor_gap_data['total_analyzed']}, "
+                f"Actions={enhanced_plan.summary['total_actions']}"
+            )
+        except Exception as e:
+            logger.error(f"[Radar] ⚠️ Enhanced 90-day plan regeneration failed (keeping original): {e}")
         
        # === 12. RAKENNA RESPONSE ===
         logger.info("[Radar] Building final response...")
@@ -9807,30 +9174,6 @@ async def analyze_competitive_radar(
             f"Gaps={len(market_gaps)}, "
             f"Recommendations={len(strategic_recommendations)}"
         )
-        
-        # === 11. UPDATE QUOTA (only after successful completion) ===
-        if user.role != "admin":
-            successful_analyses = 1 + len(competitor_analyses)
-            
-            # Update in history_db if available
-            if history_db:
-                try:
-                    # Record each successful analysis
-                    for _ in range(successful_analyses):
-                        await history_db.add_analysis_record(
-                            username=user.username,
-                            analysis_type='single',
-                            url=request.your_url,
-                            metadata={'radar_analysis': True}
-                        )
-                    logger.info(f"[Radar] ✅ Recorded {successful_analyses} analyses in history_db for {user.username}")
-                except Exception as e:
-                    logger.error(f"[Radar] ⚠️ Failed to record in history_db: {e}")
-            
-            # Also update in-memory count for backward compatibility
-            current_count = user_search_counts.get(user.username, 0)
-            user_search_counts[user.username] = current_count + successful_analyses
-            logger.info(f"[Radar] ✅ Used {successful_analyses} credits for {user.username}")
 
         return response
         
