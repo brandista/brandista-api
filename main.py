@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Brandista Competitive Intelligence API - Complete Unified Version
-Version: 6.4.2 - Production Ready
+Version: 6.4.3 - Production Ready with Pydantic V2, Enhanced Quota & Security Headers
 Author: Brandista Team
 Date: 2025
 Description: Complete production-ready website analysis with configurable scoring system and comprehensive SPA support
@@ -240,7 +240,17 @@ class ScoringConfig:
             self.technical_thresholds = {
                 'ssl_score': 20, 'mobile_viewport_score': 15, 'mobile_responsive_score': 5,
                 'analytics_score': 10, 'meta_tags_max_score': 15, 'structured_data_multiplier': 2,
-                'security_headers': {'csp': 4, 'x_frame_options': 3, 'strict_transport': 3}
+                'security_headers': {
+                    # Core security headers (Tier 1)
+                    'csp': 4,
+                    'x_frame_options': 3,
+                    'strict_transport': 3,
+                    # Enhanced security headers (Tier 2)
+                    'referrer_policy': 1,
+                    'x_content_type_options': 1,
+                    'permissions_policy': 1,
+                    'x_xss_protection': 1
+                }
             }
         
         if self.seo_thresholds is None:
@@ -2433,20 +2443,37 @@ async def set_cache(key: str, data: Dict[str, Any]):
 # ============================================================================
 
 def check_security_headers_from_headers(headers: httpx.Headers) -> Dict[str, bool]:
+    """
+    Check security headers from HTTP response headers.
+    Enhanced to include Tier 2 security best practices.
+    """
     def has(h: str) -> bool:
         return h in headers
+    
     return {
         'csp': has('content-security-policy'),
         'x_frame_options': has('x-frame-options'),
-        'strict_transport': has('strict-transport-security')
+        'strict_transport': has('strict-transport-security'),
+        'referrer_policy': has('referrer-policy'),
+        'x_content_type_options': has('x-content-type-options'),
+        'permissions_policy': has('permissions-policy'),
+        'x_xss_protection': has('x-xss-protection')
     }
 
 def check_security_headers_in_html(html: str) -> Dict[str, bool]:
+    """
+    Check security headers defined in HTML meta tags.
+    Enhanced to include Tier 2 security best practices.
+    """
     hl = html.lower()
     return {
         'csp': 'content-security-policy' in hl,
         'x_frame_options': 'x-frame-options' in hl,
-        'strict_transport': 'strict-transport-security' in hl
+        'strict_transport': 'strict-transport-security' in hl,
+        'referrer_policy': 'referrer-policy' in hl,
+        'x_content_type_options': 'x-content-type-options' in hl,
+        'permissions_policy': 'permissions-policy' in hl,
+        'x_xss_protection': 'x-xss-protection' in hl
     }
 
 def check_clean_urls(url: str) -> bool:
@@ -2791,9 +2818,17 @@ async def analyze_basic_metrics_enhanced(
             score_components['security'] += 10
             details['https'] = True
             sh = check_security_headers_from_headers(headers) if headers is not None else check_security_headers_in_html(html)
+            # Core security headers (Tier 1)
             if sh['csp']: score_components['security'] += 2
             if sh['x_frame_options']: score_components['security'] += 1
             if sh['strict_transport']: score_components['security'] += 2
+            
+            # Enhanced security headers (Tier 2) - smaller points but important for best practices
+            if sh.get('referrer_policy'): score_components['security'] += 0.5
+            if sh.get('x_content_type_options'): score_components['security'] += 0.5
+            if sh.get('permissions_policy'): score_components['security'] += 0.5
+            if sh.get('x_xss_protection'): score_components['security'] += 0.5
+            
             details['security_headers'] = sh
         else:
             details['https'] = False
@@ -3100,10 +3135,34 @@ async def analyze_technical_aspects(url: str, html: str, headers: Optional[httpx
     else:
         sh = check_security_headers_in_html(html) if 'check_security_headers_in_html' in globals() else {}
     
-    sec_cfg = getattr(SCORING_CONFIG, 'technical_thresholds', {}).get('security_headers', {'csp':4,'x_frame_options':3,'strict_transport':3}) if 'SCORING_CONFIG' in globals() else {'csp':4,'x_frame_options':3,'strict_transport':3}
+    sec_cfg = getattr(SCORING_CONFIG, 'technical_thresholds', {}).get('security_headers', {
+        'csp': 4,
+        'x_frame_options': 3,
+        'strict_transport': 3,
+        'referrer_policy': 1,
+        'x_content_type_options': 1,
+        'permissions_policy': 1,
+        'x_xss_protection': 1
+    }) if 'SCORING_CONFIG' in globals() else {
+        'csp': 4,
+        'x_frame_options': 3,
+        'strict_transport': 3,
+        'referrer_policy': 1,
+        'x_content_type_options': 1,
+        'permissions_policy': 1,
+        'x_xss_protection': 1
+    }
+    
+    # Core security headers (Tier 1)
     if sh.get('csp'): tech_score += sec_cfg.get('csp', 4)
     if sh.get('x_frame_options'): tech_score += sec_cfg.get('x_frame_options', 3)
     if sh.get('strict_transport'): tech_score += sec_cfg.get('strict_transport', 3)
+    
+    # Enhanced security headers (Tier 2)
+    if sh.get('referrer_policy'): tech_score += sec_cfg.get('referrer_policy', 1)
+    if sh.get('x_content_type_options'): tech_score += sec_cfg.get('x_content_type_options', 1)
+    if sh.get('permissions_policy'): tech_score += sec_cfg.get('permissions_policy', 1)
+    if sh.get('x_xss_protection'): tech_score += sec_cfg.get('x_xss_protection', 1)
 
     # Performance indicators
     performance_indicators = []
@@ -3780,10 +3839,12 @@ def compute_business_impact_with_input(
     metrics_used = {}
     annual_revenue = 450_000  # Default EU SME average
     
-    # ✅ KORJAUS: Handle both Pydantic model AND dict
+    # ✅ KORJAUS: Handle both Pydantic model AND dict (Pydantic V2)
     if revenue_input:
         # Convert to dict if it's a Pydantic model
-        if hasattr(revenue_input, 'dict'):
+        if hasattr(revenue_input, 'model_dump'):
+            rev_data = revenue_input.model_dump()
+        elif hasattr(revenue_input, 'dict'):  # Fallback for older Pydantic
             rev_data = revenue_input.dict()
         elif isinstance(revenue_input, dict):
             rev_data = revenue_input
@@ -4948,12 +5009,30 @@ def _check_authority_markers(technical: Dict[str, Any], basic: Dict[str, Any]) -
     
     # Security headers (additional trust)
     security_headers = technical.get('security_headers', {})
+    
+    # Core security headers (Tier 1)
     if security_headers.get('csp'):
         score += 10
         findings.append("Content Security Policy configured")
     if security_headers.get('strict_transport'):
         score += 10
         findings.append("HSTS enabled")
+    
+    # Enhanced security headers (Tier 2) - shows professional security posture
+    tier2_count = sum([
+        security_headers.get('referrer_policy', False),
+        security_headers.get('x_content_type_options', False),
+        security_headers.get('permissions_policy', False),
+        security_headers.get('x_xss_protection', False)
+    ])
+    
+    if tier2_count >= 3:
+        score += 8
+        findings.append("Enhanced security headers - professional security posture")
+    elif tier2_count >= 1:
+        score += 4
+        findings.append("Partial enhanced security headers")
+        recommendations.append("Add missing Tier 2 security headers (Referrer-Policy, X-Content-Type-Options)")
     
     # Analytics/tracking (shows site is monitored)
     if technical.get('has_analytics', False):
@@ -5155,7 +5234,7 @@ async def analyze_ai_search_visibility(
         chatgpt_readiness_score=chatgpt_score,
         perplexity_readiness_score=perplexity_score,
         overall_ai_search_score=overall_score,
-        factors={name: factor.dict() for name, factor in factors.items()},
+        factors={name: factor.model_dump() for name, factor in factors.items()},
         key_insights=key_insights[:5],
         priority_actions=priority_actions[:5]
     )
@@ -5508,7 +5587,15 @@ async def generate_competitive_swot_analysis(
             'fix_cost': '€0 (configuration)',
             'priority_score': 85,
             'competitive_gap': 'Missing industry standard headers',
-            'fix_steps': ['Add CSP header', 'Add X-Frame-Options', 'Add HSTS', 'Test configuration']
+            'fix_steps': [
+                'Add CSP header (Content-Security-Policy)',
+                'Add X-Frame-Options: DENY or SAMEORIGIN',
+                'Add HSTS (Strict-Transport-Security: max-age=31536000)',
+                'Add Referrer-Policy: strict-origin-when-cross-origin',
+                'Add X-Content-Type-Options: nosniff',
+                'Add Permissions-Policy for feature control',
+                'Test configuration with securityheaders.com'
+            ]
         })
     
     # Content weakness
@@ -7162,7 +7249,7 @@ async def calculate_revenue_impact(request: RevenueCalculationRequest):
     
     return {
         "success": True,
-        "business_impact": impact.dict(),
+        "business_impact": impact.model_dump(),
         "recommendations": [
             f"Focus on {area}" for area in impact.improvement_areas[:3]
         ],
@@ -8155,14 +8242,32 @@ async def discover_competitors(
         }
         
     except HTTPException:
-        # Clean up task on HTTP errors
+        # Clean up task on HTTP errors and refund quota
         if task_queue:
             task_queue.update_task(task_id, {"status": "failed", "progress": 0})
+        
+        # Refund reserved quota on setup failure
+        if user.role not in ["admin", "super_user"] and 'required_analyses' in locals():
+            user_search_counts[user.username] = max(
+                0,
+                user_search_counts.get(user.username, 0) - required_analyses
+            )
+            logger.info(f"💰 Refunded {required_analyses} credits to {user.username} (setup failed)")
+        
         raise
     except Exception as e:
-        # Clean up task on unexpected errors
+        # Clean up task on unexpected errors and refund quota
         if task_queue:
             task_queue.update_task(task_id, {"status": "failed", "progress": 0})
+        
+        # Refund reserved quota on setup failure
+        if user.role not in ["admin", "super_user"] and 'required_analyses' in locals():
+            user_search_counts[user.username] = max(
+                0,
+                user_search_counts.get(user.username, 0) - required_analyses
+            )
+            logger.info(f"💰 Refunded {required_analyses} credits to {user.username} (error)")
+        
         logger.error(f"Discovery setup failed: {e}", exc_info=True)
         raise HTTPException(500, f"Failed to start discovery: {str(e)}")
 
@@ -9554,13 +9659,7 @@ async def analyze_competitive_radar(
         
         logger.info(f"[Radar] Successfully analyzed: 1 your site + {len(competitor_analyses)} competitors ({len(failed_competitors)} failed)")
         
-        # === 4. UPDATE QUOTA ===
-        if user.role != "admin":
-            successful_analyses = 1 + len(competitor_analyses)
-            user_search_counts[user.username] = current_count + successful_analyses
-            logger.info(f"[Radar] Used {successful_analyses} credits for {user.username}")
-        
-        # === 5. EXTRACT SUMMARIES ===
+        # === 4. EXTRACT SUMMARIES ===
         your_summary = _extract_detailed_summary(your_analysis)
         
         if your_summary is None:
@@ -9594,7 +9693,7 @@ async def analyze_competitive_radar(
             f"competitors={[(c['company'], c['score']) for c in comp_summaries]}"
         )
         
-        # === 6. SYVÄLLINEN EROTTUVUUSANALYYSI ===
+        # === 5. SYVÄLLINEN EROTTUVUUSANALYYSI ===
         logger.info("[Radar] Building differentiation matrix...")
         
         differentiation_matrix = await _build_differentiation_matrix(
@@ -9606,7 +9705,7 @@ async def analyze_competitive_radar(
         
         logger.info(f"[Radar] ✅ Differentiation matrix built with keys: {list(differentiation_matrix.keys())}")
         
-        # === 7. TODELLISET MARKKINAAUKOT (AI-pohjainen) ===
+        # === 6. TODELLISET MARKKINAAUKOT (AI-pohjainen) ===
         logger.info("[Radar] Discovering market gaps...")
         
         market_gaps = await _discover_real_market_gaps(
@@ -9617,7 +9716,7 @@ async def analyze_competitive_radar(
         
         logger.info(f"[Radar] ✅ Found {len(market_gaps)} market gaps")
         
-        # === 8. KILPAILULLINEN ASEMOINTI ===
+        # === 7. KILPAILULLINEN ASEMOINTI ===
         logger.info("[Radar] Calculating market positioning...")
         
         positioning = await _calculate_market_positioning(
@@ -9630,7 +9729,7 @@ async def analyze_competitive_radar(
             f"competitive_score={positioning['competitive_score']}"
         )
         
-        # === 9. STRATEGISET SUOSITUKSET ===
+        # === 8. STRATEGISET SUOSITUKSET ===
         logger.info("[Radar] Generating strategic recommendations...")
         
         strategic_recommendations = await _generate_strategic_recommendations(
@@ -9643,7 +9742,7 @@ async def analyze_competitive_radar(
         
         logger.info(f"[Radar] ✅ Generated {len(strategic_recommendations)} strategic recommendations")
         
-        # === 10. ENHANCED SWOT ANALYSIS ===
+        # === 9. ENHANCED SWOT ANALYSIS ===
         logger.info("[Radar] Generating enhanced SWOT analysis...")
         
         try:
@@ -9657,7 +9756,7 @@ async def analyze_competitive_radar(
             logger.error(f"[Radar] ❌ Enhanced SWOT failed: {e}")
             enhanced_swot = None
         
-        # === 11. CREATIVE BOLDNESS ANALYSIS ===
+        # === 10. CREATIVE BOLDNESS ANALYSIS ===
         logger.info("[Radar] Analyzing creative boldness...")
         
         try:
@@ -9684,15 +9783,6 @@ async def analyze_competitive_radar(
         
         # ✅ Lisää enhanced_swot ja creative_boldness your_analysis.ai_analysis:iin
         if enhanced_swot:
-            # Debug: Näytä mitä SWOT sisältää
-            logger.info(f"[Radar] 📊 Enhanced SWOT contents:")
-            logger.info(f"[Radar]    - Strengths: {len(enhanced_swot.get('strengths', []))}")
-            logger.info(f"[Radar]    - Weaknesses: {len(enhanced_swot.get('weaknesses', []))}")
-            logger.info(f"[Radar]    - Opportunities: {len(enhanced_swot.get('opportunities', []))}")
-            logger.info(f"[Radar]    - Threats: {len(enhanced_swot.get('threats', []))}")
-            if enhanced_swot.get('strengths'):
-                logger.info(f"[Radar]    - First strength: {enhanced_swot['strengths'][0]}")
-            
             your_analysis['ai_analysis']['enhanced_swot'] = enhanced_swot
             logger.info("[Radar] ✅ Added enhanced_swot to your_analysis.ai_analysis")
         
@@ -9717,6 +9807,30 @@ async def analyze_competitive_radar(
             f"Gaps={len(market_gaps)}, "
             f"Recommendations={len(strategic_recommendations)}"
         )
+        
+        # === 11. UPDATE QUOTA (only after successful completion) ===
+        if user.role != "admin":
+            successful_analyses = 1 + len(competitor_analyses)
+            
+            # Update in history_db if available
+            if history_db:
+                try:
+                    # Record each successful analysis
+                    for _ in range(successful_analyses):
+                        await history_db.add_analysis_record(
+                            username=user.username,
+                            analysis_type='single',
+                            url=request.your_url,
+                            metadata={'radar_analysis': True}
+                        )
+                    logger.info(f"[Radar] ✅ Recorded {successful_analyses} analyses in history_db for {user.username}")
+                except Exception as e:
+                    logger.error(f"[Radar] ⚠️ Failed to record in history_db: {e}")
+            
+            # Also update in-memory count for backward compatibility
+            current_count = user_search_counts.get(user.username, 0)
+            user_search_counts[user.username] = current_count + successful_analyses
+            logger.info(f"[Radar] ✅ Used {successful_analyses} credits for {user.username}")
 
         return response
         
