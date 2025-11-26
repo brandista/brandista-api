@@ -44,7 +44,7 @@ class ScoutAgent(BaseAgent):
             generate_smart_search_terms,
             get_domain_from_url,
             clean_url,
-            fetch_and_parse_website
+            get_website_content  # Fixed: was fetch_and_parse_website
         )
         
         self._emit_insight(
@@ -57,7 +57,30 @@ class ScoutAgent(BaseAgent):
         self._update_progress(10, "Analyzing your website...")
         
         try:
-            website_data = await fetch_and_parse_website(context.url)
+            html_content, used_spa = await get_website_content(context.url)
+            
+            # Parse basic info from HTML
+            website_data = {'html': html_content, 'used_spa': used_spa}
+            if html_content:
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(html_content, 'html.parser')
+                
+                # Extract title
+                title_tag = soup.find('title')
+                website_data['title'] = title_tag.get_text(strip=True) if title_tag else ''
+                
+                # Extract meta description
+                meta_desc = soup.find('meta', attrs={'name': 'description'})
+                website_data['meta_description'] = meta_desc.get('content', '') if meta_desc else ''
+                
+                # Extract company name from various sources
+                og_site = soup.find('meta', attrs={'property': 'og:site_name'})
+                if og_site:
+                    website_data['company'] = og_site.get('content', '')
+                else:
+                    # Try to extract from title or domain
+                    website_data['company'] = get_domain_from_url(context.url).replace('www.', '').split('.')[0].capitalize()
+            
             company_name = website_data.get('company', 'Unknown')
             
             self._emit_insight(
