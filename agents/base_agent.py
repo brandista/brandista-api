@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
-from .types import (
+from .agent_types import (
     AnalysisContext,
     AgentStatus,
     AgentPriority,

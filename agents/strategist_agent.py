@@ -8,7 +8,7 @@ import logging
 from typing import Dict, Any, List, Optional
 
 from .base_agent import BaseAgent
-from .types import AnalysisContext, AgentPriority, InsightType
+from .agent_types import AnalysisContext, AgentPriority, InsightType
 
 logger = logging.getLogger(__name__)
 

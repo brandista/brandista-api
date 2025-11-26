@@ -3,7 +3,7 @@ Growth Engine 2.0 - Agent System
 All agents and orchestration for competitive intelligence analysis
 """
 
-from .types import (
+from .agent_types import (
     AnalysisContext,
     AgentStatus,
     AgentPriority,

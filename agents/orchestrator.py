@@ -9,7 +9,7 @@ from typing import Dict, Any, List, Optional, Callable
 from datetime import datetime
 from dataclasses import dataclass, field
 
-from .types import AnalysisContext, AgentStatus, AgentInsight, AgentProgress
+from .agent_types import AnalysisContext, AgentStatus, AgentInsight, AgentProgress
 from .scout_agent import ScoutAgent
 from .analyst_agent import AnalystAgent
 from .guardian_agent import GuardianAgent
