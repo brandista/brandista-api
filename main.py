@@ -125,6 +125,18 @@ except ImportError:
     logger.warning("Stripe module not available - payment features disabled")
 
 # ============================================================================
+# GROWTH ENGINE 2.0 AGENT SYSTEM
+# ============================================================================
+try:
+    from agent_api import router as agent_router
+    AGENTS_AVAILABLE = True
+    logger.info("✅ Growth Engine 2.0 agent system loaded")
+except ImportError:
+    agent_router = None
+    AGENTS_AVAILABLE = False
+    logger.warning("Agent system not available - agents/ folder may be missing")
+
+# ============================================================================
 # OPTIONAL DEPENDENCIES
 # ============================================================================
 
@@ -1690,6 +1702,13 @@ if RATE_LIMIT_ENABLED:
         request_counts[client_ip].append(now)
         return await call_next(request)
 
+
+# ============================================================================
+# GROWTH ENGINE 2.0 AGENT ROUTES
+# ============================================================================
+if AGENTS_AVAILABLE and agent_router:
+    app.include_router(agent_router, prefix="/api/v1/agents", tags=["Growth Engine 2.0"])
+    logger.info("✅ Growth Engine 2.0 routes registered at /api/v1/agents")
 
 
 # ============================================================================
