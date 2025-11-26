@@ -127,34 +127,32 @@ class GuardianAgent(BaseAgent):
         
         self._update_progress(30, self._task("calculating_impact"))
         
-        # 2. Laske revenue impact from risk register
+        # 2. Laske revenue impact
         annual_revenue = 500000  # Default €500k
         
-        # Calculate annual risk from risk_register items
-        # Each risk_score point represents potential revenue loss
-        # risk_score 12 = major (~6% revenue), 9 = significant (~4%), 8 = (~3%), 6 = (~2%)
-        risk_multipliers = {
-            12: 0.06,  # Major issues like poor mobile/SPA
-            9: 0.04,   # Significant issues like thin content
-            8: 0.03,   # Notable issues like weak security
-            6: 0.02,   # Minor issues
-        }
-        
-        total_risk_percent = 0
-        for risk_item in risk_register:
-            risk_score = getattr(risk_item, 'risk_score', 0) if hasattr(risk_item, 'risk_score') else risk_item.get('risk_score', 0)
-            # Find closest multiplier
-            multiplier = risk_multipliers.get(risk_score, risk_score * 0.005)  # Default: 0.5% per point
-            total_risk_percent += multiplier
-        
-        # Cap at 25% max risk
-        total_risk_percent = min(total_risk_percent, 0.25)
-        annual_risk = int(annual_revenue * total_risk_percent)
-        
-        business_impact = {
-            'total_monthly_risk': annual_risk // 12,
-            'total_annual_risk': annual_risk
-        }
+        # Try new calculation method first, fallback to simple calculation
+        try:
+            # Calculate annual risk from risk_register items
+            risk_multipliers = {12: 0.06, 9: 0.04, 8: 0.03, 6: 0.02}
+            total_risk_percent = 0
+            for risk_item in risk_register:
+                risk_score = getattr(risk_item, 'risk_score', 0) if hasattr(risk_item, 'risk_score') else (risk_item.get('risk_score', 0) if isinstance(risk_item, dict) else 0)
+                multiplier = risk_multipliers.get(risk_score, risk_score * 0.005)
+                total_risk_percent += multiplier
+            
+            total_risk_percent = min(total_risk_percent, 0.25)
+            annual_risk = int(annual_revenue * total_risk_percent)
+            
+            business_impact = {
+                'total_monthly_risk': annual_risk // 12,
+                'total_annual_risk': annual_risk
+            }
+        except Exception as e:
+            logger.warning(f"[Guardian] Risk calculation fallback: {e}")
+            business_impact = {
+                'total_monthly_risk': 0,
+                'total_annual_risk': 0
+            }
         
         annual_risk = business_impact.get('total_annual_risk', 0)
         
