@@ -1,186 +1,254 @@
 """
 Growth Engine 2.0 - Guardian Agent
-🛡️ "The Risk Manager" - RASM™ + Competitor Threat Assessment
-Uses: build_risk_register(), compute_business_impact()
+🛡️ "The Risk Manager" - RASM™, uhka-analyysi ja Competitor Threat Assessment
 """
 
 import logging
 import asyncio
+import re
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 from urllib.parse import urlparse
 
 from .base_agent import BaseAgent
-from .agent_types import AnalysisContext, AgentPriority, InsightType
+from .types import (
+    AnalysisContext,
+    AgentPriority,
+    InsightType
+)
 
 logger = logging.getLogger(__name__)
 
 
+GUARDIAN_TASKS = {
+    "building_risk_register": {"fi": "Rakennetaan riskiregisteriä...", "en": "Building risk register..."},
+    "calculating_impact": {"fi": "Lasketaan liikevaihtovaikutusta...", "en": "Calculating revenue impact..."},
+    "identifying_threats": {"fi": "Tunnistetaan uhkia...", "en": "Identifying threats..."},
+    "prioritizing_actions": {"fi": "Priorisoidaan toimenpiteitä...", "en": "Prioritizing actions..."},
+    "calculating_rasm": {"fi": "Lasketaan RASM-pistemäärää...", "en": "Calculating RASM score..."},
+    "assessing_competitors": {"fi": "Arvioidaan kilpailijoiden uhkatasoa...", "en": "Assessing competitor threat levels..."},
+}
+
+THREAT_TITLES = {
+    "seo": {"fi": "Heikko hakukonenäkyvyys", "en": "Poor search engine visibility"},
+    "mobile": {"fi": "Puutteellinen mobiilioptimointi", "en": "Inadequate mobile optimization"},
+    "ssl": {"fi": "SSL-sertifikaatti puuttuu", "en": "SSL certificate missing"},
+    "performance": {"fi": "Hidas sivusto", "en": "Slow website"},
+    "competitive": {"fi": "Jäät kilpailijoista jälkeen", "en": "Falling behind competitors"},
+    "content": {"fi": "Heikko sisällön laatu", "en": "Poor content quality"},
+}
+
+THREAT_LEVEL_LABELS = {
+    "high": {"fi": "KORKEA UHKA", "en": "HIGH THREAT"},
+    "medium": {"fi": "KOHTALAINEN UHKA", "en": "MEDIUM THREAT"},
+    "low": {"fi": "MATALA UHKA", "en": "LOW THREAT"},
+}
+
+COMPETITOR_INSIGHTS = {
+    "high_threat": {
+        "fi": "🔴 {name}: {label} — Pisteet {score}/100, {reason}",
+        "en": "🔴 {name}: {label} — Score {score}/100, {reason}"
+    },
+    "medium_threat": {
+        "fi": "🟡 {name}: {label} — Pisteet {score}/100, {reason}",
+        "en": "🟡 {name}: {label} — Score {score}/100, {reason}"
+    },
+    "low_threat": {
+        "fi": "🟢 {name}: {label} — Pisteet {score}/100, {reason}",
+        "en": "🟢 {name}: {label} — Score {score}/100, {reason}"
+    },
+    "assessment_complete": {
+        "fi": "🎯 Kilpailija-arviointi valmis: {high} korkean uhkan, {medium} kohtalaisen, {low} matalan",
+        "en": "🎯 Competitor assessment complete: {high} high threat, {medium} medium, {low} low"
+    },
+}
+
+
 class GuardianAgent(BaseAgent):
     """
-    🛡️ Guardian Agent - Risk Manager
-    
-    Responsibilities:
-    - Build risk register from analysis
-    - Calculate revenue impact (RASM)
-    - Identify threats and vulnerabilities
-    - Assess competitor threat levels
-    - Prioritize actions by ROI
+    🛡️ Guardian Agent - Riskienhallitsija (RASM)
     """
     
     def __init__(self):
         super().__init__(
             agent_id="guardian",
             name="Guardian",
-            role="Risk Manager",
+            role="Riskienhallitsija",
             avatar="🛡️",
-            personality="Vigilant security expert who spots risks before they become problems"
+            personality="Valpas ja huolellinen turvallisuusasiantuntija"
         )
         self.dependencies = ['scout', 'analyst']
     
+    def _task(self, key: str) -> str:
+        return GUARDIAN_TASKS.get(key, {}).get(self._language, key)
+    
+    def _threat_title(self, key: str) -> str:
+        return THREAT_TITLES.get(key, {}).get(self._language, key)
+    
     async def execute(self, context: AnalysisContext) -> Dict[str, Any]:
-        """Perform risk analysis and competitor threat assessment"""
-        
-        from main import compute_business_impact, build_risk_register
+        from main import build_risk_register
         
         analyst_results = self.get_dependency_results(context, 'analyst')
         scout_results = self.get_dependency_results(context, 'scout')
         
         if not analyst_results:
             self._emit_insight(
-                "⚠️ No Analyst data — limited risk assessment",
+                self._t("guardian.no_data"),
                 priority=AgentPriority.HIGH,
                 insight_type=InsightType.THREAT
             )
             return {'threats': [], 'risk_register': [], 'rasm_score': 0}
         
         your_analysis = analyst_results.get('your_analysis', {})
+        benchmark = analyst_results.get('benchmark', {})
+        category_comparison = analyst_results.get('category_comparison', {})
         competitor_analyses = analyst_results.get('competitor_analyses', [])
         your_score = analyst_results.get('your_score', 0)
         
+        self._update_progress(15, self._task("building_risk_register"))
+        
         self._emit_insight(
-            "🛡️ Starting risk analysis — scanning for vulnerabilities...",
+            self._t("guardian.starting_rasm"),
             priority=AgentPriority.MEDIUM,
             insight_type=InsightType.FINDING
         )
         
-        # 1. Build risk register
-        self._update_progress(15, "Building risk register...")
-        
+        # 1. Rakenna riskiregisteri
         try:
-            basic = your_analysis.get('basic_analysis', {})
-            technical = your_analysis.get('detailed_analysis', {}).get('technical_audit', {})
-            content = your_analysis.get('detailed_analysis', {}).get('content_analysis', {})
-            
-            risk_register = build_risk_register(basic, technical, content, 'en')
-            
-            self._emit_insight(
-                f"📋 Identified {len(risk_register)} risk items",
-                priority=AgentPriority.LOW,
-                insight_type=InsightType.FINDING
+            risk_register = build_risk_register(
+                your_analysis.get('basic', {}),
+                your_analysis.get('technical', {}),
+                your_analysis.get('content', {}),
+                context.language
             )
         except Exception as e:
             logger.error(f"[Guardian] Risk register error: {e}")
             risk_register = []
         
-        # 2. Calculate revenue impact
-        self._update_progress(30, "Calculating revenue impact...")
+        self._update_progress(30, self._task("calculating_impact"))
         
-        annual_revenue = 500000  # Default €500k - could be user input
+        # 2. Laske revenue impact from risk register
+        annual_revenue = 500000  # Default €500k
         
-        try:
-            business_impact = compute_business_impact(risk_register, annual_revenue)
-            annual_risk = business_impact.get('total_annual_risk', 0)
-            
-            if annual_risk > 50000:
-                self._emit_insight(
-                    f"🚨 CRITICAL: €{annual_risk:,.0f}/year at risk!",
-                    priority=AgentPriority.CRITICAL,
-                    insight_type=InsightType.THREAT,
-                    data={'annual_risk': annual_risk}
-                )
-            elif annual_risk > 20000:
-                self._emit_insight(
-                    f"⚠️ HIGH RISK: €{annual_risk:,.0f}/year exposure identified",
-                    priority=AgentPriority.HIGH,
-                    insight_type=InsightType.THREAT,
-                    data={'annual_risk': annual_risk}
-                )
-            elif annual_risk > 0:
-                self._emit_insight(
-                    f"📊 Moderate risk: €{annual_risk:,.0f}/year exposure",
-                    priority=AgentPriority.MEDIUM,
-                    insight_type=InsightType.FINDING,
-                    data={'annual_risk': annual_risk}
-                )
-        except Exception as e:
-            logger.error(f"[Guardian] Business impact error: {e}")
-            business_impact = {'total_monthly_risk': 0, 'total_annual_risk': 0}
-            annual_risk = 0
+        # Calculate annual risk from risk_register items
+        # Each risk_score point represents potential revenue loss
+        # risk_score 12 = major (~6% revenue), 9 = significant (~4%), 8 = (~3%), 6 = (~2%)
+        risk_multipliers = {
+            12: 0.06,  # Major issues like poor mobile/SPA
+            9: 0.04,   # Significant issues like thin content
+            8: 0.03,   # Notable issues like weak security
+            6: 0.02,   # Minor issues
+        }
         
-        # 3. Identify specific threats
-        self._update_progress(45, "Identifying threats...")
+        total_risk_percent = 0
+        for risk_item in risk_register:
+            risk_score = getattr(risk_item, 'risk_score', 0) if hasattr(risk_item, 'risk_score') else risk_item.get('risk_score', 0)
+            # Find closest multiplier
+            multiplier = risk_multipliers.get(risk_score, risk_score * 0.005)  # Default: 0.5% per point
+            total_risk_percent += multiplier
         
-        threats = self._identify_threats(your_analysis, analyst_results.get('category_comparison', {}))
+        # Cap at 25% max risk
+        total_risk_percent = min(total_risk_percent, 0.25)
+        annual_risk = int(annual_revenue * total_risk_percent)
         
+        business_impact = {
+            'total_monthly_risk': annual_risk // 12,
+            'total_annual_risk': annual_risk
+        }
+        
+        annual_risk = business_impact.get('total_annual_risk', 0)
+        
+        # Emit revenue risk insight
+        if annual_risk > 50000:
+            self._emit_insight(
+                self._t("guardian.risk_critical", amount=f"{annual_risk:,.0f}"),
+                priority=AgentPriority.CRITICAL,
+                insight_type=InsightType.THREAT,
+                data={'annual_risk': annual_risk}
+            )
+        elif annual_risk > 20000:
+            self._emit_insight(
+                self._t("guardian.risk_high", amount=f"{annual_risk:,.0f}"),
+                priority=AgentPriority.HIGH,
+                insight_type=InsightType.THREAT,
+                data={'annual_risk': annual_risk}
+            )
+        elif annual_risk > 0:
+            self._emit_insight(
+                self._t("guardian.risk_medium", amount=f"{annual_risk:,.0f}"),
+                priority=AgentPriority.MEDIUM,
+                insight_type=InsightType.FINDING,
+                data={'annual_risk': annual_risk}
+            )
+        
+        self._update_progress(45, self._task("identifying_threats"))
+        
+        # 3. Tunnista uhkat
+        threats = self._identify_threats(your_analysis, benchmark, category_comparison)
+        
+        # Emit threat insights
         for threat in threats[:5]:
             severity = threat.get('severity', 'medium')
-            title = threat.get('title', 'Unknown threat')
+            cat = threat.get('category', '')
+            title = self._threat_title(cat) if cat in THREAT_TITLES else threat.get('title', '')
             
             if severity == 'critical':
                 self._emit_insight(
-                    f"🔴 CRITICAL: {title}",
+                    self._t("guardian.threat_critical", category=cat.upper(), title=title),
                     priority=AgentPriority.CRITICAL,
                     insight_type=InsightType.THREAT,
                     data=threat
                 )
             elif severity == 'high':
                 self._emit_insight(
-                    f"🟠 HIGH: {title}",
+                    self._t("guardian.threat_high", category=cat.upper(), title=title),
                     priority=AgentPriority.HIGH,
                     insight_type=InsightType.THREAT,
                     data=threat
                 )
         
-        # 4. Competitor Threat Assessment
-        self._update_progress(60, "Assessing competitor threats...")
+        self._update_progress(60, self._task("assessing_competitors"))
         
+        # 4. NEW: Competitor Threat Assessment
         competitor_threat_assessment = await self._assess_competitor_threats(
             competitor_analyses=competitor_analyses,
-            your_score=your_score
+            your_score=your_score,
+            scout_data=scout_results
         )
         
-        # 5. Prioritize actions
-        self._update_progress(80, "Prioritizing actions...")
+        self._update_progress(75, self._task("prioritizing_actions"))
         
+        # 5. Priorisoi toimenpiteet
         priority_actions = self._prioritize_actions(threats, risk_register)
         
+        # Emit top priority actions
         for idx, action in enumerate(priority_actions[:3]):
             roi = action.get('roi_score', 0)
             self._emit_insight(
-                f"💡 Priority #{idx + 1}: {action.get('title', '')} (ROI: {roi:.1f}x)",
+                self._t("guardian.priority_action", 
+                       idx=idx+1, 
+                       title=action.get('title', ''),
+                       roi=f"{roi:.1f}"),
                 priority=AgentPriority.HIGH,
                 insight_type=InsightType.RECOMMENDATION,
                 data=action
             )
         
-        # 6. Calculate RASM score
-        self._update_progress(90, "Calculating RASM score...")
+        self._update_progress(90, self._task("calculating_rasm"))
         
-        rasm_score = self._calculate_rasm_score(threats)
+        # 5. Laske RASM-pistemäärä
+        rasm_score = self._calculate_rasm_score(threats, your_analysis)
         
         self._emit_insight(
-            f"🛡️ RASM Score: {rasm_score}/100 — "
-            f"{len(threats)} threats identified, "
-            f"{len(priority_actions)} actions recommended",
+            self._t("guardian.complete", count=len(threats), score=rasm_score),
             priority=AgentPriority.MEDIUM,
-            insight_type=InsightType.METRIC,
-            data={'rasm_score': rasm_score, 'threat_count': len(threats)}
+            insight_type=InsightType.FINDING,
+            data={'threat_count': len(threats), 'rasm_score': rasm_score}
         )
         
         return {
             'threats': threats,
-            'risk_register': [r.dict() if hasattr(r, 'dict') else r for r in risk_register],
+            'risk_register': risk_register,
             'revenue_impact': business_impact,
             'priority_actions': priority_actions,
             'rasm_score': rasm_score,
@@ -188,97 +256,181 @@ class GuardianAgent(BaseAgent):
         }
     
     def _identify_threats(
-        self, 
+        self,
         analysis: Dict[str, Any],
+        benchmark: Dict[str, Any],
         category_comparison: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
-        """Identify specific threats from analysis"""
         threats = []
         
-        basic = analysis.get('basic_analysis', {})
-        detailed = analysis.get('detailed_analysis', {})
-        tech = detailed.get('technical_audit', {})
+        basic = analysis.get('basic', {})
+        tech = analysis.get('technical', {})
+        content = analysis.get('content', {})
         
-        # SSL threat
-        if not tech.get('has_ssl', True):
+        # SEO threats
+        seo_comp = category_comparison.get('seo', {})
+        if seo_comp.get('your_score', 100) < 50:
             threats.append({
-                'category': 'security',
-                'title': 'Missing SSL certificate',
+                'category': 'seo',
+                'title': self._threat_title('seo'),
+                'severity': 'high' if seo_comp.get('your_score', 100) < 30 else 'medium',
+                'score': seo_comp.get('your_score', 0),
+                'impact': 'high',
+                'effort': 'medium'
+            })
+        
+        # Mobile threats
+        if basic.get('mobile_ready') not in ['Kyllä', 'Yes', True]:
+            threats.append({
+                'category': 'mobile',
+                'title': self._threat_title('mobile'),
+                'severity': 'high',
+                'impact': 'high',
+                'effort': 'medium'
+            })
+        
+        # SSL threats
+        if not tech.get('has_ssl'):
+            threats.append({
+                'category': 'ssl',
+                'title': self._threat_title('ssl'),
                 'severity': 'critical',
                 'impact': 'critical',
                 'effort': 'low'
             })
         
-        # Mobile threat
-        if basic.get('mobile_ready') not in ['Yes', True, 'Kyllä']:
-            threats.append({
-                'category': 'mobile',
-                'title': 'Poor mobile experience',
-                'severity': 'high',
-                'impact': 'high',
-                'effort': 'medium'
-            })
-        
-        # Performance threat
+        # Performance threats
         perf_score = tech.get('performance_score', 50)
         if perf_score < 50:
             threats.append({
                 'category': 'performance',
-                'title': f'Slow page speed (score: {perf_score})',
+                'title': self._threat_title('performance'),
                 'severity': 'high' if perf_score < 30 else 'medium',
-                'impact': 'high',
-                'effort': 'medium'
-            })
-        
-        # SEO threat
-        seo_comp = category_comparison.get('seo', {})
-        if seo_comp.get('status') == 'behind' and seo_comp.get('diff', 0) < -15:
-            threats.append({
-                'category': 'seo',
-                'title': 'Weak search visibility vs competitors',
-                'severity': 'high',
-                'impact': 'high',
-                'effort': 'medium'
-            })
-        
-        # Content threat
-        content_comp = category_comparison.get('content', {})
-        if content_comp.get('status') == 'behind' and content_comp.get('diff', 0) < -15:
-            threats.append({
-                'category': 'content',
-                'title': 'Thin content compared to competitors',
-                'severity': 'medium',
+                'score': perf_score,
                 'impact': 'medium',
                 'effort': 'high'
             })
         
+        # Competitive threats
+        your_score = benchmark.get('your_score', 0)
+        avg_comp = benchmark.get('avg_competitor_score', 0)
+        if your_score < avg_comp - 15:
+            threats.append({
+                'category': 'competitive',
+                'title': self._threat_title('competitive'),
+                'severity': 'high',
+                'your_score': your_score,
+                'competitor_avg': avg_comp,
+                'gap': avg_comp - your_score,
+                'impact': 'high',
+                'effort': 'high'
+            })
+        
+        # Content threats
+        content_score = content.get('quality_score', 50)
+        if content_score < 40:
+            threats.append({
+                'category': 'content',
+                'title': self._threat_title('content'),
+                'severity': 'medium',
+                'score': content_score,
+                'impact': 'medium',
+                'effort': 'medium'
+            })
+        
+        # Sort by severity
+        severity_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
+        threats.sort(key=lambda x: severity_order.get(x.get('severity', 'low'), 3))
+        
         return threats
+    
+    def _prioritize_actions(
+        self,
+        threats: List[Dict[str, Any]],
+        risk_register: List[Any]
+    ) -> List[Dict[str, Any]]:
+        actions = []
+        
+        impact_scores = {'critical': 100, 'high': 75, 'medium': 50, 'low': 25}
+        effort_scores = {'low': 100, 'medium': 60, 'high': 30}
+        
+        for threat in threats:
+            impact = impact_scores.get(threat.get('impact', 'medium'), 50)
+            effort = effort_scores.get(threat.get('effort', 'medium'), 60)
+            
+            roi_score = (impact * effort) / 100
+            
+            actions.append({
+                'title': threat.get('title', ''),
+                'category': threat.get('category', ''),
+                'severity': threat.get('severity', 'medium'),
+                'impact': threat.get('impact', 'medium'),
+                'effort': threat.get('effort', 'medium'),
+                'roi_score': roi_score
+            })
+        
+        actions.sort(key=lambda x: x.get('roi_score', 0), reverse=True)
+        
+        return actions
+    
+    def _calculate_rasm_score(
+        self,
+        threats: List[Dict[str, Any]],
+        analysis: Dict[str, Any]
+    ) -> int:
+        # Start with 100 and subtract based on threats
+        score = 100
+        
+        severity_penalties = {'critical': 25, 'high': 15, 'medium': 8, 'low': 3}
+        
+        for threat in threats:
+            severity = threat.get('severity', 'medium')
+            penalty = severity_penalties.get(severity, 8)
+            score -= penalty
+        
+        return max(0, min(100, score))
+    
+    # ========================================
+    # COMPETITOR THREAT ASSESSMENT
+    # ========================================
     
     async def _assess_competitor_threats(
         self,
         competitor_analyses: List[Dict[str, Any]],
-        your_score: int
+        your_score: int,
+        scout_data: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Assess competitor threat levels"""
+        """
+        Arvioi kilpailijoiden todellinen uhkataso.
         
+        Ei riitä, että kilpailijan digitaalinen pistemäärä on korkea.
+        Pitää myös arvioida: onko tämä vakavasti otettava toimija?
+        """
         if not competitor_analyses:
-            return {'assessments': [], 'summary': {'high': 0, 'medium': 0, 'low': 0}}
+            return {
+                'assessments': [],
+                'summary': {'high': 0, 'medium': 0, 'low': 0}
+            }
         
         assessments = []
         
         for comp in competitor_analyses:
             try:
-                assessment = await self._assess_single_competitor(comp, your_score)
+                assessment = await self._assess_single_competitor(
+                    competitor=comp,
+                    your_score=your_score,
+                    scout_data=scout_data
+                )
                 assessments.append(assessment)
             except Exception as e:
                 logger.warning(f"[Guardian] Competitor assessment failed: {e}")
                 continue
         
-        # Sort by threat level
+        # Sort by threat level (high first)
         threat_order = {'high': 0, 'medium': 1, 'low': 2}
         assessments.sort(key=lambda x: (threat_order.get(x['threat_level'], 2), -x['digital_score']))
         
-        # Count by level
+        # Count by threat level
         summary = {'high': 0, 'medium': 0, 'low': 0}
         for a in assessments:
             level = a.get('threat_level', 'medium')
@@ -288,74 +440,50 @@ class GuardianAgent(BaseAgent):
         for assessment in assessments[:3]:
             self._emit_competitor_insight(assessment)
         
-        if assessments:
-            self._emit_insight(
-                f"🎯 Competitor assessment: {summary['high']} high threat, "
-                f"{summary['medium']} medium, {summary['low']} low",
-                priority=AgentPriority.MEDIUM,
-                insight_type=InsightType.FINDING,
-                data={'summary': summary}
-            )
+        # Emit summary
+        insight_text = COMPETITOR_INSIGHTS['assessment_complete'][self._language].format(
+            high=summary['high'],
+            medium=summary['medium'],
+            low=summary['low']
+        )
+        self._emit_insight(
+            insight_text,
+            priority=AgentPriority.MEDIUM,
+            insight_type=InsightType.FINDING,
+            data={'competitor_summary': summary}
+        )
         
-        return {'assessments': assessments, 'summary': summary}
+        return {
+            'assessments': assessments,
+            'summary': summary
+        }
     
     async def _assess_single_competitor(
-        self, 
-        competitor: Dict[str, Any], 
-        your_score: int
+        self,
+        competitor: Dict[str, Any],
+        your_score: int,
+        scout_data: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Assess a single competitor's threat level"""
+        """Arvioi yksittäisen kilpailijan uhkataso"""
         
         url = competitor.get('url', '')
-        name = competitor.get('name', self._extract_domain_name(url))
-        digital_score = competitor.get('score', 0)
-        score_diff = digital_score - your_score
+        name = competitor.get('name', '') or self._extract_domain_name(url)
+        digital_score = competitor.get('final_score', 0) or competitor.get('score', 0)
         
-        # Check domain age
-        domain_age = await self._check_domain_age(url)
+        # Kerää signaalit
+        signals = {
+            'digital_score': digital_score,
+            'score_diff': digital_score - your_score,  # Positive = they're ahead
+            'domain_age': await self._check_domain_age(url),
+            'company_size': self._estimate_company_size(competitor),
+            'growth_signals': self._detect_growth_signals(competitor),
+            'trust_signals': self._detect_trust_signals(competitor),
+        }
         
-        # Estimate company size from signals
-        company_size = self._estimate_company_size(competitor)
+        # Laske uhkataso
+        threat_score, reasoning = self._calculate_threat_level(signals)
         
-        # Detect growth signals
-        growth_signals = self._detect_growth_signals(competitor)
-        
-        # Calculate threat level
-        threat_score = 5  # Baseline
-        reasons = []
-        
-        # Score difference
-        if score_diff > 20:
-            threat_score += 2
-            reasons.append(f"+{score_diff} points ahead")
-        elif score_diff > 10:
-            threat_score += 1
-            reasons.append(f"+{score_diff} points ahead")
-        elif score_diff < -20:
-            threat_score -= 2
-            reasons.append(f"{abs(score_diff)} points behind")
-        
-        # Domain age
-        if domain_age.get('is_established'):
-            threat_score += 1.5
-            years = domain_age.get('age_years', 0)
-            reasons.append(f"est. {years:.0f}+ years")
-        elif domain_age.get('is_new'):
-            threat_score -= 1.5
-            reasons.append("new player")
-        
-        # Company size
-        if company_size.get('estimated_employees') == '20+':
-            threat_score += 1.5
-            reasons.append(f"~{company_size.get('estimated_employees')} employees")
-        
-        # Growth signals
-        if growth_signals.get('is_hiring'):
-            threat_score += 1
-            reasons.append("actively hiring")
-        
-        threat_score = max(1, min(10, round(threat_score)))
-        
+        # Määritä threat level
         if threat_score >= 7:
             threat_level = 'high'
         elif threat_score >= 4:
@@ -367,25 +495,23 @@ class GuardianAgent(BaseAgent):
             'url': url,
             'name': name,
             'digital_score': digital_score,
-            'score_diff': score_diff,
+            'score_diff': signals['score_diff'],
             'threat_score': threat_score,
             'threat_level': threat_level,
-            'reasoning': ', '.join(reasons[:3]) if reasons else 'no strong signals',
-            'signals': {
-                'domain_age': domain_age,
-                'company_size': company_size,
-                'growth_signals': growth_signals
-            }
+            'threat_label': THREAT_LEVEL_LABELS[threat_level][self._language],
+            'signals': signals,
+            'reasoning': reasoning
         }
     
     async def _check_domain_age(self, url: str) -> Dict[str, Any]:
-        """Check domain age via WHOIS"""
+        """Tarkista domainin ikä WHOIS:sta"""
         try:
             import whois
             domain = urlparse(url).netloc or url
             domain = domain.replace('www.', '')
             
             w = whois.whois(domain)
+            
             creation_date = w.creation_date
             if isinstance(creation_date, list):
                 creation_date = creation_date[0]
@@ -395,49 +521,223 @@ class GuardianAgent(BaseAgent):
                 age_years = age_days / 365.25
                 
                 return {
+                    'created': creation_date.isoformat() if hasattr(creation_date, 'isoformat') else str(creation_date),
+                    'age_days': age_days,
                     'age_years': round(age_years, 1),
-                    'is_established': age_years >= 2,
-                    'is_new': age_years < 1
+                    'is_established': age_years >= 2,  # 2+ vuotta = vakiintunut
+                    'is_new': age_years < 1  # Alle vuosi = uusi
                 }
         except Exception as e:
-            logger.debug(f"[Guardian] WHOIS failed for {url}: {e}")
+            logger.debug(f"[Guardian] WHOIS lookup failed for {url}: {e}")
         
-        return {'age_years': None, 'is_established': None, 'is_new': None}
+        return {
+            'created': None,
+            'age_days': None,
+            'age_years': None,
+            'is_established': None,
+            'is_new': None
+        }
     
     def _estimate_company_size(self, competitor: Dict[str, Any]) -> Dict[str, Any]:
-        """Estimate company size from website signals"""
-        basic = competitor.get('basic_analysis', {})
-        content = competitor.get('detailed_analysis', {}).get('content_analysis', {})
+        """Arvioi yrityksen koko meta-signaaleista"""
         
-        word_count = content.get('word_count', 0)
+        # Signaaleja sivuston analyysistä
+        basic = competitor.get('basic', {})
+        content = competitor.get('content', {})
+        
+        signals = {
+            'has_careers_page': False,
+            'has_multiple_locations': False,
+            'has_team_page': False,
+            'content_volume': 'low',
+            'estimated_employees': 'unknown'
+        }
+        
+        # Tarkista sivustolta löytyvät signaalit
         page_count = basic.get('page_count', 0)
+        word_count = content.get('word_count', 0)
         
+        # Content volume arvioi
         if word_count > 10000 or page_count > 50:
-            return {'estimated_employees': '20+', 'content_volume': 'high'}
+            signals['content_volume'] = 'high'
+            signals['estimated_employees'] = '20+'
         elif word_count > 3000 or page_count > 20:
-            return {'estimated_employees': '5-20', 'content_volume': 'medium'}
+            signals['content_volume'] = 'medium'
+            signals['estimated_employees'] = '5-20'
         else:
-            return {'estimated_employees': '1-5', 'content_volume': 'low'}
-    
-    def _detect_growth_signals(self, competitor: Dict[str, Any]) -> Dict[str, Any]:
-        """Detect growth signals"""
-        signals = {'is_hiring': False, 'active_blog': False}
+            signals['content_volume'] = 'low'
+            signals['estimated_employees'] = '1-5'
         
-        content = competitor.get('detailed_analysis', {}).get('content_analysis', {})
-        if content.get('blog_count', 0) > 5:
-            signals['active_blog'] = True
+        # Muita signaaleja HTML:stä (jos saatavilla)
+        html = competitor.get('html', '') or ''
+        html_lower = html.lower()
+        
+        if any(term in html_lower for term in ['careers', 'jobs', 'työpaikat', 'avoimet']):
+            signals['has_careers_page'] = True
+            signals['estimated_employees'] = '10+'
+        
+        if any(term in html_lower for term in ['our team', 'tiimimme', 'meet the team']):
+            signals['has_team_page'] = True
+        
+        if any(term in html_lower for term in ['locations', 'toimipisteet', 'offices']):
+            signals['has_multiple_locations'] = True
+            signals['estimated_employees'] = '20+'
         
         return signals
     
+    def _detect_growth_signals(self, competitor: Dict[str, Any]) -> Dict[str, Any]:
+        """Tunnista kasvusignaalit"""
+        
+        signals = {
+            'is_hiring': False,
+            'recent_updates': False,
+            'active_blog': False,
+            'growth_indicators': []
+        }
+        
+        html = competitor.get('html', '') or ''
+        html_lower = html.lower()
+        content = competitor.get('content', {})
+        
+        # Rekrytointi = kasvusignaali
+        hiring_terms = ['hiring', 'we\'re hiring', 'join our team', 'rekrytoimme', 'tule meille', 'open positions']
+        if any(term in html_lower for term in hiring_terms):
+            signals['is_hiring'] = True
+            signals['growth_indicators'].append('hiring')
+        
+        # Aktiivinen blogi
+        blog_count = content.get('blog_count', 0)
+        if blog_count > 5:
+            signals['active_blog'] = True
+            signals['growth_indicators'].append('active_content')
+        
+        # Recent updates (copyright year, last modified)
+        current_year = datetime.now().year
+        if str(current_year) in html or str(current_year - 1) in html:
+            signals['recent_updates'] = True
+        
+        return signals
+    
+    def _detect_trust_signals(self, competitor: Dict[str, Any]) -> Dict[str, Any]:
+        """Tunnista luottamussignaalit"""
+        
+        signals = {
+            'has_ssl': False,
+            'has_testimonials': False,
+            'has_case_studies': False,
+            'has_certifications': False,
+            'trust_score': 0
+        }
+        
+        technical = competitor.get('technical', {})
+        html = competitor.get('html', '') or ''
+        html_lower = html.lower()
+        
+        # SSL
+        if technical.get('has_ssl'):
+            signals['has_ssl'] = True
+            signals['trust_score'] += 2
+        
+        # Testimonials / Reviews
+        if any(term in html_lower for term in ['testimonial', 'review', 'asiakaspalaute', 'referenss']):
+            signals['has_testimonials'] = True
+            signals['trust_score'] += 2
+        
+        # Case studies
+        if any(term in html_lower for term in ['case study', 'case studies', 'success story', 'asiakastarina']):
+            signals['has_case_studies'] = True
+            signals['trust_score'] += 3
+        
+        # Certifications
+        if any(term in html_lower for term in ['certified', 'certification', 'iso', 'sertifioi']):
+            signals['has_certifications'] = True
+            signals['trust_score'] += 2
+        
+        return signals
+    
+    def _calculate_threat_level(self, signals: Dict[str, Any]) -> tuple:
+        """
+        Laske kilpailijan uhkataso 1-10.
+        
+        Korkea uhka = vahva digitaalinen läsnäolo + vakiintunut yritys + kasvusignaalit
+        Matala uhka = heikko läsnäolo TAI uusi startup ilman resursseja
+        """
+        score = 5  # Baseline
+        reasons = []
+        
+        # 1. Digitaalinen pistemäärä vs. sinun
+        score_diff = signals.get('score_diff', 0)
+        if score_diff > 20:
+            score += 2
+            reasons.append(f"+{score_diff} points ahead" if self._language == 'en' else f"+{score_diff} pistettä edellä")
+        elif score_diff > 10:
+            score += 1
+            reasons.append(f"+{score_diff} points ahead" if self._language == 'en' else f"+{score_diff} pistettä edellä")
+        elif score_diff < -20:
+            score -= 2
+            reasons.append(f"{score_diff} points behind" if self._language == 'en' else f"{score_diff} pistettä jäljessä")
+        elif score_diff < -10:
+            score -= 1
+        
+        # 2. Domain-ikä
+        domain_age = signals.get('domain_age', {})
+        if domain_age.get('is_established'):
+            score += 1.5
+            years = domain_age.get('age_years', 0)
+            reasons.append(f"est. {years:.0f}+ years" if self._language == 'en' else f"perustettu {years:.0f}+ v sitten")
+        elif domain_age.get('is_new'):
+            score -= 1.5
+            reasons.append("new player" if self._language == 'en' else "uusi toimija")
+        
+        # 3. Yrityksen koko
+        company_size = signals.get('company_size', {})
+        employees = company_size.get('estimated_employees', 'unknown')
+        if employees == '20+':
+            score += 1.5
+            reasons.append(f"~{employees} employees" if self._language == 'en' else f"~{employees} työntekijää")
+        elif employees == '1-5':
+            score -= 1
+        
+        # 4. Kasvusignaalit
+        growth = signals.get('growth_signals', {})
+        if growth.get('is_hiring'):
+            score += 1
+            reasons.append("actively hiring" if self._language == 'en' else "rekrytoi aktiivisesti")
+        if growth.get('active_blog'):
+            score += 0.5
+        
+        # 5. Trust signals
+        trust = signals.get('trust_signals', {})
+        if trust.get('has_case_studies'):
+            score += 1
+            reasons.append("proven track record" if self._language == 'en' else "referenssejä")
+        if trust.get('trust_score', 0) >= 5:
+            score += 0.5
+        
+        # Rajoita 1-10
+        score = max(1, min(10, round(score)))
+        
+        # Yhdistä syyt
+        reasoning = ", ".join(reasons[:3]) if reasons else ("no strong signals" if self._language == 'en' else "ei vahvoja signaaleja")
+        
+        return score, reasoning
+    
     def _emit_competitor_insight(self, assessment: Dict[str, Any]):
-        """Emit insight for a competitor assessment"""
+        """Lähetä insight kilpailija-arvioinnista"""
+        
         level = assessment['threat_level']
         name = assessment['name']
+        label = assessment['threat_label']
         score = assessment['digital_score']
         reasoning = assessment['reasoning']
         
-        emoji = {'high': '🔴', 'medium': '🟡', 'low': '🟢'}.get(level, '⚪')
-        label = {'high': 'HIGH THREAT', 'medium': 'MEDIUM THREAT', 'low': 'LOW THREAT'}.get(level, 'UNKNOWN')
+        insight_key = f"{level}_threat"
+        insight_text = COMPETITOR_INSIGHTS[insight_key][self._language].format(
+            name=name,
+            label=label,
+            score=score,
+            reason=reasoning
+        )
         
         priority = {
             'high': AgentPriority.HIGH,
@@ -446,56 +746,25 @@ class GuardianAgent(BaseAgent):
         }.get(level, AgentPriority.MEDIUM)
         
         self._emit_insight(
-            f"{emoji} {name}: {label} — Score {score}/100, {reasoning}",
+            insight_text,
             priority=priority,
             insight_type=InsightType.THREAT if level == 'high' else InsightType.FINDING,
-            data=assessment
+            data={
+                'competitor': name,
+                'threat_level': level,
+                'threat_score': assessment['threat_score'],
+                'digital_score': score,
+                'signals': assessment['signals']
+            }
         )
     
     def _extract_domain_name(self, url: str) -> str:
-        """Extract domain name from URL"""
+        """Pura domain nimeksi"""
         try:
             domain = urlparse(url).netloc or url
             domain = domain.replace('www.', '')
-            return domain.split('.')[0].capitalize()
+            # example.com -> Example
+            name = domain.split('.')[0].capitalize()
+            return name
         except:
             return url
-    
-    def _prioritize_actions(
-        self, 
-        threats: List[Dict[str, Any]], 
-        risk_register: List[Any]
-    ) -> List[Dict[str, Any]]:
-        """Prioritize actions by impact and effort"""
-        
-        impact_scores = {'critical': 4, 'high': 3, 'medium': 2, 'low': 1}
-        effort_scores = {'low': 3, 'medium': 2, 'high': 1}
-        
-        actions = []
-        for threat in threats:
-            impact = impact_scores.get(threat.get('impact', 'medium'), 2)
-            effort = effort_scores.get(threat.get('effort', 'medium'), 2)
-            roi = impact * effort
-            
-            actions.append({
-                'title': f"Fix: {threat.get('title', 'Unknown')}",
-                'category': threat.get('category', 'general'),
-                'impact': threat.get('impact', 'medium'),
-                'effort': threat.get('effort', 'medium'),
-                'roi_score': roi
-            })
-        
-        actions.sort(key=lambda x: x['roi_score'], reverse=True)
-        return actions
-    
-    def _calculate_rasm_score(self, threats: List[Dict[str, Any]]) -> int:
-        """Calculate RASM (Revenue Attack Surface Mapping) score"""
-        score = 100
-        
-        severity_penalties = {'critical': 25, 'high': 15, 'medium': 8, 'low': 3}
-        
-        for threat in threats:
-            severity = threat.get('severity', 'medium')
-            score -= severity_penalties.get(severity, 8)
-        
-        return max(0, min(100, score))
