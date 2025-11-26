@@ -78,6 +78,7 @@ class GuardianAgent(BaseAgent):
             personality="Valpas ja huolellinen turvallisuusasiantuntija"
         )
         self.dependencies = ['scout', 'analyst']
+        self._language = 'en'  # Default language, updated in execute()
     
     def _task(self, key: str) -> str:
         return GUARDIAN_TASKS.get(key, {}).get(self._language, key)
@@ -86,6 +87,9 @@ class GuardianAgent(BaseAgent):
         return THREAT_TITLES.get(key, {}).get(self._language, key)
     
     async def execute(self, context: AnalysisContext) -> Dict[str, Any]:
+        # Update language from context
+        self._language = getattr(context, 'language', 'en') or 'en'
+        
         from main import build_risk_register
         
         analyst_results = self.get_dependency_results(context, 'analyst')
