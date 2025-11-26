@@ -86,9 +86,6 @@ class GuardianAgent(BaseAgent):
         return THREAT_TITLES.get(key, {}).get(self._language, key)
     
     async def execute(self, context: AnalysisContext) -> Dict[str, Any]:
-        # Set language from context
-        self._language = getattr(context, 'language', 'en') or 'en'
-        
         from main import build_risk_register
         
         analyst_results = self.get_dependency_results(context, 'analyst')
