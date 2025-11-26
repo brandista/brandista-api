@@ -242,7 +242,15 @@ async def _handle_start_analysis(websocket: WebSocket, message: dict):
             user=None  # TODO: Get from auth
         )
         
-        # Send completion message
+        # Send completion message with FLAT structure for frontend
+        # Extract data from nested agent results
+        analyst = result.results.get('analyst', {})
+        guardian = result.results.get('guardian', {})
+        prospector = result.results.get('prospector', {})
+        strategist = result.results.get('strategist', {})
+        planner = result.results.get('planner', {})
+        
+        # Build flat response
         await websocket.send_json({
             "type": "complete",
             "data": {
@@ -250,7 +258,50 @@ async def _handle_start_analysis(websocket: WebSocket, message: dict):
                 "duration_seconds": result.duration_seconds,
                 "agents_completed": result.agents_completed,
                 "agents_failed": result.agents_failed,
-                "results": result.results,
+                
+                # Analyst data (flattened)
+                "your_score": analyst.get('your_score', 0),
+                "your_ranking": analyst.get('your_rank', 1),
+                "total_competitors": analyst.get('total_analyzed', 1),
+                "benchmark": {
+                    "avg": analyst.get('benchmark', {}).get('avg_score', 0),
+                    "max": analyst.get('benchmark', {}).get('max_score', 0),
+                    "min": analyst.get('benchmark', {}).get('min_score', 0)
+                },
+                
+                # Guardian data (flattened)
+                "revenue_at_risk": guardian.get('revenue_impact', {}).get('total_annual_impact', 0),
+                "risk_count": len(guardian.get('threats', [])),
+                "competitor_threats": guardian.get('competitor_threat_assessment', {}).get('assessments', []),
+                "rasm_score": guardian.get('rasm_score', 0),
+                
+                # Prospector data (flattened)
+                "market_gaps": prospector.get('market_gaps', []),
+                "opportunities_count": len(prospector.get('market_gaps', [])),
+                "your_advantages": prospector.get('strengths', []),
+                
+                # Strategist data (flattened)
+                "market_position": strategist.get('position_quadrant', 'unknown'),
+                "position_quadrant": strategist.get('position_quadrant', 'challenger'),
+                "strategic_score": strategist.get('strategic_score', 0),
+                "creative_boldness": strategist.get('creative_boldness', 50),
+                
+                # Planner data (flattened)
+                "action_plan": {
+                    "this_week": planner.get('one_thing_this_week'),
+                    "phase1": planner.get('plan', {}).get('wave_1', []) if planner.get('plan') else [],
+                    "phase2": planner.get('plan', {}).get('wave_2', []) if planner.get('plan') else [],
+                    "phase3": planner.get('plan', {}).get('wave_3', []) if planner.get('plan') else [],
+                    "total_actions": sum([
+                        len(planner.get('plan', {}).get('wave_1', []) if planner.get('plan') else []),
+                        len(planner.get('plan', {}).get('wave_2', []) if planner.get('plan') else []),
+                        len(planner.get('plan', {}).get('wave_3', []) if planner.get('plan') else [])
+                    ])
+                },
+                "projected_improvement": planner.get('roi_projection', {}).get('potential_score_gain', 0),
+                
+                # Raw results for deep-dive views
+                "full_analysis": result.results,
                 "errors": result.errors
             }
         })
