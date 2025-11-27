@@ -9,8 +9,23 @@ import asyncio
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends, Header
 from pydantic import BaseModel, Field
+
+# Import auth from main
+try:
+    from main import get_current_user, UserInfo
+except ImportError:
+    # Fallback if main not available during import
+    from typing import Optional as OptionalType
+    from pydantic import BaseModel as PydanticBaseModel
+    
+    class UserInfo(PydanticBaseModel):
+        username: str
+        role: str = "user"
+    
+    async def get_current_user(authorization: OptionalType[str] = None) -> OptionalType[UserInfo]:
+        return UserInfo(username="anonymous", role="user")
 
 from agents import (
     get_orchestrator,
