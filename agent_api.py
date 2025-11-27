@@ -271,16 +271,16 @@ async def websocket_agent_analysis(
                 
                 logger.info(f"[WS] Starting analysis for {url}")
                 
-                # Luo orchestrator ja aseta callbackit
+                # Luo orchestrator
                 orchestrator = get_orchestrator()
                 
-                # Create message queue for real-time updates
-                message_queue: asyncio.Queue = asyncio.Queue()
+                # List to collect messages during analysis
+                pending_messages = []
                 
-                # Callbackit jotka lisäävät viestit jonoon
+                # Callbackit jotka keräävät viestit listaan
                 def sync_insight(insight: AgentInsight):
                     try:
-                        message_queue.put_nowait({
+                        msg = {
                             "type": WSMessageType.AGENT_INSIGHT.value,
                             "data": {
                                 "agent_id": insight.agent_id,
@@ -293,13 +293,15 @@ async def websocket_agent_analysis(
                                 "data": insight.data
                             },
                             "timestamp": datetime.now().isoformat()
-                        })
+                        }
+                        pending_messages.append(msg)
+                        logger.info(f"[WS] Queued insight: {insight.agent_name} - {insight.message[:50]}...")
                     except Exception as e:
                         logger.error(f"[WS] Failed to queue insight: {e}")
                 
                 def sync_progress(progress: AgentProgress):
                     try:
-                        message_queue.put_nowait({
+                        msg = {
                             "type": WSMessageType.AGENT_PROGRESS.value,
                             "data": {
                                 "agent_id": progress.agent_id,
@@ -308,13 +310,14 @@ async def websocket_agent_analysis(
                                 "current_task": progress.current_task
                             },
                             "timestamp": datetime.now().isoformat()
-                        })
+                        }
+                        pending_messages.append(msg)
                     except Exception as e:
                         logger.error(f"[WS] Failed to queue progress: {e}")
                 
                 def sync_complete(agent_id: str, result: AgentResult):
                     try:
-                        message_queue.put_nowait({
+                        msg = {
                             "type": WSMessageType.AGENT_STATUS.value,
                             "data": {
                                 "agent_id": agent_id,
@@ -324,7 +327,8 @@ async def websocket_agent_analysis(
                                 "has_error": result.error is not None
                             },
                             "timestamp": datetime.now().isoformat()
-                        })
+                        }
+                        pending_messages.append(msg)
                     except Exception as e:
                         logger.error(f"[WS] Failed to queue status: {e}")
                 
@@ -333,26 +337,6 @@ async def websocket_agent_analysis(
                     on_progress=sync_progress,
                     on_agent_complete=sync_complete
                 )
-                
-                # Task to send queued messages
-                send_task_running = True
-                
-                async def send_queued_messages():
-                    while send_task_running:
-                        try:
-                            # Wait for message with timeout
-                            msg = await asyncio.wait_for(message_queue.get(), timeout=0.1)
-                            await manager.send_json(websocket, msg)
-                            logger.debug(f"[WS] Sent: {msg.get('type')}")
-                        except asyncio.TimeoutError:
-                            # No message, continue waiting
-                            pass
-                        except Exception as e:
-                            logger.error(f"[WS] Queue send error: {e}")
-                            break
-                
-                # Start sender task
-                sender = asyncio.create_task(send_queued_messages())
                 
                 # Suorita analyysi
                 try:
@@ -363,25 +347,34 @@ async def websocket_agent_analysis(
                         industry_context=industry_context
                     )
                     
-                    # Stop sender and wait for remaining messages
-                    send_task_running = False
-                    await asyncio.sleep(0.2)  # Give time to send remaining
-                    sender.cancel()
-                    try:
-                        await sender
-                    except asyncio.CancelledError:
-                        pass
+                    # Send all collected messages to frontend
+                    logger.info(f"[WS] Analysis complete. Sending {len(pending_messages)} collected messages...")
+                    for msg in pending_messages:
+                        try:
+                            await manager.send_json(websocket, msg)
+                            await asyncio.sleep(0.05)  # Small delay between messages
+                        except Exception as e:
+                            logger.error(f"[WS] Failed to send message: {e}")
                     
                     # Extract data from agent results for frontend
                     agent_results = result.agent_results or {}
                     
-                    # Analyst data
+                    # Analyst data - structure: {your_analysis, competitor_analyses, benchmark, your_score}
                     analyst_data = agent_results.get('analyst', {})
                     analyst_result = analyst_data.data if hasattr(analyst_data, 'data') else analyst_data
-                    your_score = analyst_result.get('your_score', result.overall_score)
-                    your_ranking = analyst_result.get('your_rank', 1)
-                    total_competitors = analyst_result.get('total_analyzed', 1)
+                    
+                    # Get benchmark which contains ranking info
                     benchmark = analyst_result.get('benchmark', {})
+                    your_score = analyst_result.get('your_score', 0) or benchmark.get('your_score', 0) or result.overall_score
+                    your_ranking = benchmark.get('your_rank', benchmark.get('your_position', 1))
+                    total_competitors = benchmark.get('total_analyzed', 1)
+                    avg_score = benchmark.get('avg_competitor_score', 0)
+                    best_score = benchmark.get('best_score', your_score)
+                    
+                    # Get your_analysis for detailed data
+                    your_analysis = analyst_result.get('your_analysis', {})
+                    
+                    logger.info(f"[WS] Analyst data: score={your_score}, rank={your_ranking}, total={total_competitors}")
                     
                     # Guardian data
                     guardian_data = agent_results.get('guardian', {})
