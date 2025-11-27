@@ -79,6 +79,7 @@ class AnalysisContext(BaseModel):
     competitor_urls: List[str] = []
     language: str = "fi"
     industry_context: Optional[str] = None
+    user_id: Optional[str] = None  # For unified context lookup
     
     # Shared state (päivittyy agenttien edetessä)
     agent_results: Dict[str, AgentResult] = {}
@@ -87,6 +88,9 @@ class AnalysisContext(BaseModel):
     html_content: Optional[str] = None
     website_data: Optional[Dict[str, Any]] = None
     competitor_data: List[Dict[str, Any]] = []
+    
+    # Unified Context (historical data from all tabs)
+    unified_context: Optional[Dict[str, Any]] = None
     
     class Config:
         arbitrary_types_allowed = True

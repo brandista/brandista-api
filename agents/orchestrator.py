@@ -126,7 +126,8 @@ class GrowthEngineOrchestrator:
         url: str,
         competitor_urls: List[str] = None,
         language: str = "fi",
-        industry_context: Optional[str] = None
+        industry_context: Optional[str] = None,
+        user_id: Optional[str] = None
     ) -> OrchestrationResult:
         """
         Suorita täysi agentti-analyysi.
@@ -136,6 +137,7 @@ class GrowthEngineOrchestrator:
             competitor_urls: Lista kilpailijoiden URL:ista (valinnainen)
             language: Kieli ('fi' tai 'en')
             industry_context: Toimiala-konteksti (valinnainen)
+            user_id: Käyttäjä-ID unified contextin hakuun
             
         Returns:
             OrchestrationResult sisältäen kaikkien agenttien tulokset
@@ -144,12 +146,27 @@ class GrowthEngineOrchestrator:
         self.is_running = True
         self.start_time = datetime.now()
         
+        # Hae unified context jos user_id annettu
+        unified_context_data = None
+        if user_id:
+            try:
+                from unified_context import get_unified_context
+                unified_ctx = get_unified_context(user_id)
+                unified_context_data = unified_ctx.to_dict()
+                logger.info(f"[Orchestrator] Loaded unified context for {user_id}: "
+                           f"{len(unified_ctx.recent_analyses)} analyses, "
+                           f"{len(unified_ctx.tracked_competitors)} tracked")
+            except Exception as e:
+                logger.warning(f"[Orchestrator] Could not load unified context: {e}")
+        
         # Luo konteksti
         self.context = AnalysisContext(
             url=url,
             competitor_urls=competitor_urls or [],
             language=language,
-            industry_context=industry_context
+            industry_context=industry_context,
+            user_id=user_id,
+            unified_context=unified_context_data
         )
         
         logger.info(f"[Orchestrator] Starting analysis for {url}")
