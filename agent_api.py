@@ -368,17 +368,31 @@ async def websocket_agent_analysis(
                     analyst_result = analyst_data.data if hasattr(analyst_data, 'data') else analyst_data
                     
                     # Get benchmark which contains ranking info
-                    benchmark = analyst_result.get('benchmark', {})
-                    your_score = analyst_result.get('your_score', 0) or benchmark.get('your_score', 0) or result.overall_score
-                    your_ranking = benchmark.get('your_rank', benchmark.get('your_position', 1))
-                    total_competitors = benchmark.get('total_analyzed', 1)
-                    avg_score = benchmark.get('avg_competitor_score', 0)
-                    best_score = benchmark.get('best_score', your_score)
+                    benchmark_raw = analyst_result.get('benchmark', {})
+                    your_score = analyst_result.get('your_score', 0) or benchmark_raw.get('your_score', 0) or result.overall_score
+                    your_ranking = benchmark_raw.get('your_rank', benchmark_raw.get('your_position', 1))
+                    total_competitors = benchmark_raw.get('total_analyzed', 1)
+                    avg_score = benchmark_raw.get('avg_competitor_score', 0)
+                    best_score = benchmark_raw.get('max_competitor_score', your_score)
+                    
+                    # Map benchmark to frontend format
+                    benchmark = {
+                        'avg': avg_score,
+                        'max': best_score,
+                        'min': benchmark_raw.get('min_competitor_score', 0),
+                        # Also include raw fields for compatibility
+                        'your_score': your_score,
+                        'avg_competitor_score': avg_score,
+                        'max_competitor_score': best_score,
+                        'your_position': your_ranking,
+                        'total_analyzed': total_competitors
+                    }
                     
                     # Get your_analysis for detailed data
                     your_analysis = analyst_result.get('your_analysis', {})
                     
                     logger.info(f"[WS] Analyst data: score={your_score}, rank={your_ranking}, total={total_competitors}")
+                    logger.info(f"[WS] Benchmark: avg={avg_score}, max={best_score}")
                     
                     # Guardian data
                     guardian_data = agent_results.get('guardian', {})
@@ -387,6 +401,47 @@ async def websocket_agent_analysis(
                     revenue_at_risk = revenue_impact.get('total_annual_risk', 0)
                     competitor_threats = guardian_result.get('competitor_threat_assessment', {}).get('assessments', [])
                     rasm_score = guardian_result.get('rasm_score', 0)
+                    
+                    # Log competitor threat scores
+                    for ct in competitor_threats[:3]:
+                        logger.info(f"[WS] Competitor threat: {ct.get('name')} score={ct.get('digital_score')}")
+                    
+                    # Map competitor_threats to frontend format
+                    competitor_threats_mapped = []
+                    for ct in competitor_threats:
+                        # Extract signal descriptions from signals object
+                        signals_obj = ct.get('signals', {})
+                        signal_descriptions = []
+                        
+                        if signals_obj.get('domain_age', {}).get('is_established'):
+                            age = signals_obj.get('domain_age', {}).get('age_years', 0)
+                            signal_descriptions.append(f"Established {int(age)}+ years")
+                        if signals_obj.get('trust_signals', {}).get('has_ssl'):
+                            signal_descriptions.append("SSL secured")
+                        if signals_obj.get('growth_signals', {}).get('is_hiring'):
+                            signal_descriptions.append("Actively hiring")
+                        if signals_obj.get('company_size', {}).get('estimated_employees'):
+                            emp = signals_obj['company_size']['estimated_employees']
+                            signal_descriptions.append(f"{emp} employees")
+                        
+                        # Extract domain from URL
+                        url = ct.get('url', '')
+                        domain = url.replace('https://', '').replace('http://', '').split('/')[0] if url else ''
+                        
+                        competitor_threats_mapped.append({
+                            'domain': domain,
+                            'company': ct.get('name', domain),
+                            'url': url,
+                            'score': ct.get('digital_score', 0),
+                            'score_diff': ct.get('score_diff', 0),
+                            'threat_level': ct.get('threat_level', 'medium'),
+                            'threat_score': ct.get('threat_score', 5),
+                            'threat_label': ct.get('threat_label', ''),
+                            'reasoning': ct.get('reasoning', ''),
+                            'signals': signal_descriptions if signal_descriptions else ['No specific signals']
+                        })
+                    
+                    competitor_threats = competitor_threats_mapped
                     
                     # Prospector data
                     prospector_data = agent_results.get('prospector', {})
@@ -415,10 +470,19 @@ async def websocket_agent_analysis(
                         if quick_start and len(quick_start) > 0:
                             first_action = quick_start[0]
                             this_week = {
-                                'action': first_action.get('action', first_action.get('title', '')),
-                                'impact_points': first_action.get('impact_points', projected_improvement),
-                                'effort_hours': first_action.get('effort_hours', first_action.get('time_estimate', '4-8h')),
+                                'action': first_action.get('title', first_action.get('action', '')),
+                                'impact_points': first_action.get('impact_points', projected_improvement // 3 if projected_improvement else 5),
+                                'effort_hours': first_action.get('time_estimate', first_action.get('effort_hours', '4-8h')),
                                 'roi_estimate': first_action.get('roi_estimate', 0)
+                            }
+                        elif phases and len(phases) > 0 and phases[0].get('tasks'):
+                            # Fallback: use first task from phase 1
+                            first_task = phases[0]['tasks'][0]
+                            this_week = {
+                                'action': first_task.get('title', ''),
+                                'impact_points': projected_improvement // 3 if projected_improvement else 5,
+                                'effort_hours': '1 day',
+                                'roi_estimate': 0
                             }
                         
                         # Extract phase tasks
