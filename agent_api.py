@@ -500,7 +500,9 @@ async def websocket_agent_analysis(
                                 'action': first_action.get('title', first_action.get('action', '')),
                                 'impact_points': first_action.get('impact_points', projected_improvement // 3 if projected_improvement else 5),
                                 'effort_hours': first_action.get('time_estimate', first_action.get('effort_hours', '4-8h')),
-                                'roi_estimate': first_action.get('roi_estimate', 0)
+                                'roi_estimate': first_action.get('roi_estimate', 0),
+                                'category': first_action.get('category', 'optimization'),
+                                'priority': first_action.get('priority', 1)
                             }
                         elif phases and len(phases) > 0 and phases[0].get('tasks'):
                             # Fallback: use first task from phase 1
@@ -509,7 +511,9 @@ async def websocket_agent_analysis(
                                 'action': first_task.get('title', ''),
                                 'impact_points': projected_improvement // 3 if projected_improvement else 5,
                                 'effort_hours': '1 day',
-                                'roi_estimate': 0
+                                'roi_estimate': 0,
+                                'category': first_task.get('category', 'general'),
+                                'priority': 1
                             }
                         
                         # Extract phase tasks
@@ -530,6 +534,34 @@ async def websocket_agent_analysis(
                             'resource_estimate': planner.get('resource_estimate', {})
                         }
                     
+                    # Get Scout data for competitor info
+                    scout_data = agent_results.get('scout', {})
+                    scout_result = scout_data.data if hasattr(scout_data, 'data') else scout_data
+                    competitor_urls_found = scout_result.get('competitor_urls', []) if scout_result else []
+                    
+                    # Get additional Strategist data
+                    market_position = strategist_result.get('market_position', '') if strategist_result else ''
+                    strategic_score = strategist_result.get('strategic_score', 0) if strategist_result else 0
+                    creative_boldness = strategist_result.get('creative_boldness', 50) if strategist_result else 50
+                    
+                    # Get Prospector advantages
+                    your_advantages = prospector_result.get('competitive_advantages', []) if prospector_result else []
+                    
+                    # Get Guardian risk count
+                    risks = guardian_result.get('risks', []) if guardian_result else []
+                    risk_count = len(risks) if risks else len(competitor_threats)
+                    
+                    # Map market_gaps to frontend format (gap, description, potential_value, difficulty, competitors_missing)
+                    market_gaps_mapped = []
+                    for mg in market_gaps:
+                        market_gaps_mapped.append({
+                            'gap': mg.get('title', mg.get('gap', '')),
+                            'description': mg.get('description', f"Category: {mg.get('category', 'general')}"),
+                            'potential_value': mg.get('potential_value', mg.get('advantage', 0) * 100),
+                            'difficulty': mg.get('difficulty', 'medium' if mg.get('impact') == 'medium' else 'easy' if mg.get('impact') == 'high' else 'hard'),
+                            'competitors_missing': mg.get('competitors_missing', len(competitor_urls_found))
+                        })
+                    
                     # Lähetä lopputulos with all mapped data
                     await manager.send_json(websocket, {
                         "type": WSMessageType.ANALYSIS_COMPLETE.value,
@@ -538,6 +570,10 @@ async def websocket_agent_analysis(
                             "duration_seconds": result.execution_time_ms / 1000,
                             "agents_completed": len([r for r in agent_results.values() if r]),
                             "agents_failed": len(result.errors),
+                            
+                            # Scout data (NEW)
+                            "competitors_found": len(competitor_urls_found),
+                            "competitor_urls": competitor_urls_found,
                             
                             # Analyst data (flattened)
                             "your_score": your_score,
@@ -549,13 +585,18 @@ async def websocket_agent_analysis(
                             "revenue_at_risk": revenue_at_risk,
                             "competitor_threats": competitor_threats,
                             "rasm_score": rasm_score,
+                            "risk_count": risk_count,  # NEW
                             
                             # Prospector data
-                            "market_gaps": market_gaps,
-                            "opportunities_count": len(market_gaps),
+                            "market_gaps": market_gaps_mapped,  # Now mapped to frontend format
+                            "opportunities_count": len(market_gaps_mapped),
+                            "your_advantages": your_advantages,  # NEW
                             
-                            # Strategist data
+                            # Strategist data (expanded)
                             "position_quadrant": position_quadrant,
+                            "market_position": market_position,  # NEW
+                            "strategic_score": strategic_score,  # NEW
+                            "creative_boldness": creative_boldness,  # NEW
                             
                             # Planner data
                             "action_plan": action_plan_mapped,
