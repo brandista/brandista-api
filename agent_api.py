@@ -1,28 +1,30 @@
 """
-Growth Engine 2.0 - Agent API
-REST and WebSocket endpoints for agent-based analysis
-+ Agent Chat for post-analysis conversations
+Growth Engine 2.0 - Agent API Endpoints
+REST & WebSocket endpointit agenttijärjestelmälle
 """
 
-import logging
 import json
+import logging
 import asyncio
-from typing import Optional, List, Any, Dict
+from typing import Optional, List
 from datetime import datetime
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from agents import (
-    AgentOrchestrator,
+    get_orchestrator,
     AgentInsight,
     AgentProgress,
-    AgentStatus
+    AgentResult,
+    WSMessageType,
+    WSMessage
 )
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+# Router
+router = APIRouter(prefix="/api/v1/agents", tags=["Agent System"])
 
 
 # ============================================================================
@@ -30,605 +32,439 @@ router = APIRouter()
 # ============================================================================
 
 class AgentAnalysisRequest(BaseModel):
-    url: str
-    competitor_urls: Optional[List[str]] = None
-    industry: Optional[str] = None
-    country_code: str = "fi"
+    """Agentti-analyysin pyyntö"""
+    url: str = Field(..., description="Analysoitava URL")
+    competitor_urls: List[str] = Field(default=[], description="Kilpailijoiden URL:it (max 5)")
+    language: str = Field(default="fi", description="Kieli: 'fi' tai 'en'")
+    industry_context: Optional[str] = Field(default=None, description="Toimiala-konteksti")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "url": "https://example.com",
+                "competitor_urls": ["https://competitor1.com", "https://competitor2.com"],
+                "language": "fi",
+                "industry_context": "saas"
+            }
+        }
 
 
 class AgentInfo(BaseModel):
+    """Agentin tiedot"""
     id: str
     name: str
     role: str
     avatar: str
     personality: str
+    dependencies: List[str]
     status: str
     progress: int
-    dependencies: List[str]
 
 
-class AgentAnalysisResponse(BaseModel):
+class AgentInfoResponse(BaseModel):
+    """Agenttien tiedot -vastaus"""
+    agents: List[AgentInfo]
+    execution_flow: List[List[str]]
+
+
+class AnalysisResultResponse(BaseModel):
+    """Analyysin lopputulos"""
     success: bool
-    duration_seconds: float
-    agents_completed: int
-    agents_failed: int
-    results: dict
+    execution_time_ms: int
+    url: str
+    competitor_count: int
+    overall_score: int
+    composite_scores: dict
+    critical_insights: List[dict]
+    high_insights: List[dict]
+    action_plan: Optional[dict]
     errors: List[str]
-    insights: List[dict]
-
-
-class ChatMessage(BaseModel):
-    role: str  # 'user' or 'assistant'
-    content: str
-
-
-class AgentChatRequest(BaseModel):
-    agent_id: str  # Which agent to chat with
-    messages: List[ChatMessage]  # Conversation history
-    analysis_context: Dict[str, Any]  # Analysis results for context
-    language: str = "fi"  # fi or en
-
-
-class AgentChatResponse(BaseModel):
-    agent_id: str
-    agent_name: str
-    response: str
-    suggested_questions: List[str]
-
-
-# ============================================================================
-# AGENT PERSONAS FOR CHAT
-# ============================================================================
-
-AGENT_PERSONAS = {
-    "scout": {
-        "name": "Sofia",
-        "role": "Market Intelligence",
-        "personality": {
-            "fi": """Olet Sofia, Growth Enginen markkinatiedustelun asiantuntija. 
-Olet utelias, innostunut ja löydät aina mielenkiintoisia yksityiskohtia kilpailijoista.
-Puhut lämpimästi mutta ammattimaisesti. Käytät välillä emojeja kuten 🔍 ja 🎯.
-Erikoisalasi: kilpailija-analyysi, markkinakartoitus, toimialatutkimus.""",
-            "en": """You are Sofia, Growth Engine's market intelligence expert.
-You're curious, enthusiastic and always find interesting details about competitors.
-You speak warmly but professionally. You occasionally use emojis like 🔍 and 🎯.
-Your specialty: competitor analysis, market mapping, industry research."""
-        },
-        "expertise": ["competitors", "market", "industry", "discovery"],
-        "suggested_questions": {
-            "fi": [
-                "Miksi nämä kilpailijat valikoituivat?",
-                "Onko alalla muita huomionarvoisia toimijoita?",
-                "Mikä erottaa meidät kilpailijoista?"
-            ],
-            "en": [
-                "Why were these competitors selected?",
-                "Are there other notable players in the industry?",
-                "What differentiates us from competitors?"
-            ]
-        }
-    },
-    "analyst": {
-        "name": "Alex",
-        "role": "Data Science",
-        "personality": {
-            "fi": """Olet Alex, Growth Enginen data-analyytikko.
-Olet tarkka, analyyttinen ja rakastat numeroita. Selität monimutkaiset asiat selkeästi.
-Viittaat usein dataan ja prosentteihin. Käytät 📊 ja 📈 emojeja.
-Erikoisalasi: pisteytys, benchmarking, tekninen analyysi, suorituskyky.""",
-            "en": """You are Alex, Growth Engine's data analyst.
-You're precise, analytical and love numbers. You explain complex things clearly.
-You often reference data and percentages. You use 📊 and 📈 emojis.
-Your specialty: scoring, benchmarking, technical analysis, performance."""
-        },
-        "expertise": ["score", "benchmark", "technical", "performance", "data"],
-        "suggested_questions": {
-            "fi": [
-                "Mistä pisteytys koostuu?",
-                "Miksi saimme tämän pistemäärän?",
-                "Miten voimme parantaa teknistä suorituskykyä?"
-            ],
-            "en": [
-                "What does the score consist of?",
-                "Why did we get this score?",
-                "How can we improve technical performance?"
-            ]
-        }
-    },
-    "guardian": {
-        "name": "Gustav",
-        "role": "Risk Manager",
-        "personality": {
-            "fi": """Olet Gustav, Growth Enginen riskienhallitsija.
-Olet valpas, huolellinen ja suojeleva. Puhut suoraan mutta rakentavasti riskeistä.
-Käytät 🛡️ ja ⚠️ emojeja. Priorisoit aina liiketoimintavaikutuksen.
-Erikoisalasi: riskit, uhat, tietoturva, liikevaihdon suojaaminen.""",
-            "en": """You are Gustav, Growth Engine's risk manager.
-You're vigilant, careful and protective. You speak directly but constructively about risks.
-You use 🛡️ and ⚠️ emojis. You always prioritize business impact.
-Your specialty: risks, threats, security, revenue protection."""
-        },
-        "expertise": ["risk", "threat", "security", "revenue", "protection"],
-        "suggested_questions": {
-            "fi": [
-                "Mitkä ovat suurimmat riskit juuri nyt?",
-                "Miten laskit liikevaihtoriskin?",
-                "Mitä pitäisi korjata ensimmäisenä?"
-            ],
-            "en": [
-                "What are the biggest risks right now?",
-                "How did you calculate the revenue risk?",
-                "What should be fixed first?"
-            ]
-        }
-    },
-    "prospector": {
-        "name": "Petra",
-        "role": "Growth Hacker",
-        "personality": {
-            "fi": """Olet Petra, Growth Enginen kasvuhakkeri.
-Olet energinen, optimistinen ja näet mahdollisuuksia kaikkialla. Innostut helposti!
-Käytät 💎 ja 🚀 emojeja. Keskityt kasvuun ja mahdollisuuksiin, et ongelmiin.
-Erikoisalasi: kasvumahdollisuudet, markkina-aukot, kilpailuedut.""",
-            "en": """You are Petra, Growth Engine's growth hacker.
-You're energetic, optimistic and see opportunities everywhere. You get excited easily!
-You use 💎 and 🚀 emojis. You focus on growth and opportunities, not problems.
-Your specialty: growth opportunities, market gaps, competitive advantages."""
-        },
-        "expertise": ["opportunity", "growth", "gap", "advantage", "potential"],
-        "suggested_questions": {
-            "fi": [
-                "Mikä on suurin kasvumahdollisuus?",
-                "Mitä kilpailijat jättävät tekemättä?",
-                "Miten voimme erottautua?"
-            ],
-            "en": [
-                "What's the biggest growth opportunity?",
-                "What are competitors not doing?",
-                "How can we differentiate?"
-            ]
-        }
-    },
-    "strategist": {
-        "name": "Stefan",
-        "role": "Strategy Director",
-        "personality": {
-            "fi": """Olet Stefan, Growth Enginen strategiajohtaja.
-Olet viisas, kokenut ja näet kokonaiskuvan. Puhut kuin mentorit - rauhallisesti ja harkiten.
-Käytät 🎯 ja 🏆 emojeja. Yhdistät kaiken isoksi kuvaksi.
-Erikoisalasi: strategia, markkina-asema, kokonaiskuva, suositukset.""",
-            "en": """You are Stefan, Growth Engine's strategy director.
-You're wise, experienced and see the big picture. You speak like a mentor - calmly and thoughtfully.
-You use 🎯 and 🏆 emojis. You connect everything into the big picture.
-Your specialty: strategy, market position, big picture, recommendations."""
-        },
-        "expertise": ["strategy", "position", "recommendation", "direction", "vision"],
-        "suggested_questions": {
-            "fi": [
-                "Mikä on strateginen tilanteemme?",
-                "Mihin meidän pitäisi keskittyä?",
-                "Miten voitamme kilpailun?"
-            ],
-            "en": [
-                "What's our strategic situation?",
-                "What should we focus on?",
-                "How do we win the competition?"
-            ]
-        }
-    },
-    "planner": {
-        "name": "Pinja",
-        "role": "Project Manager",
-        "personality": {
-            "fi": """Olet Pinja, Growth Enginen projektipäällikkö.
-Olet tehokas, käytännöllinen ja saat asiat tapahtumaan. Pidät deadlineista ja priorisoinnista.
-Käytät 📋 ja ✅ emojeja. Muutat strategian konkreettisiksi toimenpiteiksi.
-Erikoisalasi: toimintasuunnitelma, priorisointi, aikataulutus, resurssit.""",
-            "en": """You are Pinja, Growth Engine's project manager.
-You're efficient, practical and get things done. You love deadlines and prioritization.
-You use 📋 and ✅ emojis. You turn strategy into concrete actions.
-Your specialty: action plan, prioritization, scheduling, resources."""
-        },
-        "expertise": ["plan", "action", "priority", "timeline", "resource"],
-        "suggested_questions": {
-            "fi": [
-                "Mitä teen ensin?",
-                "Paljonko aikaa tämä vie?",
-                "Miten priorisoit toimenpiteet?"
-            ],
-            "en": [
-                "What do I do first?",
-                "How much time will this take?",
-                "How do you prioritize the actions?"
-            ]
-        }
-    }
-}
 
 
 # ============================================================================
 # REST ENDPOINTS
 # ============================================================================
 
-@router.get("/info")
+@router.get("/info", response_model=AgentInfoResponse)
 async def get_agents_info():
-    """Get information about all available agents"""
-    orchestrator = AgentOrchestrator()
-    return {
-        "agents": orchestrator.get_agent_info(),
-        "execution_order": orchestrator.execution_tiers,
-        "total_agents": len(orchestrator.agents)
-    }
+    """
+    Palauta kaikkien agenttien tiedot.
+    Käytetään frontendissä agent-korttien renderöintiin.
+    """
+    orchestrator = get_orchestrator()
+    
+    return AgentInfoResponse(
+        agents=[AgentInfo(**info) for info in orchestrator.get_agent_info()],
+        execution_flow=orchestrator.get_execution_plan()
+    )
 
 
-@router.post("/analyze", response_model=AgentAnalysisResponse)
-async def run_analysis(request: AgentAnalysisRequest):
+@router.post("/analyze", response_model=AnalysisResultResponse)
+async def run_agent_analysis(request: AgentAnalysisRequest):
     """
-    Run complete agent-based analysis (synchronous).
-    For real-time updates, use the WebSocket endpoint instead.
+    Suorita täysi agentti-analyysi (synkroninen).
+    
+    Käyttö: Yksinkertaisiin integraatioihin joissa ei tarvita real-time päivityksiä.
+    
+    HUOM: Tämä endpoint odottaa kunnes analyysi on valmis (~90s).
+    Käytä WebSocket-endpointtia real-time päivityksiin.
     """
-    orchestrator = AgentOrchestrator()
+    logger.info(f"[Agent API] Starting analysis for {request.url}")
+    
+    # Validoi
+    if len(request.competitor_urls) > 5:
+        raise HTTPException(400, "Maximum 5 competitors allowed")
+    
+    orchestrator = get_orchestrator()
     
     try:
         result = await orchestrator.run_analysis(
             url=request.url,
             competitor_urls=request.competitor_urls,
-            industry=request.industry,
-            country_code=request.country_code,
-            user=None  # TODO: Get from auth
+            language=request.language,
+            industry_context=request.industry_context
         )
         
-        return AgentAnalysisResponse(
+        return AnalysisResultResponse(
             success=result.success,
-            duration_seconds=result.duration_seconds,
-            agents_completed=result.agents_completed,
-            agents_failed=result.agents_failed,
-            results=result.results,
-            errors=result.errors,
-            insights=[{
-                'agent_id': i.agent_id,
-                'message': i.message,
-                'priority': i.priority.value,
-                'insight_type': i.insight_type.value,
-                'timestamp': i.timestamp.isoformat(),
-                'data': i.data
-            } for i in result.insights]
+            execution_time_ms=result.execution_time_ms,
+            url=result.url,
+            competitor_count=result.competitor_count,
+            overall_score=result.overall_score,
+            composite_scores=result.composite_scores,
+            critical_insights=[i.dict() for i in result.critical_insights],
+            high_insights=[i.dict() for i in result.high_insights],
+            action_plan=result.action_plan,
+            errors=result.errors
         )
         
     except Exception as e:
-        logger.error(f"Analysis failed: {e}", exc_info=True)
-        raise HTTPException(500, str(e))
+        logger.error(f"[Agent API] Analysis error: {e}", exc_info=True)
+        raise HTTPException(500, f"Analysis failed: {str(e)}")
 
 
-# ============================================================================
-# AGENT CHAT ENDPOINT
-# ============================================================================
-
-@router.post("/chat", response_model=AgentChatResponse)
-async def chat_with_agent(request: AgentChatRequest):
-    """
-    Chat with a specific agent about analysis results.
+@router.get("/status")
+async def get_orchestrator_status():
+    """Palauta orchestratorin tila"""
+    orchestrator = get_orchestrator()
     
-    Each agent has their own personality and expertise area.
-    The conversation is contextualized with the analysis results.
-    """
-    try:
-        # Import OpenAI client from main
-        from main import openai_client
-        
-        if not openai_client:
-            raise HTTPException(503, "OpenAI client not available")
-        
-        agent_id = request.agent_id
-        if agent_id not in AGENT_PERSONAS:
-            raise HTTPException(400, f"Unknown agent: {agent_id}")
-        
-        persona = AGENT_PERSONAS[agent_id]
-        lang = request.language
-        
-        # Build system prompt with agent persona + analysis context
-        system_prompt = _build_chat_system_prompt(persona, request.analysis_context, lang)
-        
-        # Convert messages to OpenAI format
-        messages = [{"role": "system", "content": system_prompt}]
-        for msg in request.messages:
-            messages.append({"role": msg.role, "content": msg.content})
-        
-        # Call OpenAI
-        response = await openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-            max_tokens=600,
-            temperature=0.7
-        )
-        
-        agent_response = response.choices[0].message.content
-        
-        logger.info(f"[AgentChat] {persona['name']} responded to user query")
-        
-        return AgentChatResponse(
-            agent_id=agent_id,
-            agent_name=persona["name"],
-            response=agent_response,
-            suggested_questions=persona["suggested_questions"].get(lang, [])
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[AgentChat] Error: {e}", exc_info=True)
-        raise HTTPException(500, f"Chat failed: {str(e)}")
-
-
-def _build_chat_system_prompt(persona: dict, analysis: dict, lang: str) -> str:
-    """Build the system prompt with agent persona and analysis context"""
-    
-    personality = persona["personality"].get(lang, persona["personality"]["en"])
-    
-    # Extract key analysis data
-    your_score = analysis.get("your_score", 0)
-    your_ranking = analysis.get("your_ranking", 1)
-    total_competitors = analysis.get("total_competitors", 1)
-    revenue_at_risk = analysis.get("revenue_at_risk", 0)
-    market_gaps = analysis.get("market_gaps", [])
-    action_plan = analysis.get("action_plan", {})
-    benchmark = analysis.get("benchmark", {})
-    
-    # Format market gaps
-    gaps_text = ""
-    if market_gaps:
-        gaps_list = [g.get("gap_title", g.get("type", "")) for g in market_gaps[:5]]
-        gaps_text = ", ".join(gaps_list)
-    
-    # Format action plan
-    this_week = action_plan.get("this_week", "")
-    total_actions = action_plan.get("total_actions", 0)
-    
-    if lang == "fi":
-        context = f"""
-ANALYYSIN TULOKSET (käytä näitä vastauksissasi):
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📊 Kokonaispistemäärä: {your_score}/100
-🏆 Sijoitus: #{your_ranking} / {total_competitors} kilpailijaa
-📈 Benchmark: keskiarvo {benchmark.get('avg', 0)}, paras {benchmark.get('max', 0)}
-💰 Liikevaihto riskissä: €{revenue_at_risk:,}
-💎 Markkina-aukot: {gaps_text}
-📋 Toimenpiteitä: {total_actions} kpl 90 päivän suunnitelmassa
-⭐ Tämän viikon prioriteetti: {this_week}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-OHJEET:
-- Vastaa AINA suomeksi
-- Pidä vastaukset tiiviinä (2-4 kappaletta)
-- Viittaa konkreettisiin lukuihin analyysistä
-- Ole {persona['name']} - käytä persoonaasi
-- Älä toista koko analyysiä, vastaa vain kysyttyyn
-"""
-    else:
-        context = f"""
-ANALYSIS RESULTS (use these in your responses):
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📊 Overall Score: {your_score}/100
-🏆 Ranking: #{your_ranking} / {total_competitors} competitors
-📈 Benchmark: average {benchmark.get('avg', 0)}, best {benchmark.get('max', 0)}
-💰 Revenue at Risk: €{revenue_at_risk:,}
-💎 Market Gaps: {gaps_text}
-📋 Actions: {total_actions} in 90-day plan
-⭐ This Week's Priority: {this_week}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-INSTRUCTIONS:
-- Always respond in English
-- Keep responses concise (2-4 paragraphs)
-- Reference specific numbers from the analysis
-- Be {persona['name']} - use your personality
-- Don't repeat the whole analysis, answer what's asked
-"""
-
-    return f"{personality}\n\n{context}"
+    return {
+        "is_running": orchestrator.is_running,
+        "agents_registered": len(orchestrator.agents),
+        "execution_plan": orchestrator.get_execution_plan()
+    }
 
 
 # ============================================================================
 # WEBSOCKET ENDPOINT
 # ============================================================================
 
+class ConnectionManager:
+    """Hallitse WebSocket-yhteyksiä"""
+    
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+    
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+        logger.info(f"[WS] Client connected. Total: {len(self.active_connections)}")
+    
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+        logger.info(f"[WS] Client disconnected. Total: {len(self.active_connections)}")
+    
+    async def send_json(self, websocket: WebSocket, data: dict):
+        try:
+            await websocket.send_json(data)
+        except Exception as e:
+            logger.error(f"[WS] Send error: {e}")
+
+
+manager = ConnectionManager()
+
+
+def verify_ws_token(token: str) -> Optional[dict]:
+    """Verify JWT token for WebSocket connection"""
+    import os
+    import jwt
+    
+    if not token:
+        return None
+    
+    try:
+        SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
+        payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+        return payload
+    except jwt.ExpiredSignatureError:
+        logger.warning("[WS] Token expired")
+        return None
+    except jwt.InvalidTokenError as e:
+        logger.warning(f"[WS] Invalid token: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"[WS] Token verification error: {e}")
+        return None
+
+
 @router.websocket("/ws")
-async def websocket_analysis(websocket: WebSocket):
+async def websocket_agent_analysis(
+    websocket: WebSocket,
+    token: Optional[str] = None
+):
     """
-    WebSocket endpoint for real-time agent analysis.
+    WebSocket endpoint real-time agentti-analyysille.
     
-    Client sends:
-        { "action": "start", "url": "https://...", "competitor_urls": [...], "industry": "..." }
+    Yhdistä: wss://host/api/v1/agents/ws?token=JWT_TOKEN
     
-    Server sends:
-        { "type": "insight", "data": { "agent_id": "scout", "message": "...", ... } }
-        { "type": "progress", "data": { "agent_id": "scout", "progress": 50, "message": "..." } }
-        { "type": "status", "data": { "agent_id": "scout", "status": "running" } }
-        { "type": "complete", "data": { "success": true, "duration_seconds": 45.2, ... } }
-        { "type": "error", "data": { "message": "..." } }
+    Protokolla:
+    1. Client lähettää: {"action": "start", "url": "...", "competitor_urls": [...], "language": "fi"}
+    2. Server streamaa:
+       - {"type": "agent_status", "data": {...}}
+       - {"type": "agent_insight", "data": {...}}
+       - {"type": "agent_progress", "data": {...}}
+       - {"type": "analysis_complete", "data": {...}}
     """
-    await websocket.accept()
-    logger.info("[WS] Client connected")
+    # Validate token
+    user = verify_ws_token(token)
+    if not user:
+        logger.warning(f"[WS] Connection rejected - invalid or missing token")
+        await websocket.close(code=4001, reason="Invalid or missing token")
+        return
+    
+    logger.info(f"[WS] Authenticated: {user.get('sub', 'unknown')}")
+    
+    await manager.connect(websocket)
     
     try:
         while True:
-            # Wait for message from client
-            data = await websocket.receive_text()
-            message = json.loads(data)
+            # Odota viestiä clientiltä
+            data = await websocket.receive_json()
             
-            action = message.get('action')
+            action = data.get("action")
             
-            if action == 'start':
-                await _handle_start_analysis(websocket, message)
-            elif action == 'ping':
-                await websocket.send_json({"type": "pong"})
-            else:
-                await websocket.send_json({
-                    "type": "error",
-                    "data": {"message": f"Unknown action: {action}"}
-                })
+            if action == "start":
+                # Aloita analyysi
+                url = data.get("url")
+                competitor_urls = data.get("competitor_urls", [])
+                language = data.get("language", "fi")
+                industry_context = data.get("industry_context")
                 
+                if not url:
+                    await manager.send_json(websocket, {
+                        "type": WSMessageType.ERROR.value,
+                        "data": {"error": "URL is required"}
+                    })
+                    continue
+                
+                logger.info(f"[WS] Starting analysis for {url}")
+                
+                # Luo orchestrator ja aseta callbackit
+                orchestrator = get_orchestrator()
+                
+                # Callbackit jotka lähettävät WebSocketiin
+                async def on_insight(insight: AgentInsight):
+                    await manager.send_json(websocket, {
+                        "type": WSMessageType.AGENT_INSIGHT.value,
+                        "data": insight.dict(),
+                        "timestamp": datetime.now().isoformat()
+                    })
+                
+                async def on_progress(progress: AgentProgress):
+                    await manager.send_json(websocket, {
+                        "type": WSMessageType.AGENT_PROGRESS.value,
+                        "data": progress.dict(),
+                        "timestamp": datetime.now().isoformat()
+                    })
+                
+                async def on_agent_complete(agent_id: str, result: AgentResult):
+                    await manager.send_json(websocket, {
+                        "type": WSMessageType.AGENT_STATUS.value,
+                        "data": {
+                            "agent_id": agent_id,
+                            "status": result.status.value,
+                            "execution_time_ms": result.execution_time_ms,
+                            "insights_count": len(result.insights),
+                            "has_error": result.error is not None
+                        },
+                        "timestamp": datetime.now().isoformat()
+                    })
+                
+                # Huom: Pydanticin callbackit ovat synkronisia, joten wrapperit
+                def sync_insight(insight):
+                    asyncio.create_task(on_insight(insight))
+                
+                def sync_progress(progress):
+                    asyncio.create_task(on_progress(progress))
+                
+                def sync_complete(agent_id, result):
+                    asyncio.create_task(on_agent_complete(agent_id, result))
+                
+                orchestrator.set_callbacks(
+                    on_insight=sync_insight,
+                    on_progress=sync_progress,
+                    on_agent_complete=sync_complete
+                )
+                
+                # Suorita analyysi
+                try:
+                    result = await orchestrator.run_analysis(
+                        url=url,
+                        competitor_urls=competitor_urls,
+                        language=language,
+                        industry_context=industry_context
+                    )
+                    
+                    # Extract data from agent results for frontend
+                    agent_results = result.agent_results or {}
+                    
+                    # Analyst data
+                    analyst_data = agent_results.get('analyst', {})
+                    analyst_result = analyst_data.data if hasattr(analyst_data, 'data') else analyst_data
+                    your_score = analyst_result.get('your_score', result.overall_score)
+                    your_ranking = analyst_result.get('your_rank', 1)
+                    total_competitors = analyst_result.get('total_analyzed', 1)
+                    benchmark = analyst_result.get('benchmark', {})
+                    
+                    # Guardian data
+                    guardian_data = agent_results.get('guardian', {})
+                    guardian_result = guardian_data.data if hasattr(guardian_data, 'data') else guardian_data
+                    revenue_impact = guardian_result.get('revenue_impact', {})
+                    revenue_at_risk = revenue_impact.get('total_annual_risk', 0)
+                    competitor_threats = guardian_result.get('competitor_threat_assessment', {}).get('assessments', [])
+                    rasm_score = guardian_result.get('rasm_score', 0)
+                    
+                    # Prospector data
+                    prospector_data = agent_results.get('prospector', {})
+                    prospector_result = prospector_data.data if hasattr(prospector_data, 'data') else prospector_data
+                    market_gaps = prospector_result.get('market_gaps', [])
+                    
+                    # Strategist data
+                    strategist_data = agent_results.get('strategist', {})
+                    strategist_result = strategist_data.data if hasattr(strategist_data, 'data') else strategist_data
+                    position_quadrant = strategist_result.get('position_quadrant', 'challenger')
+                    
+                    # Map action_plan to frontend format
+                    action_plan_mapped = None
+                    projected_improvement = 0
+                    planner_data = agent_results.get('planner', {})
+                    planner = planner_data.data if hasattr(planner_data, 'data') else planner_data
+                    
+                    if planner:
+                        phases = planner.get('phases', [])
+                        quick_start = planner.get('quick_start_guide', [])
+                        roi = planner.get('roi_projection', {})
+                        projected_improvement = roi.get('potential_score_gain', 0)
+                        
+                        # Get first quick start action as "this week"
+                        this_week = None
+                        if quick_start and len(quick_start) > 0:
+                            first_action = quick_start[0]
+                            this_week = {
+                                'action': first_action.get('action', first_action.get('title', '')),
+                                'impact_points': first_action.get('impact_points', projected_improvement),
+                                'effort_hours': first_action.get('effort_hours', first_action.get('time_estimate', '4-8h')),
+                                'roi_estimate': first_action.get('roi_estimate', 0)
+                            }
+                        
+                        # Extract phase tasks
+                        phase1 = phases[0].get('tasks', []) if len(phases) > 0 else []
+                        phase2 = phases[1].get('tasks', []) if len(phases) > 1 else []
+                        phase3 = phases[2].get('tasks', []) if len(phases) > 2 else []
+                        
+                        total_actions = sum(len(p.get('tasks', [])) for p in phases)
+                        
+                        action_plan_mapped = {
+                            'this_week': this_week,
+                            'phase1': phase1,
+                            'phase2': phase2,
+                            'phase3': phase3,
+                            'total_actions': total_actions,
+                            'projected_improvement': projected_improvement,
+                            'milestones': planner.get('milestones', []),
+                            'resource_estimate': planner.get('resource_estimate', {})
+                        }
+                    
+                    # Lähetä lopputulos with all mapped data
+                    await manager.send_json(websocket, {
+                        "type": WSMessageType.ANALYSIS_COMPLETE.value,
+                        "data": {
+                            "success": result.success,
+                            "duration_seconds": result.execution_time_ms / 1000,
+                            "agents_completed": len([r for r in agent_results.values() if r]),
+                            "agents_failed": len(result.errors),
+                            
+                            # Analyst data (flattened)
+                            "your_score": your_score,
+                            "your_ranking": your_ranking,
+                            "total_competitors": total_competitors,
+                            "benchmark": benchmark,
+                            
+                            # Guardian data (flattened)
+                            "revenue_at_risk": revenue_at_risk,
+                            "competitor_threats": competitor_threats,
+                            "rasm_score": rasm_score,
+                            
+                            # Prospector data
+                            "market_gaps": market_gaps,
+                            "opportunities_count": len(market_gaps),
+                            
+                            # Strategist data
+                            "position_quadrant": position_quadrant,
+                            
+                            # Planner data
+                            "action_plan": action_plan_mapped,
+                            "projected_improvement": projected_improvement,
+                            
+                            # Legacy fields
+                            "overall_score": result.overall_score,
+                            "composite_scores": result.composite_scores,
+                            "errors": result.errors
+                        },
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    
+                except Exception as e:
+                    logger.error(f"[WS] Analysis error: {e}", exc_info=True)
+                    await manager.send_json(websocket, {
+                        "type": WSMessageType.ERROR.value,
+                        "data": {"error": str(e)},
+                        "timestamp": datetime.now().isoformat()
+                    })
+            
+            elif action == "ping":
+                await manager.send_json(websocket, {
+                    "type": "pong",
+                    "timestamp": datetime.now().isoformat()
+                })
+            
+            else:
+                await manager.send_json(websocket, {
+                    "type": WSMessageType.ERROR.value,
+                    "data": {"error": f"Unknown action: {action}"}
+                })
+    
     except WebSocketDisconnect:
+        manager.disconnect(websocket)
         logger.info("[WS] Client disconnected")
+    
     except Exception as e:
         logger.error(f"[WS] Error: {e}", exc_info=True)
-        try:
-            await websocket.send_json({
-                "type": "error",
-                "data": {"message": str(e)}
-            })
-        except:
-            pass
+        manager.disconnect(websocket)
 
 
-async def _handle_start_analysis(websocket: WebSocket, message: dict):
-    """Handle start analysis request via WebSocket"""
+# ============================================================================
+# HELPER: Lisää router main.py:hyn
+# ============================================================================
+
+def register_agent_routes(app):
+    """
+    Rekisteröi agent-routet FastAPI-appiin.
     
-    url = message.get('url')
-    if not url:
-        await websocket.send_json({
-            "type": "error",
-            "data": {"message": "URL is required"}
-        })
-        return
-    
-    competitor_urls = message.get('competitor_urls', [])
-    industry = message.get('industry')
-    country_code = message.get('country_code', 'fi')
-    
-    logger.info(f"[WS] Starting analysis for {url}")
-    
-    # Create orchestrator with WebSocket callbacks
-    orchestrator = AgentOrchestrator()
-    
-    async def send_insight(insight: AgentInsight):
-        await websocket.send_json({
-            "type": "insight",
-            "data": {
-                "agent_id": insight.agent_id,
-                "message": insight.message,
-                "priority": insight.priority.value,
-                "insight_type": insight.insight_type.value,
-                "timestamp": insight.timestamp.isoformat(),
-                "data": insight.data
-            }
-        })
-    
-    async def send_progress(progress: AgentProgress):
-        await websocket.send_json({
-            "type": "progress",
-            "data": {
-                "agent_id": progress.agent_id,
-                "progress": progress.progress,
-                "message": progress.message,
-                "timestamp": progress.timestamp.isoformat()
-            }
-        })
-    
-    async def send_status(agent_id: str, status: AgentStatus):
-        await websocket.send_json({
-            "type": "status",
-            "data": {
-                "agent_id": agent_id,
-                "status": status.value
-            }
-        })
-    
-    # Wrapper functions to handle async callbacks
-    def on_insight(insight: AgentInsight):
-        asyncio.create_task(send_insight(insight))
-    
-    def on_progress(progress: AgentProgress):
-        asyncio.create_task(send_progress(progress))
-    
-    def on_status(agent_id: str, status: AgentStatus):
-        asyncio.create_task(send_status(agent_id, status))
-    
-    orchestrator.set_callbacks(
-        on_insight=on_insight,
-        on_progress=on_progress,
-        on_status=on_status
-    )
-    
-    try:
-        # Run analysis
-        result = await orchestrator.run_analysis(
-            url=url,
-            competitor_urls=competitor_urls,
-            industry=industry,
-            country_code=country_code,
-            user=None  # TODO: Get from auth
-        )
-        
-        # Send completion message with FLAT structure for frontend
-        # Extract data from nested agent results
-        analyst = result.results.get('analyst', {})
-        guardian = result.results.get('guardian', {})
-        prospector = result.results.get('prospector', {})
-        strategist = result.results.get('strategist', {})
-        planner = result.results.get('planner', {})
-        
-        # Build flat response
-        await websocket.send_json({
-            "type": "complete",
-            "data": {
-                "success": result.success,
-                "duration_seconds": result.duration_seconds,
-                "agents_completed": result.agents_completed,
-                "agents_failed": result.agents_failed,
-                
-                # Analyst data (flattened)
-                "your_score": analyst.get('your_score', 0),
-                "your_ranking": analyst.get('your_rank', 1),
-                "total_competitors": analyst.get('total_analyzed', 1),
-                "benchmark": {
-                    "avg": analyst.get('benchmark', {}).get('avg_score', 0),
-                    "max": analyst.get('benchmark', {}).get('max_score', 0),
-                    "min": analyst.get('benchmark', {}).get('min_score', 0)
-                },
-                
-                # Guardian data (flattened)
-                "revenue_at_risk": guardian.get('revenue_impact', {}).get('total_annual_impact', 0),
-                "risk_count": len(guardian.get('threats', [])),
-                "competitor_threats": guardian.get('competitor_threat_assessment', {}).get('assessments', []),
-                "rasm_score": guardian.get('rasm_score', 0),
-                
-                # Prospector data (flattened)
-                "market_gaps": prospector.get('market_gaps', []),
-                "opportunities_count": len(prospector.get('market_gaps', [])),
-                "your_advantages": prospector.get('strengths', []),
-                
-                # Strategist data (flattened)
-                "market_position": strategist.get('position_quadrant', 'unknown'),
-                "position_quadrant": strategist.get('position_quadrant', 'challenger'),
-                "strategic_score": strategist.get('strategic_score', 0),
-                "creative_boldness": strategist.get('creative_boldness', 50),
-                
-                # Planner data (flattened)
-                "action_plan": {
-                    "this_week": planner.get('one_thing_this_week'),
-                    "phase1": planner.get('plan', {}).get('wave_1', []) if planner.get('plan') else [],
-                    "phase2": planner.get('plan', {}).get('wave_2', []) if planner.get('plan') else [],
-                    "phase3": planner.get('plan', {}).get('wave_3', []) if planner.get('plan') else [],
-                    "total_actions": sum([
-                        len(planner.get('plan', {}).get('wave_1', []) if planner.get('plan') else []),
-                        len(planner.get('plan', {}).get('wave_2', []) if planner.get('plan') else []),
-                        len(planner.get('plan', {}).get('wave_3', []) if planner.get('plan') else [])
-                    ])
-                },
-                "projected_improvement": planner.get('roi_projection', {}).get('potential_score_gain', 0),
-                
-                # Raw results for deep-dive views
-                "full_analysis": result.results,
-                "errors": result.errors
-            }
-        })
-        
-        logger.info(f"[WS] Analysis complete: {result.duration_seconds:.1f}s")
-        
-    except Exception as e:
-        logger.error(f"[WS] Analysis error: {e}", exc_info=True)
-        await websocket.send_json({
-            "type": "error",
-            "data": {"message": str(e)}
-        })
+    Käyttö main.py:ssä:
+        from agent_api import register_agent_routes
+        register_agent_routes(app)
+    """
+    app.include_router(router)
+    logger.info("[Agent API] Routes registered")
