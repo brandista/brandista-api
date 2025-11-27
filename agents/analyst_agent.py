@@ -65,6 +65,8 @@ class AnalystAgent(BaseAgent):
                 language=context.language
             )
             
+            # Map digital_maturity_score to final_score for consistency
+            your_analysis['final_score'] = your_analysis.get('digital_maturity_score', 0)
             your_score = your_analysis.get('final_score', 0)
             
             self._emit_insight(
@@ -214,6 +216,8 @@ class AnalystAgent(BaseAgent):
             analysis = await _perform_comprehensive_analysis_internal(url, language=language)
             analysis['domain'] = get_domain_from_url(url)
             analysis['url'] = url
+            # Map digital_maturity_score to final_score for consistency
+            analysis['final_score'] = analysis.get('digital_maturity_score', 0)
             return analysis
         except Exception as e:
             logger.error(f"[Analyst] Competitor analysis failed for {url}: {e}")
