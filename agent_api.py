@@ -6,7 +6,7 @@ REST & WebSocket endpointit agenttijärjestelmälle
 import json
 import logging
 import asyncio
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends
