@@ -66,7 +66,9 @@ class AnalystAgent(BaseAgent):
             )
             
             # Map digital_maturity_score to final_score for consistency
-            your_analysis['final_score'] = your_analysis.get('digital_maturity_score', 0)
+            # Score is nested inside basic_analysis, not at root level!
+            basic = your_analysis.get('basic_analysis', {})
+            your_analysis['final_score'] = basic.get('digital_maturity_score', 0) or your_analysis.get('digital_maturity_score', 0)
             your_score = your_analysis.get('final_score', 0)
             
             self._emit_insight(
@@ -217,7 +219,9 @@ class AnalystAgent(BaseAgent):
             analysis['domain'] = get_domain_from_url(url)
             analysis['url'] = url
             # Map digital_maturity_score to final_score for consistency
-            analysis['final_score'] = analysis.get('digital_maturity_score', 0)
+            # Score is nested inside basic_analysis, not at root level!
+            basic = analysis.get('basic_analysis', {})
+            analysis['final_score'] = basic.get('digital_maturity_score', 0) or analysis.get('digital_maturity_score', 0)
             return analysis
         except Exception as e:
             logger.error(f"[Analyst] Competitor analysis failed for {url}: {e}")
