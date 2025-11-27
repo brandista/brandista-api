@@ -274,49 +274,85 @@ async def websocket_agent_analysis(
                 # Luo orchestrator ja aseta callbackit
                 orchestrator = get_orchestrator()
                 
-                # Callbackit jotka lähettävät WebSocketiin
-                async def on_insight(insight: AgentInsight):
-                    await manager.send_json(websocket, {
-                        "type": WSMessageType.AGENT_INSIGHT.value,
-                        "data": insight.dict(),
-                        "timestamp": datetime.now().isoformat()
-                    })
+                # Create message queue for real-time updates
+                message_queue: asyncio.Queue = asyncio.Queue()
                 
-                async def on_progress(progress: AgentProgress):
-                    await manager.send_json(websocket, {
-                        "type": WSMessageType.AGENT_PROGRESS.value,
-                        "data": progress.dict(),
-                        "timestamp": datetime.now().isoformat()
-                    })
+                # Callbackit jotka lisäävät viestit jonoon
+                def sync_insight(insight: AgentInsight):
+                    try:
+                        message_queue.put_nowait({
+                            "type": WSMessageType.AGENT_INSIGHT.value,
+                            "data": {
+                                "agent_id": insight.agent_id,
+                                "agent_name": insight.agent_name,
+                                "agent_avatar": insight.agent_avatar,
+                                "message": insight.message,
+                                "priority": insight.priority.value if hasattr(insight.priority, 'value') else insight.priority,
+                                "insight_type": insight.insight_type.value if hasattr(insight.insight_type, 'value') else insight.insight_type,
+                                "timestamp": insight.timestamp.isoformat() if hasattr(insight.timestamp, 'isoformat') else str(insight.timestamp),
+                                "data": insight.data
+                            },
+                            "timestamp": datetime.now().isoformat()
+                        })
+                    except Exception as e:
+                        logger.error(f"[WS] Failed to queue insight: {e}")
                 
-                async def on_agent_complete(agent_id: str, result: AgentResult):
-                    await manager.send_json(websocket, {
-                        "type": WSMessageType.AGENT_STATUS.value,
-                        "data": {
-                            "agent_id": agent_id,
-                            "status": result.status.value,
-                            "execution_time_ms": result.execution_time_ms,
-                            "insights_count": len(result.insights),
-                            "has_error": result.error is not None
-                        },
-                        "timestamp": datetime.now().isoformat()
-                    })
+                def sync_progress(progress: AgentProgress):
+                    try:
+                        message_queue.put_nowait({
+                            "type": WSMessageType.AGENT_PROGRESS.value,
+                            "data": {
+                                "agent_id": progress.agent_id,
+                                "status": progress.status.value if hasattr(progress.status, 'value') else progress.status,
+                                "progress": progress.progress,
+                                "current_task": progress.current_task
+                            },
+                            "timestamp": datetime.now().isoformat()
+                        })
+                    except Exception as e:
+                        logger.error(f"[WS] Failed to queue progress: {e}")
                 
-                # Huom: Pydanticin callbackit ovat synkronisia, joten wrapperit
-                def sync_insight(insight):
-                    asyncio.create_task(on_insight(insight))
-                
-                def sync_progress(progress):
-                    asyncio.create_task(on_progress(progress))
-                
-                def sync_complete(agent_id, result):
-                    asyncio.create_task(on_agent_complete(agent_id, result))
+                def sync_complete(agent_id: str, result: AgentResult):
+                    try:
+                        message_queue.put_nowait({
+                            "type": WSMessageType.AGENT_STATUS.value,
+                            "data": {
+                                "agent_id": agent_id,
+                                "status": result.status.value if hasattr(result.status, 'value') else result.status,
+                                "execution_time_ms": result.execution_time_ms,
+                                "insights_count": len(result.insights),
+                                "has_error": result.error is not None
+                            },
+                            "timestamp": datetime.now().isoformat()
+                        })
+                    except Exception as e:
+                        logger.error(f"[WS] Failed to queue status: {e}")
                 
                 orchestrator.set_callbacks(
                     on_insight=sync_insight,
                     on_progress=sync_progress,
                     on_agent_complete=sync_complete
                 )
+                
+                # Task to send queued messages
+                send_task_running = True
+                
+                async def send_queued_messages():
+                    while send_task_running:
+                        try:
+                            # Wait for message with timeout
+                            msg = await asyncio.wait_for(message_queue.get(), timeout=0.1)
+                            await manager.send_json(websocket, msg)
+                            logger.debug(f"[WS] Sent: {msg.get('type')}")
+                        except asyncio.TimeoutError:
+                            # No message, continue waiting
+                            pass
+                        except Exception as e:
+                            logger.error(f"[WS] Queue send error: {e}")
+                            break
+                
+                # Start sender task
+                sender = asyncio.create_task(send_queued_messages())
                 
                 # Suorita analyysi
                 try:
@@ -326,6 +362,15 @@ async def websocket_agent_analysis(
                         language=language,
                         industry_context=industry_context
                     )
+                    
+                    # Stop sender and wait for remaining messages
+                    send_task_running = False
+                    await asyncio.sleep(0.2)  # Give time to send remaining
+                    sender.cancel()
+                    try:
+                        await sender
+                    except asyncio.CancelledError:
+                        pass
                     
                     # Extract data from agent results for frontend
                     agent_results = result.agent_results or {}
