@@ -516,12 +516,29 @@ async def websocket_agent_analysis(
                                 'priority': 1
                             }
                         
-                        # Extract phase tasks
-                        phase1 = phases[0].get('tasks', []) if len(phases) > 0 else []
-                        phase2 = phases[1].get('tasks', []) if len(phases) > 1 else []
-                        phase3 = phases[2].get('tasks', []) if len(phases) > 2 else []
+                        # Extract and MAP phase tasks to frontend format
+                        # Frontend expects: {action: string, impact_points: number, ...}
+                        # Backend provides: {title: string, category: string, effort: string}
+                        def map_task(task, default_points=5):
+                            effort_points = {'low': 3, 'medium': 5, 'high': 8}
+                            return {
+                                'action': task.get('title', task.get('action', '')),
+                                'impact_points': task.get('impact_points', effort_points.get(task.get('effort', 'medium'), 5)),
+                                'effort_hours': task.get('timeframe', task.get('time_estimate', {'low': '2-4h', 'medium': '1-2 days', 'high': '3-5 days'}.get(task.get('effort', 'medium'), '1 day'))),
+                                'category': task.get('category', 'general'),
+                                'priority': task.get('priority', 2),
+                                'roi_estimate': task.get('roi_estimate', 0)
+                            }
                         
-                        total_actions = sum(len(p.get('tasks', [])) for p in phases)
+                        phase1_raw = phases[0].get('tasks', []) if len(phases) > 0 else []
+                        phase2_raw = phases[1].get('tasks', []) if len(phases) > 1 else []
+                        phase3_raw = phases[2].get('tasks', []) if len(phases) > 2 else []
+                        
+                        phase1 = [map_task(t, 5) for t in phase1_raw]
+                        phase2 = [map_task(t, 4) for t in phase2_raw]
+                        phase3 = [map_task(t, 3) for t in phase3_raw]
+                        
+                        total_actions = len(phase1) + len(phase2) + len(phase3)
                         
                         action_plan_mapped = {
                             'this_week': this_week,
@@ -544,8 +561,9 @@ async def websocket_agent_analysis(
                     strategic_score = strategist_result.get('strategic_score', 0) if strategist_result else 0
                     creative_boldness = strategist_result.get('creative_boldness', 50) if strategist_result else 50
                     
-                    # Get Prospector advantages
-                    your_advantages = prospector_result.get('competitive_advantages', []) if prospector_result else []
+                    # Get Prospector advantages (map to strings for frontend)
+                    advantages_raw = prospector_result.get('competitive_advantages', []) if prospector_result else []
+                    your_advantages = [adv.get('title', str(adv)) if isinstance(adv, dict) else str(adv) for adv in advantages_raw]
                     
                     # Get Guardian risk count
                     risks = guardian_result.get('risks', []) if guardian_result else []
