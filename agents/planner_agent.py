@@ -190,16 +190,42 @@ class PlannerAgent(BaseAgent):
     ) -> List[Dict[str, Any]]:
         phases = []
         
+        # Default tasks if no priorities provided
+        default_defense_tasks = [
+            {'title': 'Tarkista SSL-sertifikaatti', 'category': 'security', 'source': 'defense', 'effort': 'low'},
+            {'title': 'Optimoi meta-kuvaukset', 'category': 'seo', 'source': 'defense', 'effort': 'low'},
+            {'title': 'Tarkista mobiilioptimointi', 'category': 'mobile', 'source': 'defense', 'effort': 'medium'},
+            {'title': 'Lisää analytiikka', 'category': 'technical', 'source': 'defense', 'effort': 'low'},
+        ]
+        default_growth_tasks = [
+            {'title': 'Luo sisältöstrategia', 'category': 'content', 'source': 'growth', 'effort': 'medium'},
+            {'title': 'Paranna sivuston nopeutta', 'category': 'performance', 'source': 'growth', 'effort': 'medium'},
+            {'title': 'Rakenna backlink-profiilia', 'category': 'seo', 'source': 'growth', 'effort': 'high'},
+            {'title': 'Optimoi konversiot', 'category': 'ux', 'source': 'growth', 'effort': 'medium'},
+        ]
+        
+        # Use priorities if available, otherwise defaults
+        defense_priorities = [p for p in priorities if p.get('source') == 'defense']
+        growth_priorities = [p for p in priorities if p.get('source') == 'growth']
+        medium_priorities = [p for p in priorities if p.get('effort') == 'medium']
+        
+        if not defense_priorities:
+            defense_priorities = default_defense_tasks
+        if not growth_priorities:
+            growth_priorities = default_growth_tasks
+        if not medium_priorities:
+            medium_priorities = defense_priorities[:2] + growth_priorities[:2]
+        
         # Phase 1: Days 1-30
         if overall_score < 50:
             phase1_name = self._phase("phase1_fix")
             phase1_goal = {"fi": "Korjaa kriittiset puutteet", "en": "Fix critical gaps"}.get(self._language)
-            phase1_tasks = [p for p in priorities if p.get('source') == 'defense'][:4]
+            phase1_tasks = defense_priorities[:4]
         else:
             phase1_name = self._phase("phase1_optimize")
             phase1_goal = {"fi": "Toteuta nopeat voitot", "en": "Implement quick wins"}.get(self._language)
             quick_wins = prospector_results.get('quick_wins', []) if prospector_results else []
-            phase1_tasks = quick_wins[:4]
+            phase1_tasks = quick_wins[:4] if quick_wins else growth_priorities[:4]
         
         phases.append({
             'phase': 1,
@@ -211,26 +237,24 @@ class PlannerAgent(BaseAgent):
         
         # Phase 2: Days 31-60
         phase2_name = self._phase("phase2")
-        medium_priorities = [p for p in priorities if p.get('effort') == 'medium'][:4]
         
         phases.append({
             'phase': 2,
             'name': phase2_name,
             'duration': {"fi": "Päivät 31-60", "en": "Days 31-60"}.get(self._language),
             'goal': {"fi": "Rakenna kilpailuetua", "en": "Build competitive advantage"}.get(self._language),
-            'tasks': medium_priorities
+            'tasks': medium_priorities[:4]
         })
         
         # Phase 3: Days 61-90
         phase3_name = self._phase("phase3")
-        growth_priorities = [p for p in priorities if p.get('source') == 'growth'][:4]
         
         phases.append({
             'phase': 3,
             'name': phase3_name,
             'duration': {"fi": "Päivät 61-90", "en": "Days 61-90"}.get(self._language),
             'goal': {"fi": "Skaalaa kasvua", "en": "Scale growth"}.get(self._language),
-            'tasks': growth_priorities
+            'tasks': growth_priorities[:4]
         })
         
         return phases
@@ -351,13 +375,25 @@ class PlannerAgent(BaseAgent):
         
         # Revenue gain from growth opportunities
         revenue_gain = 0
+        potential_score_gain = 0
         if prospector_results:
-            high_impact_opps = len([
-                o for o in prospector_results.get('growth_opportunities', [])
-                if o.get('impact') == 'high'
-            ])
+            opportunities = prospector_results.get('growth_opportunities', [])
+            high_impact_opps = len([o for o in opportunities if o.get('impact') == 'high'])
+            medium_impact_opps = len([o for o in opportunities if o.get('impact') == 'medium'])
+            
             # Estimate €5000/year per high-impact opportunity
             revenue_gain = high_impact_opps * 5000
+            
+            # Estimate score improvement: high=5pts, medium=3pts, defense fixes=2pts each
+            potential_score_gain = (high_impact_opps * 5) + (medium_impact_opps * 3)
+            
+            # Add points from fixing issues (Guardian)
+            if guardian_results:
+                priority_actions = guardian_results.get('priority_actions', [])
+                potential_score_gain += len(priority_actions) * 2
+            
+            # Cap at reasonable max
+            potential_score_gain = min(potential_score_gain, 35)
         
         total_benefit = risk_saved + revenue_gain
         
@@ -379,7 +415,8 @@ class PlannerAgent(BaseAgent):
             'revenue_gain': round(revenue_gain),
             'total_annual_benefit': round(total_benefit),
             'roi_percentage': roi_percentage,
-            'payback_months': min(payback_months, 36)  # Cap at 36 months
+            'payback_months': min(payback_months, 36),  # Cap at 36 months
+            'potential_score_gain': potential_score_gain  # NEW!
         }
     
     def _create_quick_start_guide(
