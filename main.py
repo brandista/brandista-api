@@ -125,18 +125,6 @@ except ImportError:
     logger.warning("Stripe module not available - payment features disabled")
 
 # ============================================================================
-# GROWTH ENGINE 2.0 AGENT SYSTEM
-# ============================================================================
-try:
-    from agent_api import router as agent_router
-    AGENTS_AVAILABLE = True
-    logger.info("✅ Growth Engine 2.0 agent system loaded")
-except ImportError:
-    agent_router = None
-    AGENTS_AVAILABLE = False
-    logger.warning("Agent system not available - agents/ folder may be missing")
-
-# ============================================================================
 # OPTIONAL DEPENDENCIES
 # ============================================================================
 
@@ -217,6 +205,32 @@ except ImportError as e:
     AnalysisHistoryDB = None
     AnalysisRecord = None
     UserUsage = None
+
+# ============================================================================
+# GROWTH ENGINE 2.0 - AGENT SYSTEM
+# ============================================================================
+try:
+    from agent_api import router as agent_router
+    AGENT_SYSTEM_AVAILABLE = True
+    logger.info("✅ Growth Engine 2.0 Agent System imported successfully")
+except Exception as e:
+    import traceback
+    logger.warning(f"⚠️ Agent system not available: {e}")
+    logger.warning(f"⚠️ Full traceback:\n{traceback.format_exc()}")
+    AGENT_SYSTEM_AVAILABLE = False
+    agent_router = None
+
+# ============================================================================
+# COMPANY INTELLIGENCE - DUE DILIGENCE (YTJ + Kauppalehti)
+# ============================================================================
+try:
+    from company_intel_api import router as company_router
+    COMPANY_INTEL_AVAILABLE = True
+    logger.info("✅ Company Intelligence module imported successfully")
+except Exception as e:
+    logger.warning(f"⚠️ Company Intelligence not available: {e}")
+    COMPANY_INTEL_AVAILABLE = False
+    company_router = None
 
 # ============================================================================
 # CONSTANTS AND VERSION INFO
@@ -1602,6 +1616,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"🗄️ Redis: {'connected' if redis_client else 'not connected'}")
     logger.info(f"🗃️ Database: {'connected' if DATABASE_ENABLED else 'not connected'}")
     logger.info(f"📜 Analysis History: {'enabled' if history_db else 'disabled'}")
+    logger.info(f"🤖 Agent System: {'enabled (6 agents)' if AGENT_SYSTEM_AVAILABLE else 'disabled'}")
     
     # 6. Environment warnings
     
@@ -1682,6 +1697,20 @@ class UTF8Middleware(BaseHTTPMiddleware):
 
 app.add_middleware(UTF8Middleware)
 
+# ============================================================================
+# GROWTH ENGINE 2.0 - AGENT ROUTES
+# ============================================================================
+if AGENT_SYSTEM_AVAILABLE and agent_router:
+    app.include_router(agent_router)
+    logger.info("✅ Growth Engine 2.0 Agent routes registered: /api/v1/agents/*")
+
+# ============================================================================
+# COMPANY INTELLIGENCE ROUTES
+# ============================================================================
+if COMPANY_INTEL_AVAILABLE and company_router:
+    app.include_router(company_router, prefix="/api/v1/company", tags=["Company Intelligence"])
+    logger.info("✅ Company Intelligence routes registered: /api/v1/company/*")
+
 @app.options("/{full_path:path}")
 async def options_handler():
     return {}
@@ -1702,13 +1731,6 @@ if RATE_LIMIT_ENABLED:
         request_counts[client_ip].append(now)
         return await call_next(request)
 
-
-# ============================================================================
-# GROWTH ENGINE 2.0 AGENT ROUTES
-# ============================================================================
-if AGENTS_AVAILABLE and agent_router:
-    app.include_router(agent_router, prefix="/api/v1/agents", tags=["Growth Engine 2.0"])
-    logger.info("✅ Growth Engine 2.0 routes registered at /api/v1/agents")
 
 
 # ============================================================================
@@ -8183,7 +8205,8 @@ async def health_check():
             "stripe_available": STRIPE_AVAILABLE,
             "cache_size": len(analysis_cache),
             "enhanced_features": 9,
-            "complete_models": True
+            "complete_models": True,
+            "agent_system": AGENT_SYSTEM_AVAILABLE
         },
         "scoring": {"weights": SCORING_CONFIG.weights, "configurable": True}
     }
