@@ -274,10 +274,29 @@ async def websocket_agent_analysis(
                 # Luo orchestrator
                 orchestrator = get_orchestrator()
                 
-                # List to collect messages during analysis
+                # Queue for real-time message sending
+                message_queue = asyncio.Queue()
+                send_task_running = True
+                
+                # Background task to send messages in real-time
+                async def message_sender():
+                    while send_task_running or not message_queue.empty():
+                        try:
+                            msg = await asyncio.wait_for(message_queue.get(), timeout=0.1)
+                            await manager.send_json(websocket, msg)
+                            await asyncio.sleep(0.02)  # Small delay between messages
+                        except asyncio.TimeoutError:
+                            continue
+                        except Exception as e:
+                            logger.error(f"[WS] Failed to send message: {e}")
+                
+                # Start the sender task
+                sender_task = asyncio.create_task(message_sender())
+                
+                # List to also collect messages for final processing
                 pending_messages = []
                 
-                # Callbackit jotka keräävät viestit listaan
+                # Callbackit jotka lähettävät viestit HETI
                 def sync_insight(insight: AgentInsight):
                     try:
                         msg = {
@@ -294,6 +313,8 @@ async def websocket_agent_analysis(
                             },
                             "timestamp": datetime.now().isoformat()
                         }
+                        # Send immediately via queue
+                        message_queue.put_nowait(msg)
                         pending_messages.append(msg)
                         logger.info(f"[WS] Queued insight: {insight.agent_name} - {insight.message[:50]}...")
                     except Exception as e:
@@ -311,6 +332,8 @@ async def websocket_agent_analysis(
                             },
                             "timestamp": datetime.now().isoformat()
                         }
+                        # Send immediately via queue
+                        message_queue.put_nowait(msg)
                         pending_messages.append(msg)
                     except Exception as e:
                         logger.error(f"[WS] Failed to queue progress: {e}")
@@ -328,6 +351,8 @@ async def websocket_agent_analysis(
                             },
                             "timestamp": datetime.now().isoformat()
                         }
+                        # Send immediately via queue
+                        message_queue.put_nowait(msg)
                         pending_messages.append(msg)
                     except Exception as e:
                         logger.error(f"[WS] Failed to queue status: {e}")
@@ -351,14 +376,16 @@ async def websocket_agent_analysis(
                         user_id=user_id  # Pass user_id for unified context
                     )
                     
-                    # Send all collected messages to frontend
-                    logger.info(f"[WS] Analysis complete. Sending {len(pending_messages)} collected messages...")
-                    for msg in pending_messages:
-                        try:
-                            await manager.send_json(websocket, msg)
-                            await asyncio.sleep(0.05)  # Small delay between messages
-                        except Exception as e:
-                            logger.error(f"[WS] Failed to send message: {e}")
+                    # Stop the sender task and wait for remaining messages
+                    send_task_running = False
+                    await asyncio.sleep(0.3)  # Give time for final messages
+                    sender_task.cancel()
+                    try:
+                        await sender_task
+                    except asyncio.CancelledError:
+                        pass
+                    
+                    logger.info(f"[WS] Analysis complete. Sent {len(pending_messages)} messages in real-time.")
                     
                     # Extract data from agent results for frontend
                     agent_results = result.agent_results or {}
