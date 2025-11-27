@@ -233,6 +233,19 @@ except Exception as e:
     company_router = None
 
 # ============================================================================
+# UNIFIED CONTEXT - CROSS-TAB INTELLIGENCE
+# ============================================================================
+try:
+    from context_api import router as context_router
+    from unified_context import init_unified_context_tables
+    UNIFIED_CONTEXT_AVAILABLE = True
+    logger.info("✅ Unified Context module imported successfully")
+except Exception as e:
+    logger.warning(f"⚠️ Unified Context not available: {e}")
+    UNIFIED_CONTEXT_AVAILABLE = False
+    context_router = None
+
+# ============================================================================
 # CONSTANTS AND VERSION INFO
 # ============================================================================
 APP_VERSION = "6.3.1"
@@ -1710,6 +1723,18 @@ if AGENT_SYSTEM_AVAILABLE and agent_router:
 if COMPANY_INTEL_AVAILABLE and company_router:
     app.include_router(company_router, prefix="/api/v1/company", tags=["Company Intelligence"])
     logger.info("✅ Company Intelligence routes registered: /api/v1/company/*")
+
+# ============================================================================
+# UNIFIED CONTEXT ROUTES
+# ============================================================================
+if UNIFIED_CONTEXT_AVAILABLE and context_router:
+    app.include_router(context_router)
+    # Initialize database tables
+    try:
+        init_unified_context_tables()
+        logger.info("✅ Unified Context routes registered: /api/v1/context/*")
+    except Exception as e:
+        logger.warning(f"⚠️ Could not initialize unified context tables: {e}")
 
 @app.options("/{full_path:path}")
 async def options_handler():

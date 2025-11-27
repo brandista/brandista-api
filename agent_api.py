@@ -340,11 +340,15 @@ async def websocket_agent_analysis(
                 
                 # Suorita analyysi
                 try:
+                    # Get user_id from token
+                    user_id = user.get('sub')
+                    
                     result = await orchestrator.run_analysis(
                         url=url,
                         competitor_urls=competitor_urls,
                         language=language,
-                        industry_context=industry_context
+                        industry_context=industry_context,
+                        user_id=user_id  # Pass user_id for unified context
                     )
                     
                     # Send all collected messages to frontend
@@ -473,6 +477,53 @@ async def websocket_agent_analysis(
                         },
                         "timestamp": datetime.now().isoformat()
                     })
+                    
+                    # Save to unified context (async, don't block response)
+                    try:
+                        from unified_context import save_analysis, save_agent_insight
+                        
+                        # Save analysis
+                        analysis_id = save_analysis(
+                            user_id=user_id,
+                            url=url,
+                            score=your_score,
+                            ranking=your_ranking,
+                            total_competitors=total_competitors,
+                            revenue_at_risk=revenue_at_risk,
+                            rasm_score=rasm_score,
+                            benchmark=benchmark,
+                            threats=competitor_threats,
+                            opportunities=market_gaps,
+                            action_plan=action_plan_mapped,
+                            raw_results={
+                                'analyst': analyst_result,
+                                'guardian': guardian_result,
+                                'prospector': prospector_result,
+                                'strategist': strategist_result,
+                                'planner': planner
+                            },
+                            duration_seconds=result.execution_time_ms / 1000
+                        )
+                        
+                        # Save insights
+                        if analysis_id:
+                            for msg in pending_messages:
+                                if msg.get('type') == WSMessageType.AGENT_INSIGHT.value:
+                                    insight_data = msg.get('data', {})
+                                    save_agent_insight(
+                                        user_id=user_id,
+                                        agent_id=insight_data.get('agent_id'),
+                                        message=insight_data.get('message', ''),
+                                        agent_name=insight_data.get('agent_name'),
+                                        insight_type=insight_data.get('insight_type'),
+                                        priority=insight_data.get('priority'),
+                                        data=insight_data.get('data'),
+                                        analysis_id=analysis_id
+                                    )
+                        
+                        logger.info(f"[WS] Saved analysis {analysis_id} to unified context")
+                    except Exception as save_error:
+                        logger.warning(f"[WS] Could not save to unified context: {save_error}")
                     
                 except Exception as e:
                     logger.error(f"[WS] Analysis error: {e}", exc_info=True)
