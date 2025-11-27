@@ -68,11 +68,18 @@ class ScoutAgent(BaseAgent):
         
         # 1. Hae kohdesivuston sisältö
         try:
-            website_data = await get_website_content(context.url)
-            context.website_data = website_data
-            context.html_content = website_data.get('html', '')
+            # get_website_content returns Tuple[Optional[str], bool] - (html_content, used_spa)
+            html_content, used_spa = await get_website_content(context.url)
             
-            company_name = website_data.get('company', get_domain_from_url(context.url))
+            # Build website_data dict for compatibility
+            website_data = {
+                'html': html_content or '',
+                'used_spa': used_spa
+            }
+            context.website_data = website_data
+            context.html_content = html_content or ''
+            
+            company_name = get_domain_from_url(context.url)
             
             self._emit_insight(
                 self._t("scout.identified_company", company=company_name),
@@ -88,7 +95,9 @@ class ScoutAgent(BaseAgent):
                 priority=AgentPriority.HIGH,
                 insight_type=InsightType.FINDING
             )
-            website_data = {}
+            website_data = {'html': '', 'used_spa': False}
+            context.website_data = website_data
+            context.html_content = ''
             company_name = get_domain_from_url(context.url)
         
         self._update_progress(30, self._task("detecting_industry"))
@@ -155,16 +164,24 @@ class ScoutAgent(BaseAgent):
         
         try:
             competitors = await multi_provider_search(
-                url=context.url,
                 search_terms=search_terms,
-                max_results=10,
-                language=context.language
+                num_results=10,
+                country_code=context.language
             )
+            
+            # Transform URL list to competitor dicts
+            competitor_dicts = []
+            for url in competitors:
+                competitor_dicts.append({
+                    'url': url,
+                    'title': get_domain_from_url(url),
+                    'snippet': ''
+                })
             
             self._update_progress(70, self._task("scoring_results"))
             
             scored_competitors = await self._score_competitors(
-                competitors,
+                competitor_dicts,
                 context.url,
                 industry
             )

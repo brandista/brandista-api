@@ -246,15 +246,31 @@ class BaseAgent(ABC):
     
     def get_dependency_results(
         self,
-        context: AnalysisContext
-    ) -> Dict[str, Dict[str, Any]]:
+        context: AnalysisContext,
+        agent_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Hae riippuvuusagenttien tulokset.
         
+        Args:
+            context: Analyysikonteksti
+            agent_id: Jos annettu, palauta vain tämän agentin tulokset
+        
         Esimerkki:
+            # Hae kaikki riippuvuudet
             deps = self.get_dependency_results(context)
-            scout_data = deps.get('scout', {}).get('data', {})
+            scout_data = deps.get('scout', {})
+            
+            # Hae yhden agentin tulokset
+            analyst_data = self.get_dependency_results(context, 'analyst')
         """
+        if agent_id:
+            # Palauta vain yhden agentin tulokset
+            if agent_id in context.agent_results:
+                return context.agent_results[agent_id].data
+            return {}
+        
+        # Palauta kaikki riippuvuudet
         results = {}
         for dep_id in self.dependencies:
             if dep_id in context.agent_results:
