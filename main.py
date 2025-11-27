@@ -3045,6 +3045,7 @@ async def analyze_basic_metrics_enhanced(
 
         return {
             'digital_maturity_score': final_score,
+            'final_score': final_score,  # Alias for compatibility
             'score_breakdown': score_components,
             'detailed_findings': details,
             'word_count': word_count,
@@ -3069,6 +3070,7 @@ async def analyze_basic_metrics_enhanced(
         logger.error(f"Error in enhanced analysis for {url}: {e}")
         return {
             'digital_maturity_score': 0,
+            'final_score': 0,  # Alias for compatibility
             'score_breakdown': {category: 0 for category in SCORING_CONFIG.weights.keys()},
             'detailed_findings': {'error': str(e)},
             'word_count': 0,
