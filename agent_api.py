@@ -176,8 +176,19 @@ class ConnectionManager:
         logger.info(f"[WS] Client disconnected. Total: {len(self.active_connections)}")
     
     async def send_json(self, websocket: WebSocket, data: dict):
+        """Send JSON with proper datetime serialization"""
+        import json
+        
+        def serialize_datetime(obj):
+            """Convert datetime objects to ISO format strings"""
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+        
         try:
-            await websocket.send_json(data)
+            # Serialize with custom handler for datetime
+            json_str = json.dumps(data, default=serialize_datetime)
+            await websocket.send_text(json_str)
         except Exception as e:
             logger.error(f"[WS] Send error: {e}")
 
