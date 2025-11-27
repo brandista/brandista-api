@@ -705,6 +705,205 @@ async def websocket_agent_analysis(
 
 
 # ============================================================================
+# CHAT ENDPOINT - Agent chat for follow-up questions
+# ============================================================================
+
+class ChatRequest(BaseModel):
+    agent_id: str
+    messages: List[Dict[str, str]]
+    analysis_context: Optional[Dict[str, Any]] = None
+    language: str = "en"
+
+class ChatResponse(BaseModel):
+    response: str
+    agent_id: str
+    suggested_questions: List[str] = []
+
+# Agent system prompts for chat
+AGENT_CHAT_PROMPTS = {
+    "scout": {
+        "fi": """Olet Sofia, Brandistan markkinatiedustelija. Olet juuri analysoinut käyttäjän kilpailijat.
+Persoonallisuutesi: Utelias, tarkkanäköinen, analyyttinen. Puhut suomea.
+Vastaa käyttäjän kysymyksiin kilpailijoista, markkinatilanteesta ja löydöksistäsi.
+Ole ytimekäs mutta informatiivinen. Käytä emojeja sopivasti. 🔍""",
+        "en": """You are Sofia, Brandista's market intelligence expert. You just analyzed the user's competitors.
+Personality: Curious, observant, analytical.
+Answer questions about competitors, market situation, and your findings.
+Be concise but informative. Use emojis appropriately. 🔍"""
+    },
+    "analyst": {
+        "fi": """Olet Alex, Brandistan data-analyytikko. Olet juuri analysoinut käyttäjän sivuston ja kilpailijat.
+Persoonallisuutesi: Tarkka, numeroihin keskittyvä, metodinen. Puhut suomea.
+Vastaa kysymyksiin pisteistä, vertailuista ja teknisistä yksityiskohdista.
+Anna konkreettisia lukuja kun mahdollista. 📊""",
+        "en": """You are Alex, Brandista's data analyst. You just analyzed the user's site and competitors.
+Personality: Precise, numbers-focused, methodical.
+Answer questions about scores, comparisons, and technical details.
+Provide concrete numbers when possible. 📊"""
+    },
+    "guardian": {
+        "fi": """Olet Gustav, Brandistan riskienhallitsija. Olet juuri tunnistanut käyttäjän liiketoimintariskit.
+Persoonallisuutesi: Varovainen, suojeleva, rehellinen riskeistä. Puhut suomea.
+Vastaa kysymyksiin riskeistä, uhkista ja niiden euromääräisistä vaikutuksista.
+Ole suora mutta rakentava - tarjoa aina myös ratkaisuja. 🛡️""",
+        "en": """You are Gustav, Brandista's risk manager. You just identified risks to the user's business.
+Personality: Cautious, protective, honest about risks.
+Answer questions about risks, threats, and their monetary impact.
+Be direct but constructive - always offer solutions too. 🛡️"""
+    },
+    "prospector": {
+        "fi": """Olet Petra, Brandistan kasvuhakkeri. Olet juuri löytänyt käyttäjälle kasvumahdollisuuksia.
+Persoonallisuutesi: Energinen, optimistinen, mahdollisuuksiin keskittyvä. Puhut suomea.
+Vastaa kysymyksiin markkinaaukoista, kasvumahdollisuuksista ja quick wineistä.
+Ole innostava ja konkreettinen. 💎""",
+        "en": """You are Petra, Brandista's growth hacker. You just found growth opportunities for the user.
+Personality: Energetic, optimistic, opportunity-focused.
+Answer questions about market gaps, growth opportunities, and quick wins.
+Be inspiring and concrete. 💎"""
+    },
+    "strategist": {
+        "fi": """Olet Stefan, Brandistan strategiajohtaja. Olet juuri rakentanut käyttäjälle strategisen näkemyksen.
+Persoonallisuutesi: Viisas, kokonaisuuksia näkevä, johtajuustaitoinen. Puhut suomea.
+Vastaa kysymyksiin strategiasta, markkina-asemasta ja prioriteeteista.
+Anna strategista perspektiiviä. 🎯""",
+        "en": """You are Stefan, Brandista's strategy director. You just built a strategic vision for the user.
+Personality: Wise, big-picture thinker, leadership-oriented.
+Answer questions about strategy, market position, and priorities.
+Provide strategic perspective. 🎯"""
+    },
+    "planner": {
+        "fi": """Olet Pinja, Brandistan projektimanageri. Olet juuri luonut käyttäjälle 90 päivän toimintasuunnitelman.
+Persoonallisuutesi: Järjestelmällinen, käytännöllinen, toteutuskeskeinen. Puhut suomea.
+Vastaa kysymyksiin aikatauluista, tehtävistä, resursseista ja ROI:sta.
+Ole konkreettinen ja auta priorisoimaan. 📋""",
+        "en": """You are Pinja, Brandista's project manager. You just created a 90-day action plan for the user.
+Personality: Organized, practical, execution-focused.
+Answer questions about timelines, tasks, resources, and ROI.
+Be concrete and help prioritize. 📋"""
+    }
+}
+
+SUGGESTED_QUESTIONS = {
+    "scout": {
+        "fi": ["Kuka on pahin kilpailijani?", "Mitä kilpailijat tekevät paremmin?", "Onko markkinoilla uusia tulokkaita?"],
+        "en": ["Who is my biggest competitor?", "What do competitors do better?", "Are there new market entrants?"]
+    },
+    "analyst": {
+        "fi": ["Miksi pisteeni on tämä?", "Missä olen kilpailijoita edellä?", "Mitä teknisiä puutteita minulla on?"],
+        "en": ["Why is my score this?", "Where am I ahead of competitors?", "What technical gaps do I have?"]
+    },
+    "guardian": {
+        "fi": ["Mikä on suurin riski?", "Miten 65000€ riski muodostuu?", "Mitä teen ensimmäiseksi?"],
+        "en": ["What's the biggest risk?", "How is the €65,000 risk calculated?", "What should I do first?"]
+    },
+    "prospector": {
+        "fi": ["Mikä on helpoin quick win?", "Missä kilpailijat jättävät rahaa pöydälle?", "Mikä kasvumahdollisuus on suurin?"],
+        "en": ["What's the easiest quick win?", "Where do competitors leave money on the table?", "What's the biggest growth opportunity?"]
+    },
+    "strategist": {
+        "fi": ["Mikä on markkina-asemani?", "Mihin minun pitäisi keskittyä?", "Miten voitan kilpailijat?"],
+        "en": ["What's my market position?", "What should I focus on?", "How do I beat competitors?"]
+    },
+    "planner": {
+        "fi": ["Mitä teen ensimmäisellä viikolla?", "Paljonko tämä maksaa?", "Mikä on odotettu ROI?"],
+        "en": ["What do I do in week one?", "How much will this cost?", "What's the expected ROI?"]
+    }
+}
+
+
+@router.post("/chat", response_model=ChatResponse)
+async def agent_chat(
+    request: ChatRequest,
+    current_user: UserInfo = Depends(get_current_user)
+):
+    """
+    Chat with an AI agent about analysis results.
+    """
+    try:
+        from openai import AsyncOpenAI
+        
+        openai_client = AsyncOpenAI()
+        
+        agent_id = request.agent_id
+        language = request.language
+        
+        # Get agent system prompt
+        system_prompt = AGENT_CHAT_PROMPTS.get(agent_id, AGENT_CHAT_PROMPTS["analyst"])[language]
+        
+        # Add analysis context to system prompt
+        if request.analysis_context:
+            context_summary = f"""
+
+Analyysin tulokset / Analysis results:
+- Pistemäärä / Score: {request.analysis_context.get('your_score', 0)}/100
+- Sijoitus / Ranking: #{request.analysis_context.get('your_ranking', 1)} / {request.analysis_context.get('total_competitors', 1)}
+- Liikevaihto riskissä / Revenue at risk: €{request.analysis_context.get('revenue_at_risk', 0):,}
+- Kilpailijauhat / Competitor threats: {len(request.analysis_context.get('competitor_threats', []))}
+- Markkinaaukot / Market gaps: {len(request.analysis_context.get('market_gaps', []))}
+"""
+            # Add detailed context based on agent
+            if agent_id == "guardian" and request.analysis_context.get('competitor_threats'):
+                threats = request.analysis_context.get('competitor_threats', [])
+                context_summary += "\nKilpailijauhat / Threats:\n"
+                for t in threats[:3]:
+                    context_summary += f"- {t.get('company', 'Unknown')}: {t.get('threat_level', 'medium')} threat, score {t.get('score', 0)}/100\n"
+            
+            if agent_id == "prospector" and request.analysis_context.get('market_gaps'):
+                gaps = request.analysis_context.get('market_gaps', [])
+                context_summary += "\nMarkkinaaukot / Market gaps:\n"
+                for g in gaps[:3]:
+                    context_summary += f"- {g.get('gap', 'Unknown')}: {g.get('difficulty', 'medium')}, potential €{g.get('potential_value', 0)}\n"
+            
+            if agent_id == "planner" and request.analysis_context.get('action_plan'):
+                plan = request.analysis_context.get('action_plan', {})
+                context_summary += f"\nToimintasuunnitelma / Action plan:\n"
+                context_summary += f"- Total actions: {plan.get('total_actions', 0)}\n"
+                context_summary += f"- Projected improvement: +{request.analysis_context.get('projected_improvement', 0)} points\n"
+                if plan.get('this_week'):
+                    tw = plan['this_week']
+                    context_summary += f"- This week: {tw.get('action', '')} (+{tw.get('impact_points', 0)} points)\n"
+            
+            system_prompt += context_summary
+        
+        # Build messages for OpenAI
+        openai_messages = [{"role": "system", "content": system_prompt}]
+        
+        for msg in request.messages:
+            openai_messages.append({
+                "role": msg.get("role", "user"),
+                "content": msg.get("content", "")
+            })
+        
+        # Call OpenAI
+        response = await openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=openai_messages,
+            max_tokens=500,
+            temperature=0.7
+        )
+        
+        agent_response = response.choices[0].message.content
+        
+        # Get suggested questions
+        suggested = SUGGESTED_QUESTIONS.get(agent_id, SUGGESTED_QUESTIONS["analyst"])[language]
+        
+        return ChatResponse(
+            response=agent_response,
+            agent_id=agent_id,
+            suggested_questions=suggested
+        )
+        
+    except Exception as e:
+        logger.error(f"[Chat] Error: {e}", exc_info=True)
+        error_msg = "Pahoittelut, jotain meni pieleen. Yritä uudelleen!" if request.language == "fi" else "Sorry, something went wrong. Please try again!"
+        return ChatResponse(
+            response=error_msg,
+            agent_id=request.agent_id,
+            suggested_questions=[]
+        )
+
+
+# ============================================================================
 # HELPER: Lisää router main.py:hyn
 # ============================================================================
 
