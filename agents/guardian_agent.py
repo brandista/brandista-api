@@ -197,7 +197,7 @@ class GuardianAgent(BaseAgent):
                 your_analysis.get('basic', {}),
                 your_analysis.get('technical', {}),
                 your_analysis.get('content', {}),
-                context.language
+                self._language  # Use already extracted language
             )
         except Exception as e:
             logger.error(f"[Guardian] Risk register error: {e}")
