@@ -1,31 +1,37 @@
 """
 Growth Engine 2.0 - Base Agent
-Foundation class for all agents - English only, no translations
+Pohjaluokka kaikille agenteille
 """
 
-import logging
 import asyncio
+import logging
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, List
 from datetime import datetime
+from typing import Dict, Any, List, Optional, Callable
 
-from .agent_types import (
-    AnalysisContext,
+from .types import (
     AgentStatus,
     AgentPriority,
     InsightType,
     AgentInsight,
-    AgentProgress
+    AgentProgress,
+    AgentResult,
+    AnalysisContext
 )
+from .translations import t as translate
 
 logger = logging.getLogger(__name__)
 
 
 class BaseAgent(ABC):
     """
-    Base class for all Growth Engine agents.
+    Pohjaluokka Growth Engine -agenteille.
     
-    All text output is in English - frontend handles translations.
+    Jokainen agentti:
+    - Suorittaa yhden erikoistuneen tehtävän
+    - Emittoi real-time insighteja frontendiin
+    - Raportoi edistymisensä
+    - Voi riippua muista agenteista
     """
     
     def __init__(
@@ -33,65 +39,52 @@ class BaseAgent(ABC):
         agent_id: str,
         name: str,
         role: str,
-        avatar: str,
-        personality: str
+        avatar: str = "🤖",
+        personality: str = ""
     ):
-        self.agent_id = agent_id
+        self.id = agent_id
         self.name = name
         self.role = role
         self.avatar = avatar
         self.personality = personality
         
-        self._status = AgentStatus.IDLE
-        self._progress = 0
-        self._context: Optional[AnalysisContext] = None
-        self._insights: List[AgentInsight] = []
+        # State
+        self.status = AgentStatus.IDLE
+        self.progress = 0
+        self.current_task: Optional[str] = None
+        self.insights: List[AgentInsight] = []
+        self.result: Optional[Dict[str, Any]] = None
+        self.error: Optional[str] = None
+        self.start_time: Optional[datetime] = None
+        self.end_time: Optional[datetime] = None
         
-        # Dependencies (other agent IDs that must complete first)
+        # Language (set from context in run())
+        self._language: str = "fi"
+        
+        # Dependencies - mitkä agentit pitää ajaa ensin
         self.dependencies: List[str] = []
-    
-    @property
-    def status(self) -> AgentStatus:
-        return self._status
-    
-    @status.setter
-    def status(self, value: AgentStatus):
-        self._status = value
-        if self._context and self._context.on_status:
-            self._context.on_status(self.agent_id, value)
-    
-    async def run(self, context: AnalysisContext) -> Dict[str, Any]:
-        """Execute the agent's analysis"""
-        self._context = context
-        self._insights = []
-        self._progress = 0
         
-        try:
-            self.status = AgentStatus.RUNNING
-            self._update_progress(5, f"{self.name} starting...")
-            
-            # Execute agent-specific logic
-            result = await self.execute(context)
-            
-            self._update_progress(100, f"{self.name} complete")
-            self.status = AgentStatus.COMPLETED
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"[{self.agent_id}] Error: {e}", exc_info=True)
-            self.status = AgentStatus.FAILED
-            self._emit_insight(
-                f"Analysis failed: {str(e)}",
-                priority=AgentPriority.HIGH,
-                insight_type=InsightType.THREAT
-            )
-            raise
+        # Callbacks for real-time updates
+        self._on_insight: Optional[Callable[[AgentInsight], None]] = None
+        self._on_progress: Optional[Callable[[AgentProgress], None]] = None
     
-    @abstractmethod
-    async def execute(self, context: AnalysisContext) -> Dict[str, Any]:
-        """Agent-specific execution logic - must be implemented by subclasses"""
-        pass
+    def _t(self, key: str, **kwargs) -> str:
+        """
+        Käännä teksti nykyiselle kielelle.
+        
+        Esimerkki:
+            self._t("scout.found_competitors", count=5, top="Example.com")
+        """
+        return translate(key, self._language, **kwargs)
+    
+    def set_callbacks(
+        self,
+        on_insight: Optional[Callable[[AgentInsight], None]] = None,
+        on_progress: Optional[Callable[[AgentProgress], None]] = None
+    ):
+        """Aseta callbackit real-time päivityksille"""
+        self._on_insight = on_insight
+        self._on_progress = on_progress
     
     def _emit_insight(
         self,
@@ -100,52 +93,183 @@ class BaseAgent(ABC):
         insight_type: InsightType = InsightType.FINDING,
         data: Optional[Dict[str, Any]] = None
     ):
-        """Emit an insight to the frontend"""
+        """
+        Emitoi insight frontendiin real-time.
+        
+        Esimerkki:
+            self._emit_insight(
+                "Löysin 3 vahvaa kilpailijaa!",
+                priority=AgentPriority.HIGH,
+                insight_type=InsightType.FINDING
+            )
+        """
         insight = AgentInsight(
-            agent_id=self.agent_id,
+            agent_id=self.id,
+            agent_name=self.name,
+            agent_avatar=self.avatar,
             message=message,
             priority=priority,
             insight_type=insight_type,
-            timestamp=datetime.now(),
             data=data
         )
         
-        self._insights.append(insight)
+        self.insights.append(insight)
         
-        if self._context and self._context.on_insight:
-            self._context.on_insight(insight)
+        if self._on_insight:
+            try:
+                self._on_insight(insight)
+            except Exception as e:
+                logger.error(f"[{self.name}] Insight callback error: {e}")
         
-        logger.info(f"[{self.agent_id}] {priority.value.upper()}: {message}")
+        logger.info(f"[{self.name}] 💡 {message}")
     
-    def _update_progress(self, progress: int, message: str):
-        """Update progress percentage"""
-        self._progress = min(100, max(0, progress))
+    def _update_progress(
+        self,
+        progress: int,
+        task: Optional[str] = None
+    ):
+        """
+        Päivitä edistyminen.
+        
+        Esimerkki:
+            self._update_progress(50, "Analysoimassa kilpailijoita...")
+        """
+        self.progress = min(100, max(0, progress))
+        if task:
+            self.current_task = task
         
         progress_update = AgentProgress(
-            agent_id=self.agent_id,
-            progress=self._progress,
-            message=message,
-            timestamp=datetime.now()
+            agent_id=self.id,
+            status=self.status,
+            progress=self.progress,
+            current_task=self.current_task
         )
         
-        if self._context and self._context.on_progress:
-            self._context.on_progress(progress_update)
+        if self._on_progress:
+            try:
+                self._on_progress(progress_update)
+            except Exception as e:
+                logger.error(f"[{self.name}] Progress callback error: {e}")
+    
+    def _set_status(self, status: AgentStatus):
+        """Päivitä tila"""
+        self.status = status
+        self._update_progress(self.progress)
+    
+    async def run(self, context: AnalysisContext) -> AgentResult:
+        """
+        Suorita agentti. Tätä kutsuu orchestrator.
         
-        logger.debug(f"[{self.agent_id}] Progress: {self._progress}% - {message}")
+        Hoitaa:
+        - Pre/post executionin
+        - Virheenkäsittelyn
+        - Ajanoton
+        """
+        self.start_time = datetime.now()
+        self.insights = []
+        self.error = None
+        self.result = None
+        
+        # Set language from context
+        self._language = context.language or "fi"
+        
+        try:
+            # Pre-execute
+            self._set_status(AgentStatus.THINKING)
+            self._update_progress(5, self._t("common.preparing"))
+            await self.pre_execute(context)
+            
+            # Main execution
+            self._set_status(AgentStatus.RUNNING)
+            self._update_progress(10, self._t("common.executing"))
+            
+            result_data = await self.execute(context)
+            
+            # Post-execute
+            self._update_progress(95, self._t("common.finalizing"))
+            await self.post_execute(result_data)
+            
+            self.result = result_data
+            self._set_status(AgentStatus.COMPLETE)
+            self._update_progress(100, "Valmis!")
+            
+        except Exception as e:
+            self.error = str(e)
+            self._set_status(AgentStatus.ERROR)
+            logger.error(f"[{self.name}] ❌ Error: {e}", exc_info=True)
+            
+            self._emit_insight(
+                f"Virhe: {str(e)[:100]}",
+                priority=AgentPriority.CRITICAL,
+                insight_type=InsightType.FINDING
+            )
+        
+        self.end_time = datetime.now()
+        execution_time = int((self.end_time - self.start_time).total_seconds() * 1000)
+        
+        return AgentResult(
+            agent_id=self.id,
+            agent_name=self.name,
+            status=self.status,
+            execution_time_ms=execution_time,
+            insights=self.insights,
+            data=self.result or {},
+            error=self.error
+        )
     
-    def get_dependency_results(self, context: AnalysisContext, agent_id: str) -> Optional[Dict[str, Any]]:
-        """Get results from a dependency agent"""
-        return context.agent_results.get(agent_id)
+    async def pre_execute(self, context: AnalysisContext):
+        """
+        Setup ennen suoritusta.
+        Override tarvittaessa.
+        """
+        pass
     
-    def to_dict(self) -> Dict[str, Any]:
-        """Serialize agent info"""
+    @abstractmethod
+    async def execute(self, context: AnalysisContext) -> Dict[str, Any]:
+        """
+        Päälogiikka - jokainen agentti toteuttaa tämän.
+        
+        Args:
+            context: Jaettu konteksti sisältäen URL:t ja muiden agenttien tulokset
+            
+        Returns:
+            Dict sisältäen agentin tulokset
+        """
+        raise NotImplementedError
+    
+    async def post_execute(self, result: Dict[str, Any]):
+        """
+        Cleanup suorituksen jälkeen.
+        Override tarvittaessa.
+        """
+        pass
+    
+    def get_dependency_results(
+        self,
+        context: AnalysisContext
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Hae riippuvuusagenttien tulokset.
+        
+        Esimerkki:
+            deps = self.get_dependency_results(context)
+            scout_data = deps.get('scout', {}).get('data', {})
+        """
+        results = {}
+        for dep_id in self.dependencies:
+            if dep_id in context.agent_results:
+                results[dep_id] = context.agent_results[dep_id].data
+        return results
+    
+    def to_info_dict(self) -> Dict[str, Any]:
+        """Palauta agentin info frontendille"""
         return {
-            'id': self.agent_id,
+            'id': self.id,
             'name': self.name,
             'role': self.role,
             'avatar': self.avatar,
             'personality': self.personality,
-            'status': self._status.value,
-            'progress': self._progress,
-            'dependencies': self.dependencies
+            'dependencies': self.dependencies,
+            'status': self.status.value,
+            'progress': self.progress
         }

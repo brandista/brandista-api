@@ -1,246 +1,234 @@
 """
 Growth Engine 2.0 - Scout Agent
-🔍 "The Explorer" - Finds and identifies competitors
-Uses: multi_provider_search(), generate_smart_search_terms()
+🔍 "The Market Explorer" - Löytää kilpailijat ja kartoittaa markkinan
 """
 
 import logging
 from typing import Dict, Any, List, Optional
-from urllib.parse import urlparse
 
 from .base_agent import BaseAgent
-from .agent_types import AnalysisContext, AgentPriority, InsightType
+from .types import (
+    AnalysisContext,
+    AgentPriority,
+    InsightType
+)
+
+# Company Intelligence for due diligence
+try:
+    from company_intel import CompanyIntel
+    COMPANY_INTEL_AVAILABLE = True
+except ImportError:
+    COMPANY_INTEL_AVAILABLE = False
+    CompanyIntel = None
 
 logger = logging.getLogger(__name__)
 
 
+# Progress task translations
+SCOUT_TASKS = {
+    "analyzing_company": {"fi": "Analysoimassa kohdeyritystä...", "en": "Analyzing target company..."},
+    "detecting_industry": {"fi": "Tunnistamassa toimialaa...", "en": "Detecting industry..."},
+    "validating_competitors": {"fi": "Validoimassa annettuja kilpailijoita...", "en": "Validating provided competitors..."},
+    "searching_competitors": {"fi": "Etsimässä kilpailijoita...", "en": "Searching for competitors..."},
+    "scoring_results": {"fi": "Pisteytämässä tuloksia...", "en": "Scoring results..."},
+    "enriching_companies": {"fi": "Haetaan yritystietoja (YTJ/Kauppalehti)...", "en": "Fetching company data (YTJ/Kauppalehti)..."},
+    "finalizing": {"fi": "Viimeistellään löydöksiä...", "en": "Finalizing findings..."},
+}
+
+
 class ScoutAgent(BaseAgent):
     """
-    🔍 Scout Agent - Market Explorer
-    
-    Responsibilities:
-    - Detect industry from website
-    - Generate smart search terms
-    - Find competitors via multi-provider search
-    - Score and rank competitors by relevance
+    🔍 Scout Agent - Kilpailijatiedustelija
     """
     
     def __init__(self):
         super().__init__(
             agent_id="scout",
             name="Scout",
-            role="Market Explorer",
+            role="Kilpailijatiedustelija",
             avatar="🔍",
-            personality="Curious explorer who loves discovering new competitors"
+            personality="Utelias ja perusteellinen tutkimusmatkailija"
         )
-        self.dependencies = []  # Scout runs first
+        self.dependencies = []
+    
+    def _task(self, key: str) -> str:
+        """Get task text in current language"""
+        return SCOUT_TASKS.get(key, {}).get(self._language, key)
     
     async def execute(self, context: AnalysisContext) -> Dict[str, Any]:
-        """Find and analyze competitors"""
-        
-        # Import main.py functions
         from main import (
+            get_website_content,
             multi_provider_search,
             generate_smart_search_terms,
-            get_domain_from_url,
             clean_url,
-            get_website_content  # Fixed: was fetch_and_parse_website
+            get_domain_from_url
         )
         
-        self._emit_insight(
-            "🔍 Hunting for your competitors...",
-            priority=AgentPriority.MEDIUM,
-            insight_type=InsightType.FINDING
-        )
+        self._update_progress(15, self._task("analyzing_company"))
         
-        # Get website data first
-        self._update_progress(10, "Analyzing your website...")
-        
+        # 1. Hae kohdesivuston sisältö
         try:
-            html_content, used_spa = await get_website_content(context.url)
+            website_data = await get_website_content(context.url)
+            context.website_data = website_data
+            context.html_content = website_data.get('html', '')
             
-            # Parse basic info from HTML
-            website_data = {'html': html_content, 'used_spa': used_spa}
-            if html_content:
-                from bs4 import BeautifulSoup
-                soup = BeautifulSoup(html_content, 'html.parser')
-                
-                # Extract title
-                title_tag = soup.find('title')
-                website_data['title'] = title_tag.get_text(strip=True) if title_tag else ''
-                
-                # Extract meta description
-                meta_desc = soup.find('meta', attrs={'name': 'description'})
-                website_data['meta_description'] = meta_desc.get('content', '') if meta_desc else ''
-                
-                # Extract company name from various sources
-                og_site = soup.find('meta', attrs={'property': 'og:site_name'})
-                if og_site:
-                    website_data['company'] = og_site.get('content', '')
-                else:
-                    # Try to extract from title or domain
-                    website_data['company'] = get_domain_from_url(context.url).replace('www.', '').split('.')[0].capitalize()
-            
-            company_name = website_data.get('company', 'Unknown')
+            company_name = website_data.get('company', get_domain_from_url(context.url))
             
             self._emit_insight(
-                f"Got it — analyzing {company_name}",
+                self._t("scout.identified_company", company=company_name),
                 priority=AgentPriority.MEDIUM,
                 insight_type=InsightType.FINDING,
                 data={'company': company_name}
             )
+            
         except Exception as e:
-            logger.error(f"[Scout] Website fetch failed: {e}")
+            logger.error(f"[Scout] Website fetch error: {e}")
+            self._emit_insight(
+                self._t("scout.website_fetch_failed"),
+                priority=AgentPriority.HIGH,
+                insight_type=InsightType.FINDING
+            )
             website_data = {}
-            company_name = "Unknown"
+            company_name = get_domain_from_url(context.url)
         
-        self._update_progress(20, "Detecting industry...")
+        self._update_progress(30, self._task("detecting_industry"))
         
-        # Detect industry
-        industry = await self._detect_industry(
-            context.url, 
-            website_data, 
-            context.industry
-        )
+        # 2. Tunnista toimiala
+        industry = await self._detect_industry(context.url, website_data, context.industry_context)
         
         self._emit_insight(
-            f"📊 Industry detected: {industry}",
-            priority=AgentPriority.LOW,
+            self._t("scout.industry", industry=industry),
+            priority=AgentPriority.MEDIUM,
             insight_type=InsightType.FINDING,
             data={'industry': industry}
         )
         
-        # If competitors provided, use those
-        if context.competitor_urls:
-            self._update_progress(90, "Using provided competitors...")
+        # 3. Jos kilpailijat jo annettu, validoi ne
+        if context.competitor_urls and len(context.competitor_urls) > 0:
+            self._update_progress(50, self._task("validating_competitors"))
+            
+            validated_competitors = await self._validate_competitors(
+                context.competitor_urls,
+                context.url
+            )
             
             self._emit_insight(
-                f"✅ {len(context.competitor_urls)} competitors provided — skipping search",
-                priority=AgentPriority.MEDIUM,
-                insight_type=InsightType.FINDING
+                self._t("scout.validating_competitors", 
+                       count=len(validated_competitors), 
+                       total=len(context.competitor_urls)),
+                priority=AgentPriority.HIGH,
+                insight_type=InsightType.FINDING,
+                data={'count': len(validated_competitors)}
+            )
+            
+            # Enrich with company intelligence (YTJ + Kauppalehti)
+            self._update_progress(75, self._task("enriching_companies"))
+            enriched_competitors = await self._enrich_with_company_intel(validated_competitors)
+            
+            return {
+                'company': company_name,
+                'industry': industry,
+                'competitor_urls': validated_competitors,
+                'competitor_count': len(validated_competitors),
+                'discovery_method': 'user_provided',
+                'website_data': website_data,
+                'competitors_enriched': enriched_competitors
+            }
+        
+        # 4. Etsi kilpailijat automaattisesti
+        self._update_progress(40, self._task("searching_competitors"))
+        
+        self._emit_insight(
+            self._t("scout.starting_search"),
+            priority=AgentPriority.MEDIUM,
+            insight_type=InsightType.FINDING
+        )
+        
+        search_terms = generate_smart_search_terms(
+            context.url,
+            website_data,
+            context.language
+        )
+        
+        searching_msg = {"fi": f"Haetaan: {search_terms[0]}...", "en": f"Searching: {search_terms[0]}..."}
+        self._update_progress(50, searching_msg.get(self._language, searching_msg["en"]) if search_terms else "...")
+        
+        try:
+            competitors = await multi_provider_search(
+                url=context.url,
+                search_terms=search_terms,
+                max_results=10,
+                language=context.language
+            )
+            
+            self._update_progress(70, self._task("scoring_results"))
+            
+            scored_competitors = await self._score_competitors(
+                competitors,
+                context.url,
+                industry
+            )
+            
+            top_competitors = scored_competitors[:5]
+            competitor_urls = [c['url'] for c in top_competitors]
+            
+            if top_competitors:
+                top_score = top_competitors[0].get('relevance_score', 0)
+                top_name = top_competitors[0].get('name', 'Unknown')
+                
+                self._emit_insight(
+                    self._t("scout.found_competitors", 
+                           count=len(top_competitors),
+                           top=top_name,
+                           score=top_score),
+                    priority=AgentPriority.HIGH,
+                    insight_type=InsightType.FINDING,
+                    data={
+                        'count': len(top_competitors),
+                        'top_competitor': top_competitors[0] if top_competitors else None
+                    }
+                )
+            else:
+                self._emit_insight(
+                    self._t("scout.no_competitors"),
+                    priority=AgentPriority.MEDIUM,
+                    insight_type=InsightType.FINDING
+                )
+            
+            # Enrich with company intelligence (YTJ + Kauppalehti)
+            self._update_progress(85, self._task("enriching_companies"))
+            enriched_competitors = await self._enrich_with_company_intel(competitor_urls)
+            
+            self._update_progress(95, self._task("finalizing"))
+            
+            return {
+                'company': company_name,
+                'industry': industry,
+                'competitor_urls': competitor_urls,
+                'competitor_count': len(competitor_urls),
+                'discovery_method': 'auto_discovered',
+                'website_data': website_data,
+                'all_candidates': scored_competitors,
+                'competitors_enriched': enriched_competitors
+            }
+            
+        except Exception as e:
+            logger.error(f"[Scout] Competitor search error: {e}")
+            self._emit_insight(
+                self._t("scout.search_failed", error=str(e)),
+                priority=AgentPriority.HIGH,
+                insight_type=InsightType.THREAT
             )
             
             return {
                 'company': company_name,
                 'industry': industry,
-                'competitor_urls': context.competitor_urls,
-                'competitor_count': len(context.competitor_urls),
-                'discovery_method': 'user_provided',
-                'website_data': website_data
+                'competitor_urls': [],
+                'competitor_count': 0,
+                'discovery_method': 'failed',
+                'website_data': website_data,
+                'error': str(e)
             }
-        
-        # Generate search terms
-        self._update_progress(30, "Generating search strategy...")
-        
-        try:
-            search_terms = generate_smart_search_terms(
-                industry=industry,
-                country_code=context.country_code,
-                custom_terms=None
-            )
-            
-            self._emit_insight(
-                f"🎯 Search strategy: {len(search_terms)} queries planned",
-                priority=AgentPriority.LOW,
-                insight_type=InsightType.FINDING
-            )
-        except Exception as e:
-            logger.error(f"[Scout] Search term generation failed: {e}")
-            search_terms = [f"top {industry} companies"]
-        
-        self._update_progress(40, "Searching multiple providers...")
-        
-        # Multi-provider search
-        try:
-            all_results = await multi_provider_search(
-                search_terms=search_terms,
-                num_results=7,
-                country_code=context.country_code
-            )
-            
-            self._emit_insight(
-                f"🌐 Found {len(all_results)} potential matches",
-                priority=AgentPriority.LOW,
-                insight_type=InsightType.FINDING
-            )
-        except Exception as e:
-            logger.error(f"[Scout] Multi-provider search failed: {e}")
-            all_results = []
-        
-        self._update_progress(60, "Filtering and scoring...")
-        
-        # Filter and score competitors
-        own_domain = get_domain_from_url(context.url)
-        scored_competitors = []
-        
-        for url in all_results:
-            try:
-                domain = get_domain_from_url(url)
-                
-                # Skip own domain
-                if own_domain.lower() in domain.lower():
-                    continue
-                
-                # Skip non-relevant domains
-                if self._is_non_relevant_domain(domain):
-                    continue
-                
-                # Calculate relevance score
-                relevance = self._calculate_relevance(url, industry, website_data)
-                
-                scored_competitors.append({
-                    'url': clean_url(url),
-                    'domain': domain,
-                    'relevance_score': relevance
-                })
-                
-            except Exception as e:
-                logger.debug(f"[Scout] Skipping URL {url}: {e}")
-                continue
-        
-        # Sort by relevance and deduplicate
-        scored_competitors.sort(key=lambda x: x['relevance_score'], reverse=True)
-        
-        # Dedupe by domain
-        seen_domains = set()
-        unique_competitors = []
-        for comp in scored_competitors:
-            base_domain = comp['domain'].replace('www.', '').lower()
-            if base_domain not in seen_domains:
-                seen_domains.add(base_domain)
-                unique_competitors.append(comp)
-        
-        # Take top 5
-        top_competitors = unique_competitors[:5]
-        competitor_urls = [c['url'] for c in top_competitors]
-        
-        self._update_progress(90, "Discovery complete!")
-        
-        if top_competitors:
-            top_match = top_competitors[0]
-            self._emit_insight(
-                f"🎯 Found {len(top_competitors)} solid competitors! "
-                f"Top match: {top_match['domain']} ({top_match['relevance_score']}% relevance)",
-                priority=AgentPriority.HIGH,
-                insight_type=InsightType.FINDING,
-                data={'competitors': top_competitors}
-            )
-        else:
-            self._emit_insight(
-                "⚠️ No competitors found — try providing URLs manually",
-                priority=AgentPriority.MEDIUM,
-                insight_type=InsightType.FINDING
-            )
-        
-        return {
-            'company': company_name,
-            'industry': industry,
-            'competitor_urls': competitor_urls,
-            'competitor_count': len(competitor_urls),
-            'discovery_method': 'auto_discovered',
-            'website_data': website_data,
-            'all_candidates': top_competitors
-        }
     
     async def _detect_industry(
         self, 
@@ -248,80 +236,205 @@ class ScoutAgent(BaseAgent):
         website_data: Dict[str, Any],
         provided_industry: Optional[str] = None
     ) -> str:
-        """Detect industry from website content"""
         if provided_industry:
             return provided_industry
         
-        # Try to detect from website data
-        title = website_data.get('title', '').lower()
-        description = website_data.get('meta_description', '').lower()
-        content = f"{title} {description}"
+        content = str(website_data).lower()
         
-        # Simple keyword matching for common industries
         industry_keywords = {
-            'software': ['software', 'saas', 'app', 'platform', 'tech'],
-            'marketing': ['marketing', 'agency', 'advertising', 'digital', 'brand'],
-            'ecommerce': ['shop', 'store', 'ecommerce', 'buy', 'products'],
-            'consulting': ['consulting', 'advisory', 'strategy', 'solutions'],
-            'finance': ['finance', 'banking', 'investment', 'fintech', 'payments'],
-            'healthcare': ['health', 'medical', 'clinic', 'care', 'wellness'],
-            'education': ['education', 'learning', 'training', 'courses', 'academy'],
-            'real estate': ['real estate', 'property', 'homes', 'rentals'],
-            'manufacturing': ['manufacturing', 'industrial', 'factory', 'production'],
-            'hospitality': ['hotel', 'restaurant', 'travel', 'tourism', 'booking'],
+            'saas': ['software', 'saas', 'platform', 'cloud', 'app', 'ohjelmisto'],
+            'ecommerce': ['shop', 'store', 'buy', 'cart', 'kauppa', 'osta', 'tuote'],
+            'consulting': ['consulting', 'advisory', 'konsultointi', 'neuvonta'],
+            'marketing': ['marketing', 'agency', 'markkinointi', 'mainos', 'brändi'],
+            'finance': ['finance', 'bank', 'investment', 'rahoitus', 'pankki', 'sijoitus'],
+            'healthcare': ['health', 'medical', 'clinic', 'terveys', 'lääkäri', 'klinikka'],
+            'education': ['education', 'training', 'course', 'koulutus', 'kurssi', 'oppi'],
+            'technology': ['tech', 'digital', 'it', 'software', 'teknologia', 'digitaalinen'],
+            'real_estate': ['real estate', 'property', 'kiinteistö', 'asunto', 'talo'],
+            'manufacturing': ['manufacturing', 'factory', 'production', 'tuotanto', 'tehdas'],
         }
         
+        scores = {}
         for industry, keywords in industry_keywords.items():
-            if any(kw in content for kw in keywords):
-                return industry
+            score = sum(1 for kw in keywords if kw in content)
+            if score > 0:
+                scores[industry] = score
         
-        return 'general business'
+        if scores:
+            return max(scores, key=scores.get)
+        
+        return 'general'
     
-    def _is_non_relevant_domain(self, domain: str) -> bool:
-        """Check if domain is a non-relevant platform"""
-        non_relevant = [
-            'facebook.com', 'twitter.com', 'linkedin.com', 'instagram.com',
-            'youtube.com', 'tiktok.com', 'pinterest.com',
-            'wikipedia.org', 'reddit.com', 'medium.com',
-            'google.com', 'bing.com', 'yahoo.com',
-            'amazon.com', 'ebay.com', 'alibaba.com',
-            'github.com', 'stackoverflow.com',
-            'yelp.com', 'trustpilot.com', 'glassdoor.com'
+    async def _validate_competitors(
+        self,
+        competitor_urls: List[str],
+        own_url: str
+    ) -> List[str]:
+        from main import get_domain_from_url, clean_url
+        
+        own_domain = get_domain_from_url(own_url)
+        validated = []
+        
+        for url in competitor_urls:
+            try:
+                cleaned = clean_url(url)
+                domain = get_domain_from_url(cleaned)
+                
+                if domain == own_domain:
+                    continue
+                
+                skip_domains = ['google.', 'facebook.', 'linkedin.', 'twitter.', 'wikipedia.']
+                if any(skip in domain for skip in skip_domains):
+                    continue
+                
+                validated.append(cleaned)
+                
+            except Exception:
+                continue
+        
+        return validated
+    
+    async def _score_competitors(
+        self,
+        competitors: List[Dict[str, Any]],
+        own_url: str,
+        industry: str
+    ) -> List[Dict[str, Any]]:
+        from main import get_domain_from_url
+        
+        own_domain = get_domain_from_url(own_url)
+        scored = []
+        
+        skip_domains = [
+            'google.', 'facebook.', 'linkedin.', 'twitter.', 
+            'wikipedia.', 'youtube.', 'instagram.', 'tiktok.',
+            'amazon.', 'ebay.', 'reddit.', 'pinterest.'
         ]
         
-        domain_lower = domain.lower()
-        return any(nr in domain_lower for nr in non_relevant)
+        for comp in competitors:
+            url = comp.get('url', '')
+            domain = get_domain_from_url(url)
+            
+            if domain == own_domain:
+                continue
+            if any(skip in domain for skip in skip_domains):
+                continue
+            
+            score = 50
+            
+            if own_domain.split('.')[-1] == domain.split('.')[-1]:
+                score += 10
+            
+            snippet = comp.get('snippet', '').lower()
+            if industry.lower() in snippet:
+                score += 15
+            
+            title = comp.get('title', '').lower()
+            if any(term in title for term in ['vs', 'alternative', 'competitor', 'vaihtoehto']):
+                score += 20
+            
+            comp['relevance_score'] = min(score, 100)
+            comp['name'] = comp.get('title', domain).split(' - ')[0].split(' | ')[0][:50]
+            scored.append(comp)
+        
+        scored.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
+        
+        return scored
     
-    def _calculate_relevance(
-        self, 
-        url: str, 
-        industry: str, 
-        website_data: Dict[str, Any]
-    ) -> int:
-        """Calculate relevance score 0-100"""
-        score = 50  # Base score
+    async def _enrich_with_company_intel(
+        self,
+        competitor_urls: List[str]
+    ) -> List[Dict[str, Any]]:
+        """
+        Enrich competitor URLs with company intelligence from YTJ + Kauppalehti.
         
-        url_lower = url.lower()
-        industry_lower = industry.lower()
+        Returns list of enriched competitor dicts with:
+        - company_name (official)
+        - business_id (Y-tunnus)
+        - revenue
+        - employees
+        - founded_year
+        - industry (TOL)
+        - size_category
+        """
         
-        # Industry in URL/domain
-        if industry_lower.replace(' ', '') in url_lower:
-            score += 20
+        if not COMPANY_INTEL_AVAILABLE:
+            logger.info("[Scout] Company Intel not available, skipping enrichment")
+            return [{'url': url} for url in competitor_urls]
         
-        # TLD matching (.fi for Finnish companies)
-        if '.fi' in url_lower:
-            score += 10
+        self._emit_insight(
+            "🏢 Haetaan yritystietoja..." if self._language == 'fi' else "🏢 Fetching company data...",
+            priority=AgentPriority.LOW,
+            insight_type=InsightType.FINDING
+        )
         
-        # Business-like TLD
-        if any(tld in url_lower for tld in ['.com', '.io', '.co', '.fi', '.eu']):
-            score += 5
+        enriched = []
+        intel = CompanyIntel()
         
-        # Penalize very long URLs (usually not homepages)
-        if len(url) > 100:
-            score -= 15
+        try:
+            for i, url in enumerate(competitor_urls):
+                competitor = {'url': url}
+                
+                try:
+                    # Extract domain
+                    from urllib.parse import urlparse
+                    parsed = urlparse(url)
+                    domain = parsed.netloc or parsed.path.split('/')[0]
+                    domain = domain.replace('www.', '')
+                    
+                    # Get company intel
+                    profile = await intel.get_company_from_domain(domain)
+                    
+                    if profile:
+                        competitor['company_name'] = profile.get('name')
+                        competitor['business_id'] = profile.get('business_id')
+                        competitor['revenue'] = profile.get('revenue')
+                        competitor['employees'] = profile.get('employees')
+                        competitor['founded_year'] = profile.get('founded_year')
+                        competitor['industry'] = profile.get('industry')
+                        competitor['size_category'] = profile.get('size_category')
+                        competitor['company_intel'] = profile
+                        
+                        # Emit insight for significant findings
+                        revenue = profile.get('revenue')
+                        employees = profile.get('employees')
+                        name = profile.get('name', domain)
+                        
+                        if revenue or employees:
+                            revenue_str = f"€{revenue:,.0f}" if revenue else "N/A"
+                            emp_str = f"{employees} hlö" if employees else "N/A"
+                            
+                            msg = f"📊 {name}: {revenue_str}, {emp_str}" if self._language == 'fi' else f"📊 {name}: {revenue_str}, {emp_str} employees"
+                            
+                            self._emit_insight(
+                                msg,
+                                priority=AgentPriority.MEDIUM,
+                                insight_type=InsightType.FINDING,
+                                data={'company': name, 'revenue': revenue, 'employees': employees}
+                            )
+                    
+                except Exception as e:
+                    logger.warning(f"[Scout] Company intel failed for {url}: {e}")
+                
+                enriched.append(competitor)
+                
+                # Update progress
+                progress = 85 + (i / len(competitor_urls)) * 10  # 85-95%
+                self._update_progress(int(progress), self._task("enriching_companies"))
+            
+            # Summary
+            enriched_count = sum(1 for c in enriched if c.get('company_intel'))
+            if enriched_count > 0:
+                msg = f"✅ Yritystiedot löytyi {enriched_count}/{len(competitor_urls)} kilpailijalle" if self._language == 'fi' else f"✅ Company data found for {enriched_count}/{len(competitor_urls)} competitors"
+                self._emit_insight(
+                    msg,
+                    priority=AgentPriority.MEDIUM,
+                    insight_type=InsightType.FINDING
+                )
+            
+        except Exception as e:
+            logger.error(f"[Scout] Company enrichment failed: {e}")
+        finally:
+            await intel.close()
         
-        # Penalize URLs with many parameters
-        if url.count('?') > 0 or url.count('&') > 1:
-            score -= 10
-        
-        return max(0, min(100, score))
+        return enriched

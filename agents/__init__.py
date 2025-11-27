@@ -1,15 +1,19 @@
 """
 Growth Engine 2.0 - Agent System
-All agents and orchestration for competitive intelligence analysis
+Agenttipohjainen strateginen analyysi SMB:ille
 """
 
-from .agent_types import (
-    AnalysisContext,
+from .types import (
     AgentStatus,
     AgentPriority,
     InsightType,
     AgentInsight,
-    AgentProgress
+    AgentProgress,
+    AgentResult,
+    AnalysisContext,
+    OrchestrationResult,
+    WSMessageType,
+    WSMessage
 )
 
 from .base_agent import BaseAgent
@@ -21,16 +25,25 @@ from .prospector_agent import ProspectorAgent
 from .strategist_agent import StrategistAgent
 from .planner_agent import PlannerAgent
 
-from .orchestrator import AgentOrchestrator, OrchestrationResult
+from .orchestrator import (
+    GrowthEngineOrchestrator,
+    get_orchestrator
+)
+
+from .translations import t, AGENT_TRANSLATIONS
 
 __all__ = [
     # Types
-    'AnalysisContext',
     'AgentStatus',
-    'AgentPriority',
+    'AgentPriority', 
     'InsightType',
     'AgentInsight',
     'AgentProgress',
+    'AgentResult',
+    'AnalysisContext',
+    'OrchestrationResult',
+    'WSMessageType',
+    'WSMessage',
     
     # Base
     'BaseAgent',
@@ -43,7 +56,13 @@ __all__ = [
     'StrategistAgent',
     'PlannerAgent',
     
-    # Orchestration
-    'AgentOrchestrator',
-    'OrchestrationResult'
+    # Orchestrator
+    'GrowthEngineOrchestrator',
+    'get_orchestrator',
+    
+    # Translations
+    't',
+    'AGENT_TRANSLATIONS',
 ]
+
+__version__ = '2.0.0'

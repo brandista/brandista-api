@@ -1,327 +1,426 @@
 """
 Growth Engine 2.0 - Strategist Agent
-🎯 "The Strategic Advisor" - Synthesizes insights into strategy
-Uses: _calculate_market_positioning(), _generate_strategic_recommendations(), analyze_creative_boldness()
+🎯 "The Strategic Advisor" - Synteesi ja priorisointi
 """
 
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 
 from .base_agent import BaseAgent
-from .agent_types import AnalysisContext, AgentPriority, InsightType
+from .types import (
+    AnalysisContext,
+    AgentPriority,
+    InsightType
+)
 
 logger = logging.getLogger(__name__)
 
 
+STRATEGIST_TASKS = {
+    "calculating_scores": {"fi": "Lasketaan kokonaispistemääriä...", "en": "Calculating composite scores..."},
+    "analyzing_position": {"fi": "Analysoidaan kilpailuasemaa...", "en": "Analyzing competitive position..."},
+    "prioritizing": {"fi": "Priorisoidaan strategisesti...", "en": "Prioritizing strategically..."},
+    "compiling_insights": {"fi": "Kootaan avainlöydökset...", "en": "Compiling key insights..."},
+    "generating_summary": {"fi": "Generoidaan yhteenveto...", "en": "Generating executive summary..."},
+}
+
+MATURITY_LEVELS = {
+    "advanced": {"fi": "Edistyksellinen", "en": "Advanced"},
+    "developed": {"fi": "Kehittynyt", "en": "Developed"},
+    "average": {"fi": "Keskitaso", "en": "Average"},
+    "developing": {"fi": "Kehittyvä", "en": "Developing"},
+    "beginner": {"fi": "Aloitteleva", "en": "Beginner"},
+}
+
+POSITIONS = {
+    "leader": {"fi": "🏆 Markkinajohtaja", "en": "🏆 Market Leader"},
+    "challenger": {"fi": "🥈 Haastaja", "en": "🥈 Challenger"},
+    "middle": {"fi": "🎯 Keskikastia", "en": "🎯 Middle of pack"},
+    "behind": {"fi": "⚠️ Jälkijunassa", "en": "⚠️ Falling behind"},
+}
+
+
 class StrategistAgent(BaseAgent):
     """
-    🎯 Strategist Agent - Strategic Advisor
-    
-    Responsibilities:
-    - Calculate market positioning
-    - Generate strategic recommendations
-    - Analyze creative boldness
-    - Synthesize all insights into coherent strategy
+    🎯 Strategist Agent - Strateginen neuvonantaja
     """
     
     def __init__(self):
         super().__init__(
             agent_id="strategist",
             name="Strategist",
-            role="Strategic Advisor",
+            role="Strateginen neuvonantaja",
             avatar="🎯",
-            personality="Wise strategist who sees the big picture and connects the dots"
+            personality="Viisas ja kauaskatseinen strategi"
         )
-        self.dependencies = ['analyst', 'guardian', 'prospector']
+        self.dependencies = ['scout', 'analyst', 'guardian', 'prospector']
+    
+    def _task(self, key: str) -> str:
+        return STRATEGIST_TASKS.get(key, {}).get(self._language, key)
+    
+    def _maturity(self, key: str) -> str:
+        return MATURITY_LEVELS.get(key, {}).get(self._language, key)
+    
+    def _position(self, key: str) -> str:
+        return POSITIONS.get(key, {}).get(self._language, key)
     
     async def execute(self, context: AnalysisContext) -> Dict[str, Any]:
-        """Synthesize insights into strategic recommendations"""
-        
-        # Import the REAL functions from main.py
-        from main import (
-            _calculate_market_positioning,
-            _generate_strategic_recommendations,
-            analyze_creative_boldness
-        )
-        
         analyst_results = self.get_dependency_results(context, 'analyst')
         guardian_results = self.get_dependency_results(context, 'guardian')
         prospector_results = self.get_dependency_results(context, 'prospector')
         
-        if not analyst_results:
-            self._emit_insight(
-                "⚠️ Missing data — limited strategic analysis",
-                priority=AgentPriority.HIGH,
-                insight_type=InsightType.THREAT
-            )
-            return {'positioning': {}, 'recommendations': [], 'creative_boldness': {}}
-        
-        your_analysis = analyst_results.get('your_analysis', {})
-        competitor_analyses = analyst_results.get('competitor_analyses', [])
-        your_score = analyst_results.get('your_score', 0)
-        
-        # Get data from other agents
-        differentiation_matrix = prospector_results.get('differentiation_matrix', {}) if prospector_results else {}
-        market_gaps = prospector_results.get('market_gaps', []) if prospector_results else []
-        threats = guardian_results.get('threats', []) if guardian_results else []
-        
         self._emit_insight(
-            "🎯 Pulling it all together into a strategy...",
+            self._t("strategist.starting"),
             priority=AgentPriority.MEDIUM,
             insight_type=InsightType.FINDING
         )
         
-        # 1. Calculate Market Positioning
-        self._update_progress(15, "Calculating market position...")
+        self._update_progress(20, self._task("calculating_scores"))
         
-        try:
-            positioning = await _calculate_market_positioning(
-                your_analysis=your_analysis,
-                competitor_analyses=competitor_analyses
-            )
-            
-            quadrant = positioning.get('positioning_quadrant', 'Unknown')
-            competitive_score = positioning.get('competitive_score', 0)
-            
-            # Emit positioning insight
-            position_emoji = self._get_position_emoji(quadrant)
-            self._emit_insight(
-                f"{position_emoji} Market position: {quadrant} (score: {competitive_score}/100)",
-                priority=AgentPriority.HIGH,
-                insight_type=InsightType.METRIC,
-                data={'quadrant': quadrant, 'competitive_score': competitive_score}
-            )
-            
-            # Position-specific advice
-            position_advice = self._get_position_advice(quadrant)
-            if position_advice:
-                self._emit_insight(
-                    f"💡 {position_advice}",
-                    priority=AgentPriority.MEDIUM,
-                    insight_type=InsightType.RECOMMENDATION
-                )
-                
-        except Exception as e:
-            logger.error(f"[Strategist] Market positioning failed: {e}")
-            positioning = {'positioning_quadrant': 'Unknown', 'competitive_score': 0}
-        
-        # 2. Analyze Creative Boldness
-        self._update_progress(35, "Analyzing creative boldness...")
-        
-        try:
-            creative_boldness = await analyze_creative_boldness(
-                your_analysis=your_analysis,
-                competitor_analyses=competitor_analyses,
-                language='en'
-            )
-            
-            boldness_score = creative_boldness.get('creative_boldness_score', 0)
-            boldness_level = self._get_boldness_level(boldness_score)
-            
-            self._emit_insight(
-                f"🎨 Creative boldness: {boldness_score}/100 — {boldness_level}",
-                priority=AgentPriority.MEDIUM,
-                insight_type=InsightType.METRIC,
-                data={'boldness_score': boldness_score, 'level': boldness_level}
-            )
-            
-            # Creative recommendations
-            creative_recs = creative_boldness.get('recommendations', [])
-            if creative_recs:
-                self._emit_insight(
-                    f"🎨 Creative tip: {creative_recs[0]}",
-                    priority=AgentPriority.MEDIUM,
-                    insight_type=InsightType.RECOMMENDATION
-                )
-                
-        except Exception as e:
-            logger.error(f"[Strategist] Creative boldness failed: {e}")
-            creative_boldness = {'creative_boldness_score': 0}
-        
-        # 3. Generate Strategic Recommendations
-        self._update_progress(55, "Generating strategic recommendations...")
-        
-        try:
-            recommendations = await _generate_strategic_recommendations(
-                your_analysis=your_analysis,
-                competitor_analyses=competitor_analyses,
-                differentiation_matrix=differentiation_matrix,
-                market_gaps=market_gaps,
-                language='en'
-            )
-            
-            self._emit_insight(
-                f"📋 Generated {len(recommendations)} strategic recommendations",
-                priority=AgentPriority.MEDIUM,
-                insight_type=InsightType.FINDING
-            )
-            
-            # Emit top 3 recommendations
-            for idx, rec in enumerate(recommendations[:3]):
-                title = rec.get('title', rec.get('recommendation', 'Unknown'))
-                priority_level = rec.get('priority', 'medium')
-                
-                emoji = '🔴' if priority_level == 'critical' else '🟠' if priority_level == 'high' else '🟡'
-                
-                self._emit_insight(
-                    f"{emoji} Strategy #{idx + 1}: {title}",
-                    priority=AgentPriority.HIGH if priority_level in ['critical', 'high'] else AgentPriority.MEDIUM,
-                    insight_type=InsightType.RECOMMENDATION,
-                    data=rec
-                )
-                
-        except Exception as e:
-            logger.error(f"[Strategist] Strategic recommendations failed: {e}")
-            recommendations = []
-        
-        # 4. Synthesize Overall Score
-        self._update_progress(80, "Calculating overall strategic score...")
-        
-        overall_score = self._calculate_overall_score(
-            your_score=your_score,
-            positioning=positioning,
-            threats=threats,
-            market_gaps=market_gaps
+        # 1. Laske kokonaispistemäärät
+        composite_scores = self._calculate_composite_scores(
+            analyst_results,
+            guardian_results,
+            prospector_results
         )
         
-        level = self._get_maturity_level(overall_score)
+        overall_score = composite_scores.get('overall', 50)
+        maturity_level = self._get_maturity_level(overall_score)
         
         self._emit_insight(
-            f"📊 Overall strategic score: {overall_score}/100 — {level}",
+            self._t("strategist.overall_score", score=overall_score, level=maturity_level),
             priority=AgentPriority.HIGH,
-            insight_type=InsightType.METRIC,
-            data={'overall_score': overall_score, 'level': level}
+            insight_type=InsightType.FINDING,
+            data={'overall_score': overall_score, 'level': maturity_level}
         )
         
-        # 5. Final Strategic Summary
-        self._update_progress(95, "Finalizing strategy...")
+        self._update_progress(35, self._task("analyzing_position"))
         
-        strategic_summary = self._create_strategic_summary(
-            positioning=positioning,
-            recommendations=recommendations,
-            creative_boldness=creative_boldness,
-            overall_score=overall_score
+        # 2. Analysoi kilpailuasema
+        competitive_position = self._analyze_competitive_position(
+            analyst_results.get('benchmark', {}) if analyst_results else {}
         )
         
         self._emit_insight(
-            f"✅ Strategic analysis complete — {len(recommendations)} recommendations ready",
+            self._t("strategist.position", position=competitive_position.get('label', '')),
+            priority=AgentPriority.MEDIUM,
+            insight_type=InsightType.FINDING,
+            data=competitive_position
+        )
+        
+        self._update_progress(50, self._task("prioritizing"))
+        
+        # 3. Priorisoi strategisesti
+        strategic_priorities = self._prioritize_strategically(
+            guardian_results.get('priority_actions', []) if guardian_results else [],
+            prospector_results.get('growth_opportunities', []) if prospector_results else [],
+            overall_score
+        )
+        
+        for idx, priority in enumerate(strategic_priorities[:3]):
+            self._emit_insight(
+                self._t("strategist.priority", idx=idx+1, title=priority.get('title', '')),
+                priority=AgentPriority.HIGH,
+                insight_type=InsightType.RECOMMENDATION,
+                data=priority
+            )
+        
+        self._update_progress(65, self._task("compiling_insights"))
+        
+        # 4. Koosta avainlöydökset
+        key_insights = self._compile_key_insights(
+            analyst_results,
+            guardian_results,
+            prospector_results
+        )
+        
+        self._update_progress(80, self._task("generating_summary"))
+        
+        # 5. Generoi executive summary
+        executive_summary = self._generate_executive_summary(
+            overall_score,
+            maturity_level,
+            competitive_position,
+            strategic_priorities,
+            guardian_results,
+            prospector_results
+        )
+        
+        # 6. Generoi suositukset
+        recommendations = self._generate_recommendations(
+            strategic_priorities,
+            overall_score
+        )
+        
+        # Final summary insight
+        threats_count = len(guardian_results.get('threats', [])) if guardian_results else 0
+        opps_count = len(prospector_results.get('growth_opportunities', [])) if prospector_results else 0
+        
+        self._emit_insight(
+            self._t("strategist.complete",
+                   threats=threats_count,
+                   opportunities=opps_count,
+                   priorities=len(strategic_priorities)),
             priority=AgentPriority.MEDIUM,
             insight_type=InsightType.FINDING
         )
         
         return {
-            'positioning': positioning,
-            'recommendations': recommendations,
-            'creative_boldness': creative_boldness,
+            'executive_summary': executive_summary,
             'overall_score': overall_score,
-            'strategic_summary': strategic_summary
+            'composite_scores': composite_scores,
+            'maturity_level': maturity_level,
+            'strategic_priorities': strategic_priorities,
+            'key_insights': key_insights,
+            'competitive_position': competitive_position,
+            'recommendations': recommendations
         }
     
-    def _get_position_emoji(self, quadrant: str) -> str:
-        """Get emoji for positioning quadrant"""
-        quadrant_lower = quadrant.lower()
-        if 'leader' in quadrant_lower or 'ahead' in quadrant_lower:
-            return '🏆'
-        elif 'challenger' in quadrant_lower or 'rising' in quadrant_lower:
-            return '🚀'
-        elif 'niche' in quadrant_lower or 'specialist' in quadrant_lower:
-            return '🎯'
-        elif 'behind' in quadrant_lower or 'catch' in quadrant_lower:
-            return '⚠️'
+    def _calculate_composite_scores(
+        self,
+        analyst_results: Dict[str, Any],
+        guardian_results: Dict[str, Any],
+        prospector_results: Dict[str, Any]
+    ) -> Dict[str, int]:
+        scores = {}
+        
+        if analyst_results:
+            cat_comp = analyst_results.get('category_comparison', {})
+            for cat in ['seo', 'performance', 'security', 'content', 'ux']:
+                scores[cat] = cat_comp.get(cat, {}).get('your_score', 50)
+        
+        # Security posture from Guardian
+        if guardian_results:
+            scores['security_posture'] = guardian_results.get('rasm_score', 50)
+        
+        # Growth potential from Prospector
+        if prospector_results:
+            opps = prospector_results.get('growth_opportunities', [])
+            high_impact = len([o for o in opps if o.get('impact') == 'high'])
+            scores['growth_potential'] = min(100, 40 + high_impact * 15)
+        
+        # Competitive edge from benchmark
+        if analyst_results:
+            benchmark = analyst_results.get('benchmark', {})
+            your_score = benchmark.get('your_score', 50)
+            avg_comp = benchmark.get('avg_competitor_score', 50)
+            edge = your_score - avg_comp
+            scores['competitive_edge'] = max(0, min(100, 50 + edge))
+        
+        # Calculate weighted overall
+        weights = {
+            'seo': 0.20,
+            'performance': 0.15,
+            'security': 0.15,
+            'content': 0.15,
+            'ux': 0.15,
+            'security_posture': 0.10,
+            'competitive_edge': 0.10
+        }
+        
+        weighted_sum = 0
+        weight_total = 0
+        
+        for key, weight in weights.items():
+            if key in scores:
+                weighted_sum += scores[key] * weight
+                weight_total += weight
+        
+        if weight_total > 0:
+            scores['overall'] = round(weighted_sum / weight_total)
         else:
-            return '📍'
-    
-    def _get_position_advice(self, quadrant: str) -> str:
-        """Get strategic advice based on position"""
-        quadrant_lower = quadrant.lower()
-        if 'leader' in quadrant_lower:
-            return "Protect your lead — focus on innovation and customer retention"
-        elif 'challenger' in quadrant_lower:
-            return "You're close to the top — double down on differentiation"
-        elif 'niche' in quadrant_lower:
-            return "Leverage your specialization — deepen expertise in your niche"
-        elif 'behind' in quadrant_lower:
-            return "Time to catch up — prioritize quick wins and high-impact improvements"
-        return None
-    
-    def _get_boldness_level(self, score: int) -> str:
-        """Get boldness level description"""
-        if score >= 80:
-            return "Bold innovator"
-        elif score >= 60:
-            return "Confident player"
-        elif score >= 40:
-            return "Playing it safe"
-        elif score >= 20:
-            return "Too conservative"
-        else:
-            return "Invisible"
+            scores['overall'] = 50
+        
+        return scores
     
     def _get_maturity_level(self, score: int) -> str:
-        """Get maturity level description"""
         if score >= 80:
-            return "Market leader"
-        elif score >= 60:
-            return "Strong performer"
-        elif score >= 40:
-            return "Middle of the pack"
-        elif score >= 20:
-            return "Needs improvement"
+            return self._maturity("advanced")
+        elif score >= 65:
+            return self._maturity("developed")
+        elif score >= 50:
+            return self._maturity("average")
+        elif score >= 35:
+            return self._maturity("developing")
         else:
-            return "Critical gaps"
+            return self._maturity("beginner")
     
-    def _calculate_overall_score(
-        self,
-        your_score: int,
-        positioning: Dict[str, Any],
-        threats: List[Dict[str, Any]],
-        market_gaps: List[Dict[str, Any]]
-    ) -> int:
-        """Calculate overall strategic score"""
+    def _analyze_competitive_position(self, benchmark: Dict[str, Any]) -> Dict[str, Any]:
+        your_position = benchmark.get('your_position', 1)
+        total = benchmark.get('total_analyzed', 1)
         
-        # Base: your digital score
-        score = your_score * 0.4
+        if total <= 1:
+            return {
+                'position': 'unknown',
+                'label': {'fi': 'Ei vertailutietoja', 'en': 'No comparison data'}.get(self._language),
+                'rank': 1,
+                'total': 1
+            }
         
-        # Positioning score
-        competitive_score = positioning.get('competitive_score', 50)
-        score += competitive_score * 0.3
+        percentile = (total - your_position + 1) / total
         
-        # Penalty for threats
-        critical_threats = sum(1 for t in threats if t.get('severity') == 'critical')
-        high_threats = sum(1 for t in threats if t.get('severity') == 'high')
-        threat_penalty = (critical_threats * 10) + (high_threats * 5)
-        score -= threat_penalty
+        if your_position == 1:
+            position_key = 'leader'
+        elif percentile >= 0.66:
+            position_key = 'challenger'
+        elif percentile >= 0.33:
+            position_key = 'middle'
+        else:
+            position_key = 'behind'
         
-        # Bonus for opportunities
-        high_potential_gaps = sum(1 for g in market_gaps if g.get('potential') == 'high')
-        opportunity_bonus = min(high_potential_gaps * 5, 15)
-        score += opportunity_bonus
-        
-        return max(0, min(100, int(score)))
+        return {
+            'position': position_key,
+            'label': self._position(position_key),
+            'rank': your_position,
+            'total': total,
+            'percentile': round(percentile * 100)
+        }
     
-    def _create_strategic_summary(
+    def _prioritize_strategically(
         self,
-        positioning: Dict[str, Any],
-        recommendations: List[Dict[str, Any]],
-        creative_boldness: Dict[str, Any],
+        guardian_actions: List[Dict[str, Any]],
+        growth_opportunities: List[Dict[str, Any]],
         overall_score: int
-    ) -> Dict[str, Any]:
-        """Create strategic summary"""
+    ) -> List[Dict[str, Any]]:
+        all_priorities = []
         
-        # Get top 3 priorities
-        priorities = []
-        for rec in recommendations[:3]:
-            priorities.append({
-                'title': rec.get('title', rec.get('recommendation', '')),
-                'priority': rec.get('priority', 'medium'),
-                'impact': rec.get('impact', 'medium')
+        # Determine weight balance
+        defense_weight = 1.5 if overall_score < 50 else 1.0
+        growth_weight = 1.5 if overall_score >= 60 else 1.0
+        
+        # Add guardian actions
+        for action in guardian_actions:
+            roi = action.get('roi_score', 50)
+            strategic_score = roi * defense_weight
+            all_priorities.append({
+                'source': 'defense',
+                'title': action.get('title', ''),
+                'category': action.get('category', ''),
+                'impact': action.get('impact', 'medium'),
+                'effort': action.get('effort', 'medium'),
+                'strategic_score': strategic_score,
+                'type': 'risk_mitigation'
             })
+        
+        # Add growth opportunities
+        for opp in growth_opportunities:
+            impact_scores = {'high': 80, 'medium': 50, 'low': 30}
+            effort_scores = {'low': 80, 'medium': 50, 'high': 30}
+            
+            impact = impact_scores.get(opp.get('impact', 'medium'), 50)
+            effort = effort_scores.get(opp.get('effort', 'medium'), 50)
+            roi = (impact + effort) / 2
+            strategic_score = roi * growth_weight
+            
+            all_priorities.append({
+                'source': 'growth',
+                'title': opp.get('title', ''),
+                'category': opp.get('category', ''),
+                'impact': opp.get('impact', 'medium'),
+                'effort': opp.get('effort', 'medium'),
+                'strategic_score': strategic_score,
+                'type': 'growth_opportunity'
+            })
+        
+        # Sort by strategic score
+        all_priorities.sort(key=lambda x: x.get('strategic_score', 0), reverse=True)
+        
+        return all_priorities[:10]
+    
+    def _compile_key_insights(
+        self,
+        analyst_results: Dict[str, Any],
+        guardian_results: Dict[str, Any],
+        prospector_results: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        insights = []
+        
+        # From analyst
+        if analyst_results:
+            benchmark = analyst_results.get('benchmark', {})
+            insights.append({
+                'source': 'analyst',
+                'type': 'benchmark',
+                'data': benchmark
+            })
+        
+        # From guardian
+        if guardian_results:
+            insights.append({
+                'source': 'guardian',
+                'type': 'risk',
+                'threat_count': len(guardian_results.get('threats', [])),
+                'rasm_score': guardian_results.get('rasm_score', 0)
+            })
+        
+        # From prospector
+        if prospector_results:
+            insights.append({
+                'source': 'prospector',
+                'type': 'opportunity',
+                'opportunity_count': len(prospector_results.get('growth_opportunities', [])),
+                'quick_win_count': len(prospector_results.get('quick_wins', []))
+            })
+        
+        return insights
+    
+    def _generate_executive_summary(
+        self,
+        overall_score: int,
+        maturity_level: str,
+        competitive_position: Dict[str, Any],
+        strategic_priorities: List[Dict[str, Any]],
+        guardian_results: Dict[str, Any],
+        prospector_results: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        # Strengths
+        strengths = []
+        if competitive_position.get('position') in ['leader', 'challenger']:
+            strengths.append({'fi': 'Vahva kilpailuasema', 'en': 'Strong competitive position'}.get(self._language))
+        
+        if guardian_results and guardian_results.get('rasm_score', 0) > 70:
+            strengths.append({'fi': 'Hyvä tietoturvataso', 'en': 'Good security posture'}.get(self._language))
+        
+        # Weaknesses
+        weaknesses = []
+        if guardian_results:
+            for threat in guardian_results.get('threats', [])[:2]:
+                weaknesses.append(threat.get('title', ''))
+        
+        # Top priorities
+        top_priorities = [p.get('title', '') for p in strategic_priorities[:3]]
         
         return {
             'overall_score': overall_score,
-            'positioning_quadrant': positioning.get('positioning_quadrant', 'Unknown'),
-            'competitive_score': positioning.get('competitive_score', 0),
-            'creative_boldness_score': creative_boldness.get('creative_boldness_score', 0),
-            'top_priorities': priorities,
-            'recommendation_count': len(recommendations)
+            'maturity_level': maturity_level,
+            'position': competitive_position.get('label', ''),
+            'strengths': strengths,
+            'weaknesses': weaknesses,
+            'top_priorities': top_priorities
+        }
+    
+    def _generate_recommendations(
+        self,
+        priorities: List[Dict[str, Any]],
+        overall_score: int
+    ) -> Dict[str, List[str]]:
+        immediate = []
+        short_term = []
+        medium_term = []
+        
+        for idx, p in enumerate(priorities):
+            title = p.get('title', '')
+            effort = p.get('effort', 'medium')
+            
+            if effort == 'low' and len(immediate) < 3:
+                immediate.append(title)
+            elif effort == 'medium' and len(short_term) < 3:
+                short_term.append(title)
+            elif len(medium_term) < 3:
+                medium_term.append(title)
+        
+        return {
+            'immediate': immediate,  # 1-2 weeks
+            'short_term': short_term,  # 1-3 months
+            'medium_term': medium_term  # 3-6 months
         }
