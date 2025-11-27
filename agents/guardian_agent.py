@@ -63,6 +63,52 @@ COMPETITOR_INSIGHTS = {
     },
 }
 
+# ============================================================================
+# GUARDIAN TRANSLATIONS - used by _t() method
+# ============================================================================
+GUARDIAN_TRANSLATIONS = {
+    "guardian.no_data": {
+        "fi": "⚠️ Ei analyysidataa saatavilla riskiarviointiin",
+        "en": "⚠️ No analysis data available for risk assessment"
+    },
+    "guardian.starting_rasm": {
+        "fi": "🛡️ Aloitetaan Revenue Attack Surface Mapping...",
+        "en": "🛡️ Starting Revenue Attack Surface Mapping..."
+    },
+    "guardian.risk_critical": {
+        "fi": "🚨 KRIITTINEN: €{amount} vuosittainen liikevaihtoriski tunnistettu!",
+        "en": "🚨 CRITICAL: €{amount} annual revenue at risk identified!"
+    },
+    "guardian.risk_high": {
+        "fi": "⚠️ KORKEA RISKI: €{amount} vuosittainen liikevaihtoriski",
+        "en": "⚠️ HIGH RISK: €{amount} annual revenue at risk"
+    },
+    "guardian.risk_medium": {
+        "fi": "🟡 Kohtalainen riski: €{amount} vuosittainen liikevaihtovaikutus",
+        "en": "🟡 Moderate risk: €{amount} annual revenue impact"
+    },
+    "guardian.threat_critical": {
+        "fi": "🚨 KRIITTINEN UHKA [{category}]: {title}",
+        "en": "🚨 CRITICAL THREAT [{category}]: {title}"
+    },
+    "guardian.threat_high": {
+        "fi": "⚠️ KORKEA UHKA [{category}]: {title}",
+        "en": "⚠️ HIGH THREAT [{category}]: {title}"
+    },
+    "guardian.priority_action": {
+        "fi": "🎯 Prioriteetti #{idx}: {title} (ROI: {roi}x)",
+        "en": "🎯 Priority #{idx}: {title} (ROI: {roi}x)"
+    },
+    "guardian.complete": {
+        "fi": "✅ Riskianalyysi valmis: {count} uhkaa tunnistettu, RASM-pistemäärä: {score}/100",
+        "en": "✅ Risk analysis complete: {count} threats identified, RASM score: {score}/100"
+    },
+    "guardian.competitor_assessment_complete": {
+        "fi": "🎯 Kilpailija-arviointi valmis",
+        "en": "🎯 Competitor assessment complete"
+    },
+}
+
 
 class GuardianAgent(BaseAgent):
     """
@@ -79,6 +125,34 @@ class GuardianAgent(BaseAgent):
         )
         self.dependencies = ['scout', 'analyst']
         self._language = 'en'  # Default language, updated in execute()
+    
+    def _t(self, key: str, **kwargs) -> str:
+        """
+        Get translation for key with optional format arguments.
+        
+        Usage:
+            self._t("guardian.risk_critical", amount="50,000")
+            self._t("guardian.complete", count=5, score=75)
+        """
+        translation = GUARDIAN_TRANSLATIONS.get(key, {}).get(self._language)
+        
+        if not translation:
+            # Fallback to English
+            translation = GUARDIAN_TRANSLATIONS.get(key, {}).get('en', key)
+        
+        if not translation:
+            # If still no translation, return the key itself
+            return key
+        
+        # Format with kwargs if provided
+        if kwargs:
+            try:
+                return translation.format(**kwargs)
+            except KeyError as e:
+                logger.warning(f"[Guardian] Translation format error for {key}: {e}")
+                return translation
+        
+        return translation
     
     def _task(self, key: str) -> str:
         return GUARDIAN_TASKS.get(key, {}).get(self._language, key)
@@ -278,123 +352,76 @@ class GuardianAgent(BaseAgent):
                 'severity': 'high' if seo_comp.get('your_score', 100) < 30 else 'medium',
                 'score': seo_comp.get('your_score', 0),
                 'impact': 'high',
-                'effort': 'medium'
+                'description': 'SEO optimization needed',
+                'recommendation': 'Improve meta tags, headings, and content structure'
             })
         
         # Mobile threats
-        if basic.get('mobile_ready') not in ['Kyllä', 'Yes', True]:
+        mobile_comp = category_comparison.get('mobile', {})
+        if mobile_comp.get('your_score', 100) < 50:
             threats.append({
                 'category': 'mobile',
                 'title': self._threat_title('mobile'),
-                'severity': 'high',
+                'severity': 'high' if mobile_comp.get('your_score', 100) < 30 else 'medium',
+                'score': mobile_comp.get('your_score', 0),
                 'impact': 'high',
-                'effort': 'medium'
+                'description': 'Mobile optimization needed',
+                'recommendation': 'Implement responsive design and mobile-first approach'
             })
         
-        # SSL threats
-        if not tech.get('has_ssl'):
+        # SSL threat
+        if not tech.get('has_ssl', True):
             threats.append({
                 'category': 'ssl',
                 'title': self._threat_title('ssl'),
                 'severity': 'critical',
+                'score': 0,
                 'impact': 'critical',
-                'effort': 'low'
+                'description': 'SSL certificate missing',
+                'recommendation': 'Install SSL certificate immediately'
             })
         
         # Performance threats
-        perf_score = tech.get('performance_score', 50)
-        if perf_score < 50:
+        perf_comp = category_comparison.get('performance', {})
+        if perf_comp.get('your_score', 100) < 50:
             threats.append({
                 'category': 'performance',
                 'title': self._threat_title('performance'),
-                'severity': 'high' if perf_score < 30 else 'medium',
-                'score': perf_score,
+                'severity': 'medium',
+                'score': perf_comp.get('your_score', 0),
                 'impact': 'medium',
-                'effort': 'high'
-            })
-        
-        # Competitive threats
-        your_score = benchmark.get('your_score', 0)
-        avg_comp = benchmark.get('avg_competitor_score', 0)
-        if your_score < avg_comp - 15:
-            threats.append({
-                'category': 'competitive',
-                'title': self._threat_title('competitive'),
-                'severity': 'high',
-                'your_score': your_score,
-                'competitor_avg': avg_comp,
-                'gap': avg_comp - your_score,
-                'impact': 'high',
-                'effort': 'high'
+                'description': 'Website performance issues',
+                'recommendation': 'Optimize images, reduce scripts, enable caching'
             })
         
         # Content threats
-        content_score = content.get('quality_score', 50)
-        if content_score < 40:
+        content_comp = category_comparison.get('content', {})
+        if content_comp.get('your_score', 100) < 40:
             threats.append({
                 'category': 'content',
                 'title': self._threat_title('content'),
                 'severity': 'medium',
-                'score': content_score,
+                'score': content_comp.get('your_score', 0),
                 'impact': 'medium',
-                'effort': 'medium'
+                'description': 'Content quality issues',
+                'recommendation': 'Improve content depth and quality'
             })
         
-        # Sort by severity
-        severity_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
-        threats.sort(key=lambda x: severity_order.get(x.get('severity', 'low'), 3))
-        
-        return threats
-    
-    def _prioritize_actions(
-        self,
-        threats: List[Dict[str, Any]],
-        risk_register: List[Any]
-    ) -> List[Dict[str, Any]]:
-        actions = []
-        
-        impact_scores = {'critical': 100, 'high': 75, 'medium': 50, 'low': 25}
-        effort_scores = {'low': 100, 'medium': 60, 'high': 30}
-        
-        for threat in threats:
-            impact = impact_scores.get(threat.get('impact', 'medium'), 50)
-            effort = effort_scores.get(threat.get('effort', 'medium'), 60)
-            
-            roi_score = (impact * effort) / 100
-            
-            actions.append({
-                'title': threat.get('title', ''),
-                'category': threat.get('category', ''),
-                'severity': threat.get('severity', 'medium'),
-                'impact': threat.get('impact', 'medium'),
-                'effort': threat.get('effort', 'medium'),
-                'roi_score': roi_score
+        # Competitive threat
+        avg_score = benchmark.get('avg_score', 0)
+        your_score = analysis.get('score', 0)
+        if your_score < avg_score - 10:
+            threats.append({
+                'category': 'competitive',
+                'title': self._threat_title('competitive'),
+                'severity': 'high' if your_score < avg_score - 20 else 'medium',
+                'score': your_score,
+                'impact': 'high',
+                'description': f'Score {your_score} vs industry avg {avg_score}',
+                'recommendation': 'Focus on closing the gap with competitors'
             })
         
-        actions.sort(key=lambda x: x.get('roi_score', 0), reverse=True)
-        
-        return actions
-    
-    def _calculate_rasm_score(
-        self,
-        threats: List[Dict[str, Any]],
-        analysis: Dict[str, Any]
-    ) -> int:
-        # Start with 100 and subtract based on threats
-        score = 100
-        
-        severity_penalties = {'critical': 25, 'high': 15, 'medium': 8, 'low': 3}
-        
-        for threat in threats:
-            severity = threat.get('severity', 'medium')
-            penalty = severity_penalties.get(severity, 8)
-            score -= penalty
-        
-        return max(0, min(100, score))
-    
-    # ========================================
-    # COMPETITOR THREAT ASSESSMENT
-    # ========================================
+        return sorted(threats, key=lambda x: {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}.get(x.get('severity', 'low'), 4))
     
     async def _assess_competitor_threats(
         self,
@@ -403,169 +430,170 @@ class GuardianAgent(BaseAgent):
         scout_data: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
-        Arvioi kilpailijoiden todellinen uhkataso.
-        
-        Ei riitä, että kilpailijan digitaalinen pistemäärä on korkea.
-        Pitää myös arvioida: onko tämä vakavasti otettava toimija?
+        Arvioi kilpailijoiden uhkataso käyttäen moniulotteista signaalien analyysiä.
         """
-        if not competitor_analyses:
-            return {
-                'assessments': [],
-                'summary': {'high': 0, 'medium': 0, 'low': 0}
-            }
         
         assessments = []
+        threat_counts = {'high': 0, 'medium': 0, 'low': 0}
         
-        for comp in competitor_analyses:
-            try:
-                assessment = await self._assess_single_competitor(
-                    competitor=comp,
-                    your_score=your_score,
-                    scout_data=scout_data
-                )
-                assessments.append(assessment)
-            except Exception as e:
-                logger.warning(f"[Guardian] Competitor assessment failed: {e}")
-                continue
+        for competitor in competitor_analyses:
+            url = competitor.get('url', '')
+            domain = urlparse(url).netloc.replace('www.', '') if url else 'unknown'
+            
+            # Kerää signaalit
+            signals = {
+                'digital_score': competitor.get('score', 0),
+                'score_diff': competitor.get('score', 0) - your_score,
+                'domain_age': self._analyze_domain_age(domain, scout_data),
+                'company_size': self._estimate_company_size(competitor),
+                'growth_signals': self._detect_growth_signals(competitor),
+                'trust_signals': self._detect_trust_signals(competitor)
+            }
+            
+            # Laske uhkataso
+            threat_score, reasoning = self._calculate_threat_level(signals)
+            
+            # Määritä uhkataso
+            if threat_score >= 7:
+                threat_level = 'high'
+            elif threat_score >= 4:
+                threat_level = 'medium'
+            else:
+                threat_level = 'low'
+            
+            threat_counts[threat_level] += 1
+            
+            assessment = {
+                'domain': domain,
+                'url': url,
+                'name': self._extract_domain_name(url),
+                'digital_score': signals['digital_score'],
+                'threat_score': threat_score,
+                'threat_level': threat_level,
+                'threat_label': THREAT_LEVEL_LABELS[threat_level][self._language],
+                'reasoning': reasoning,
+                'signals': signals
+            }
+            
+            assessments.append(assessment)
+            
+            # Emit insight for high threats
+            if threat_level == 'high':
+                self._emit_competitor_insight(assessment)
         
-        # Sort by threat level (high first)
-        threat_order = {'high': 0, 'medium': 1, 'low': 2}
-        assessments.sort(key=lambda x: (threat_order.get(x['threat_level'], 2), -x['digital_score']))
-        
-        # Count by threat level
-        summary = {'high': 0, 'medium': 0, 'low': 0}
-        for a in assessments:
-            level = a.get('threat_level', 'medium')
-            summary[level] = summary.get(level, 0) + 1
-        
-        # Emit insights for top threats
-        for assessment in assessments[:3]:
-            self._emit_competitor_insight(assessment)
+        # Sort by threat score
+        assessments.sort(key=lambda x: x['threat_score'], reverse=True)
         
         # Emit summary
-        insight_text = COMPETITOR_INSIGHTS['assessment_complete'][self._language].format(
-            high=summary['high'],
-            medium=summary['medium'],
-            low=summary['low']
+        summary_text = COMPETITOR_INSIGHTS["assessment_complete"][self._language].format(
+            high=threat_counts['high'],
+            medium=threat_counts['medium'],
+            low=threat_counts['low']
         )
+        
         self._emit_insight(
-            insight_text,
+            summary_text,
             priority=AgentPriority.MEDIUM,
             insight_type=InsightType.FINDING,
-            data={'competitor_summary': summary}
+            data=threat_counts
         )
         
         return {
             'assessments': assessments,
-            'summary': summary
+            'threat_counts': threat_counts,
+            'highest_threat': assessments[0] if assessments else None
         }
     
-    async def _assess_single_competitor(
+    def _prioritize_actions(
         self,
-        competitor: Dict[str, Any],
-        your_score: int,
-        scout_data: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        """Arvioi yksittäisen kilpailijan uhkataso"""
+        threats: List[Dict[str, Any]],
+        risk_register: List[Any]
+    ) -> List[Dict[str, Any]]:
+        """Priorisoi toimenpiteet ROI:n perusteella"""
         
-        url = competitor.get('url', '')
-        name = competitor.get('name', '') or self._extract_domain_name(url)
-        digital_score = competitor.get('final_score', 0) or competitor.get('score', 0)
+        actions = []
         
-        # Kerää signaalit
-        signals = {
-            'digital_score': digital_score,
-            'score_diff': digital_score - your_score,  # Positive = they're ahead
-            'domain_age': await self._check_domain_age(url),
-            'company_size': self._estimate_company_size(competitor),
-            'growth_signals': self._detect_growth_signals(competitor),
-            'trust_signals': self._detect_trust_signals(competitor),
-        }
+        for threat in threats:
+            # Calculate ROI score (impact / effort)
+            impact_scores = {'critical': 10, 'high': 7, 'medium': 4, 'low': 1}
+            impact = impact_scores.get(threat.get('impact', 'low'), 1)
+            
+            # Estimate effort (1-10, lower is easier)
+            effort = 5  # Default medium effort
+            
+            roi_score = impact / effort * 10
+            
+            actions.append({
+                'title': threat.get('title', 'Unknown'),
+                'category': threat.get('category', ''),
+                'roi_score': roi_score,
+                'impact': threat.get('impact', 'medium'),
+                'recommendation': threat.get('recommendation', ''),
+                'threat_severity': threat.get('severity', 'medium')
+            })
         
-        # Laske uhkataso
-        threat_score, reasoning = self._calculate_threat_level(signals)
-        
-        # Määritä threat level
-        if threat_score >= 7:
-            threat_level = 'high'
-        elif threat_score >= 4:
-            threat_level = 'medium'
-        else:
-            threat_level = 'low'
-        
-        return {
-            'url': url,
-            'name': name,
-            'digital_score': digital_score,
-            'score_diff': signals['score_diff'],
-            'threat_score': threat_score,
-            'threat_level': threat_level,
-            'threat_label': THREAT_LEVEL_LABELS[threat_level][self._language],
-            'signals': signals,
-            'reasoning': reasoning
-        }
+        # Sort by ROI score
+        return sorted(actions, key=lambda x: x['roi_score'], reverse=True)
     
-    async def _check_domain_age(self, url: str) -> Dict[str, Any]:
-        """Tarkista domainin ikä WHOIS:sta"""
-        try:
-            import whois
-            domain = urlparse(url).netloc or url
-            domain = domain.replace('www.', '')
-            
-            w = whois.whois(domain)
-            
-            creation_date = w.creation_date
-            if isinstance(creation_date, list):
-                creation_date = creation_date[0]
-            
-            if creation_date:
-                age_days = (datetime.now() - creation_date).days
-                age_years = age_days / 365.25
-                
-                return {
-                    'created': creation_date.isoformat() if hasattr(creation_date, 'isoformat') else str(creation_date),
-                    'age_days': age_days,
-                    'age_years': round(age_years, 1),
-                    'is_established': age_years >= 2,  # 2+ vuotta = vakiintunut
-                    'is_new': age_years < 1  # Alle vuosi = uusi
-                }
-        except Exception as e:
-            logger.debug(f"[Guardian] WHOIS lookup failed for {url}: {e}")
+    def _calculate_rasm_score(
+        self,
+        threats: List[Dict[str, Any]],
+        analysis: Dict[str, Any]
+    ) -> int:
+        """
+        Calculate Revenue Attack Surface Mapping score (0-100).
+        Higher score = more protected, lower attack surface.
+        """
         
-        return {
-            'created': None,
-            'age_days': None,
-            'age_years': None,
-            'is_established': None,
-            'is_new': None
+        base_score = 100
+        
+        # Deduct for each threat
+        severity_deductions = {'critical': 25, 'high': 15, 'medium': 8, 'low': 3}
+        
+        for threat in threats:
+            severity = threat.get('severity', 'low')
+            deduction = severity_deductions.get(severity, 3)
+            base_score -= deduction
+        
+        # Ensure score is between 0 and 100
+        return max(0, min(100, base_score))
+    
+    def _analyze_domain_age(self, domain: str, scout_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Analysoi domain-ikä (arvio)"""
+        
+        result = {
+            'domain': domain,
+            'is_established': False,
+            'is_new': False,
+            'age_years': 0
         }
+        
+        # Simple heuristics based on domain characteristics
+        # In production, you'd use WHOIS data
+        if any(tld in domain for tld in ['.fi', '.com', '.eu']):
+            # Assume established if common TLD
+            result['is_established'] = True
+            result['age_years'] = 5
+        
+        return result
     
     def _estimate_company_size(self, competitor: Dict[str, Any]) -> Dict[str, Any]:
-        """Arvioi yrityksen koko meta-signaaleista"""
-        
-        # Signaaleja sivuston analyysistä
-        basic = competitor.get('basic', {})
-        content = competitor.get('content', {})
+        """Arvioi yrityksen koko signaalien perusteella"""
         
         signals = {
-            'has_careers_page': False,
-            'has_multiple_locations': False,
-            'has_team_page': False,
-            'content_volume': 'low',
-            'estimated_employees': 'unknown'
+            'estimated_employees': 'unknown',
+            'content_volume': 'unknown'
         }
         
-        # Tarkista sivustolta löytyvät signaalit
-        page_count = basic.get('page_count', 0)
+        content = competitor.get('content', {})
         word_count = content.get('word_count', 0)
         
-        # Content volume arvioi
-        if word_count > 10000 or page_count > 50:
+        if word_count > 2000:
             signals['content_volume'] = 'high'
-            signals['estimated_employees'] = '20+'
-        elif word_count > 3000 or page_count > 20:
+            signals['estimated_employees'] = '10+'
+        elif word_count > 500:
             signals['content_volume'] = 'medium'
-            signals['estimated_employees'] = '5-20'
+            signals['estimated_employees'] = '5-10'
         else:
             signals['content_volume'] = 'low'
             signals['estimated_employees'] = '1-5'
