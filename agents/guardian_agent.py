@@ -292,9 +292,15 @@ class GuardianAgent(BaseAgent):
     ) -> List[Dict[str, Any]]:
         threats = []
         
-        basic = analysis.get('basic', {})
-        tech = analysis.get('technical', {})
-        content = analysis.get('content', {})
+        basic = analysis.get('basic_analysis', analysis.get('basic', {}))
+        # Technical data is in detailed_analysis.technical_audit, not at root level
+        tech = analysis.get('detailed_analysis', {}).get('technical_audit', analysis.get('technical', {}))
+        content = analysis.get('detailed_analysis', {}).get('content_analysis', analysis.get('content', {}))
+        
+        # Debug logging
+        logger.info(f"[Guardian] Analysis keys: {list(analysis.keys())}")
+        logger.info(f"[Guardian] Tech keys: {list(tech.keys()) if tech else 'EMPTY'}")
+        logger.info(f"[Guardian] has_ssl value: {tech.get('has_ssl', 'NOT FOUND')}")
         
         # SEO threats
         seo_comp = category_comparison.get('seo', {})
