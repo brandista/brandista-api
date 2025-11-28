@@ -40,8 +40,8 @@ class CompanyIntel:
     Combines YTJ (official registry) + Kauppalehti (financial data)
     """
     
-    # PRH/YTJ Open Data API
-    YTJ_API_BASE = "https://avoindata.prh.fi/bis/v1"
+    # PRH/YTJ Open Data API - V3 (updated August 2024)
+    YTJ_API_BASE = "https://avoindata.prh.fi/opendata-ytj-api/v3/companies"
     
     # Kauppalehti company pages
     KAUPPALEHTI_BASE = "https://www.kauppalehti.fi/yritykset/yritys"
@@ -210,14 +210,12 @@ class CompanyIntel:
     # =========================================================================
     
     async def _ytj_search(self, name: str, max_results: int = 5) -> List[Dict[str, Any]]:
-        """Search YTJ by company name"""
+        """Search YTJ by company name using V3 API"""
         
-        logger.info(f"[CompanyIntel] Searching YTJ for: '{name}'")
+        logger.info(f"[CompanyIntel] Searching YTJ V3 for: '{name}'")
         
         url = f"{self.YTJ_API_BASE}"
         params = {
-            'totalResults': 'true',
-            'maxResults': max_results,
             'name': name
         }
         
@@ -225,12 +223,20 @@ class CompanyIntel:
         response.raise_for_status()
         
         data = response.json()
-        results = data.get('results', [])
+        # V3 API returns 'companies' array instead of 'results'
+        results = data.get('companies', data.get('results', []))
         
-        logger.info(f"[CompanyIntel] YTJ returned {len(results)} results for '{name}'")
+        logger.info(f"[CompanyIntel] YTJ V3 returned {len(results)} results for '{name}'")
+        
+        # Debug: log first result structure
+        if results:
+            first = results[0]
+            logger.info(f"[CompanyIntel] V3 response keys: {list(first.keys())}")
+            logger.info(f"[CompanyIntel] V3 businessId: {first.get('businessId')}")
+            logger.info(f"[CompanyIntel] V3 names: {first.get('names', [])[:2]}")
         
         companies = []
-        for item in results:
+        for item in results[:max_results]:
             company = self._parse_ytj_result(item)
             if company:
                 companies.append(company)
@@ -239,11 +245,13 @@ class CompanyIntel:
         return companies
     
     async def _ytj_get_company(self, business_id: str) -> Optional[Dict[str, Any]]:
-        """Get single company from YTJ by business ID"""
+        """Get single company from YTJ V3 by business ID"""
         
-        url = f"{self.YTJ_API_BASE}/{business_id}"
+        # V3 API uses businessId parameter instead of path
+        url = f"{self.YTJ_API_BASE}"
+        params = {'businessId': business_id}
         
-        response = await self.client.get(url)
+        response = await self.client.get(url, params=params)
         
         if response.status_code == 404:
             return None
@@ -251,7 +259,8 @@ class CompanyIntel:
         response.raise_for_status()
         
         data = response.json()
-        results = data.get('results', [])
+        # V3 API returns 'companies' array
+        results = data.get('companies', data.get('results', []))
         
         if not results:
             return None
@@ -259,23 +268,25 @@ class CompanyIntel:
         return self._parse_ytj_result(results[0])
     
     def _parse_ytj_result(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Parse YTJ API result into clean format"""
+        """Parse YTJ V3 API result into clean format"""
         
         try:
-            # Basic info
+            # Basic info - V3 uses 'businessId' 
             business_id = item.get('businessId', '')
             
-            # Get names (prefer Finnish)
+            # Get names - V3 uses 'names' array with 'name' and 'type' fields
             names = item.get('names', [])
             name = ''
             for n in names:
-                if n.get('language') == 'FI' and n.get('registrationDate'):
+                # V3: type is string like "0" for current name
+                n_type = n.get('type', '')
+                if n_type == '0' or not n.get('endDate'):  # Current/active name
                     name = n.get('name', '')
                     break
             if not name and names:
                 name = names[0].get('name', '')
             
-            # Registration date
+            # Registration date - V3 uses 'registrationDate' in root
             reg_date = item.get('registrationDate', '')
             founded_year = None
             if reg_date:
@@ -284,41 +295,63 @@ class CompanyIntel:
                 except:
                     pass
             
-            # Address
+            # Address - V3 uses 'addresses' array
             addresses = item.get('addresses', [])
             address = None
             city = None
             postal_code = None
             for addr in addresses:
-                if addr.get('type') == 1:  # Street address
+                # V3: type is string, "1" = street address, "2" = postal
+                addr_type = str(addr.get('type', ''))
+                if addr_type == '1' or not address:  # Street address preferred
                     address = addr.get('street', '')
                     city = addr.get('city', '')
                     postal_code = addr.get('postCode', '')
-                    break
+                    if addr_type == '1':
+                        break
             
-            # Business line (TOL code)
+            # Business line (TOL code) - V3 uses 'businessLines'
             business_lines = item.get('businessLines', [])
             industry = None
             industry_code = None
             for bl in business_lines:
-                if bl.get('registrationDate'):
-                    industry = bl.get('name', '')
-                    industry_code = bl.get('code', '')
+                # Get descriptions for industry name
+                descriptions = bl.get('descriptions', [])
+                for desc in descriptions:
+                    if desc.get('language') == 'FI':
+                        industry = desc.get('description', '')
+                        break
+                if not industry and descriptions:
+                    industry = descriptions[0].get('description', '')
+                industry_code = bl.get('code', '')
+                if not bl.get('endDate'):  # Current business line
                     break
             
-            # Company form
+            # Company form - V3 uses 'companyForms'
             company_forms = item.get('companyForms', [])
             company_form = None
             for cf in company_forms:
-                if cf.get('registrationDate'):
-                    company_form = cf.get('name', '')
+                # V3: name is in 'descriptions' array
+                descriptions = cf.get('descriptions', [])
+                for desc in descriptions:
+                    if desc.get('language') == 'FI':
+                        company_form = desc.get('description', '')
+                        break
+                if not company_form and descriptions:
+                    company_form = descriptions[0].get('description', '')
+                if company_form:
                     break
             
-            # Status
+            # Status - V3 uses 'companySituations' for liquidation etc.
             status = 'active'
-            liquidations = item.get('liquidations', [])
-            if liquidations:
+            situations = item.get('companySituations', [])
+            if situations:
                 status = 'liquidation'
+            
+            # Trade register status - V3 has 'tradeRegisterStatus'
+            tr_status = item.get('tradeRegisterStatus', '')
+            if tr_status and 'Poistettu' in tr_status:
+                status = 'dissolved'
             
             return {
                 'business_id': business_id,
