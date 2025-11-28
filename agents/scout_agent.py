@@ -64,6 +64,11 @@ class ScoutAgent(BaseAgent):
             get_domain_from_url
         )
         
+        # DEBUG: Log at very start of run
+        logger.info(f"[Scout] ========== SCOUT AGENT STARTING ==========")
+        logger.info(f"[Scout] URL: {context.url}")
+        logger.info(f"[Scout] COMPANY_INTEL_AVAILABLE at start: {COMPANY_INTEL_AVAILABLE}")
+        
         self._update_progress(15, self._task("analyzing_company"))
         
         # 1. Hae kohdesivuston sisältö
