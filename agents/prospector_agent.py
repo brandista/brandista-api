@@ -259,8 +259,9 @@ class ProspectorAgent(BaseAgent):
                 'timeframe': '1 week'
             })
         
-        # Security quick wins
-        if not tech.get('has_ssl'):
+        # Security quick wins - only if SSL is explicitly False
+        has_ssl = tech.get('has_ssl', True) if tech else True
+        if has_ssl is False:
             quick_wins.append({
                 'category': 'security',
                 'title': {'fi': 'Ota SSL käyttöön', 'en': 'Enable SSL'}.get(self._language),
