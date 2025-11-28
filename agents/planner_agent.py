@@ -65,6 +65,9 @@ class PlannerAgent(BaseAgent):
         return MILESTONE_NAMES.get(key, {}).get(self._language, key)
     
     async def execute(self, context: AnalysisContext) -> Dict[str, Any]:
+        # Store context for use in helper methods
+        self._context = context
+        
         strategist_results = self.get_dependency_results(context, 'strategist')
         guardian_results = self.get_dependency_results(context, 'guardian')
         prospector_results = self.get_dependency_results(context, 'prospector')
@@ -196,29 +199,83 @@ class PlannerAgent(BaseAgent):
     ) -> List[Dict[str, Any]]:
         phases = []
         
-        # Default tasks if no priorities provided
-        default_defense_tasks = [
-            {'title': 'Tarkista SSL-sertifikaatti', 'category': 'security', 'source': 'defense', 'effort': 'low'},
-            {'title': 'Optimoi meta-kuvaukset', 'category': 'seo', 'source': 'defense', 'effort': 'low'},
-            {'title': 'Tarkista mobiilioptimointi', 'category': 'mobile', 'source': 'defense', 'effort': 'medium'},
-            {'title': 'Lisää analytiikka', 'category': 'technical', 'source': 'defense', 'effort': 'low'},
-        ]
-        default_growth_tasks = [
-            {'title': 'Luo sisältöstrategia', 'category': 'content', 'source': 'growth', 'effort': 'medium'},
-            {'title': 'Paranna sivuston nopeutta', 'category': 'performance', 'source': 'growth', 'effort': 'medium'},
-            {'title': 'Rakenna backlink-profiilia', 'category': 'seo', 'source': 'growth', 'effort': 'high'},
-            {'title': 'Optimoi konversiot', 'category': 'ux', 'source': 'growth', 'effort': 'medium'},
-        ]
+        # Get actual analysis data to determine what needs fixing
+        analyst_results = self.get_dependency_results(self._context, 'analyst') if hasattr(self, '_context') else {}
+        your_analysis = analyst_results.get('your_analysis', {}) if analyst_results else {}
+        detailed = your_analysis.get('detailed_analysis', {})
+        technical = detailed.get('technical_audit', {})
+        seo = detailed.get('seo_basics', {})
         
-        # Use priorities if available, otherwise defaults
-        defense_priorities = [p for p in priorities if p.get('source') == 'defense']
-        growth_priorities = [p for p in priorities if p.get('source') == 'growth']
+        # Build defense tasks based on ACTUAL issues (not defaults)
+        defense_tasks = []
+        
+        # Only add SSL task if SSL is actually missing
+        has_ssl = technical.get('has_ssl', True)
+        if not has_ssl:
+            defense_tasks.append({'title': 'Asenna SSL-sertifikaatti', 'category': 'security', 'source': 'defense', 'effort': 'low', 'points': 5})
+        
+        # Only add meta task if meta is actually weak
+        meta_score = seo.get('meta_score', 100)
+        if meta_score < 70:
+            defense_tasks.append({'title': 'Optimoi meta-kuvaukset', 'category': 'seo', 'source': 'defense', 'effort': 'low', 'points': 3})
+        
+        # Only add mobile task if mobile optimization is missing
+        has_mobile = technical.get('has_mobile_optimization', True)
+        if not has_mobile:
+            defense_tasks.append({'title': 'Paranna mobiilioptimointi', 'category': 'mobile', 'source': 'defense', 'effort': 'medium', 'points': 5})
+        
+        # Only add analytics task if analytics is missing
+        has_analytics = technical.get('has_analytics', True)
+        if not has_analytics:
+            defense_tasks.append({'title': 'Lisää analytiikka', 'category': 'technical', 'source': 'defense', 'effort': 'low', 'points': 2})
+        
+        # Check page speed
+        speed_score = technical.get('page_speed_score', 80)
+        if speed_score < 50:
+            defense_tasks.append({'title': 'Paranna sivuston nopeutta', 'category': 'performance', 'source': 'defense', 'effort': 'medium', 'points': 3})
+        
+        # Log what we found
+        logger.info(f"[Planner] Analyst data: has_ssl={has_ssl}, meta_score={meta_score}, has_mobile={has_mobile}, has_analytics={has_analytics}")
+        logger.info(f"[Planner] Generated {len(defense_tasks)} defense tasks based on actual analysis")
+        
+        # Growth tasks - use Guardian priorities or Prospector opportunities
+        growth_tasks = []
+        
+        if guardian_results:
+            priority_actions = guardian_results.get('priority_actions', [])
+            for action in priority_actions[:4]:
+                growth_tasks.append({
+                    'title': action.get('action', action.get('title', '')),
+                    'category': action.get('category', 'growth'),
+                    'source': 'defense',
+                    'effort': action.get('effort', 'medium'),
+                    'points': 3
+                })
+        
+        if prospector_results and not growth_tasks:
+            opportunities = prospector_results.get('growth_opportunities', [])
+            for opp in opportunities[:4]:
+                growth_tasks.append({
+                    'title': opp.get('title', opp.get('name', '')),
+                    'category': opp.get('category', 'growth'),
+                    'source': 'growth',
+                    'effort': opp.get('effort', 'medium'),
+                    'points': opp.get('potential_score_gain', 3)
+                })
+        
+        # Fallback growth tasks only if nothing else
+        if not growth_tasks:
+            growth_tasks = [
+                {'title': 'Luo sisältöstrategia', 'category': 'content', 'source': 'growth', 'effort': 'medium', 'points': 3},
+                {'title': 'Rakenna backlink-profiilia', 'category': 'seo', 'source': 'growth', 'effort': 'high', 'points': 5},
+                {'title': 'Optimoi konversiot', 'category': 'ux', 'source': 'growth', 'effort': 'medium', 'points': 4},
+            ]
+        
+        # Use real priorities if available
+        defense_priorities = [p for p in priorities if p.get('source') == 'defense'] or defense_tasks
+        growth_priorities = [p for p in priorities if p.get('source') == 'growth'] or growth_tasks
         medium_priorities = [p for p in priorities if p.get('effort') == 'medium']
         
-        if not defense_priorities:
-            defense_priorities = default_defense_tasks
-        if not growth_priorities:
-            growth_priorities = default_growth_tasks
         if not medium_priorities:
             medium_priorities = defense_priorities[:2] + growth_priorities[:2]
         
