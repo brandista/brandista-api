@@ -571,6 +571,33 @@ async def websocket_agent_analysis(
                     scout_result = scout_data.data if hasattr(scout_data, 'data') else scout_data
                     competitor_urls_found = scout_result.get('competitor_urls', []) if scout_result else []
                     
+                    # Get Company Intelligence data from Scout
+                    competitors_enriched = scout_result.get('competitors_enriched', []) if scout_result else []
+                    
+                    # Extract your company info (from analysed URL)
+                    your_company = None
+                    if scout_result and scout_result.get('your_company_intel'):
+                        your_company = scout_result.get('your_company_intel')
+                    
+                    # Map competitor companies with their intel
+                    competitor_companies = []
+                    for comp in competitors_enriched:
+                        company_intel = comp.get('company_intel')
+                        if company_intel:
+                            competitor_companies.append({
+                                'name': company_intel.get('name'),
+                                'business_id': company_intel.get('business_id'),
+                                'city': company_intel.get('city'),
+                                'industry': company_intel.get('industry'),
+                                'employees': company_intel.get('employees'),
+                                'employees_text': company_intel.get('employees_text'),
+                                'revenue': company_intel.get('revenue'),
+                                'revenue_text': company_intel.get('revenue_text'),
+                                'ytj_url': company_intel.get('ytj_url'),
+                                'kauppalehti_url': company_intel.get('kauppalehti_url'),
+                                'source': company_intel.get('source'),
+                            })
+                    
                     # Get additional Strategist data
                     market_position = strategist_result.get('market_position', '') if strategist_result else ''
                     strategic_score = strategist_result.get('strategic_score', 0) if strategist_result else 0
@@ -607,6 +634,10 @@ async def websocket_agent_analysis(
                             # Scout data (NEW)
                             "competitors_found": len(competitor_urls_found),
                             "competitor_urls": competitor_urls_found,
+                            
+                            # Company Intelligence (Due Diligence)
+                            "your_company": your_company,
+                            "competitor_companies": competitor_companies,
                             
                             # Analyst data (flattened)
                             "your_score": your_score,
