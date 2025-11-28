@@ -121,7 +121,7 @@ class CompanyIntel:
         
         1. Extracts likely company name from domain
         2. Searches YTJ
-        3. Returns best match with full profile
+        3. Returns best match with full profile (prioritizes real companies over housing cooperatives)
         """
         logger.info(f"[CompanyIntel] Looking up company for domain: {domain}")
         
@@ -138,22 +138,26 @@ class CompanyIntel:
         
         logger.info(f"[CompanyIntel] Extracted name from domain: '{name_part}'")
         
-        # Try search
-        results = await self.search_company(name_part, max_results=3)
+        # Try search with Oy suffix first (more likely to find the real company)
+        results = await self.search_company(f"{name_part} oy", max_results=5)
+        
+        # If not found, try plain name
+        if not results:
+            results = await self.search_company(name_part, max_results=5)
         
         if not results:
             # Try without common suffixes
             for suffix in ['oy', 'ab', 'group', 'finland', 'fi']:
                 if name_part.endswith(suffix):
                     clean_name = name_part[:-len(suffix)]
-                    results = await self.search_company(clean_name, max_results=3)
+                    results = await self.search_company(clean_name, max_results=5)
                     if results:
                         break
         
         if not results:
             # Try with common suffixes added
-            for suffix in [' oy', ' ab', ' koru']:
-                results = await self.search_company(f"{name_part}{suffix}", max_results=3)
+            for suffix in [' ab', ' koru', ' group']:
+                results = await self.search_company(f"{name_part}{suffix}", max_results=5)
                 if results:
                     logger.info(f"[CompanyIntel] Found with suffix '{suffix}'")
                     break
@@ -162,8 +166,39 @@ class CompanyIntel:
             logger.info(f"[CompanyIntel] No company found for domain: {domain}")
             return None
         
-        # Get full profile of best match
-        best_match = results[0]
+        # Find best match - filter out housing cooperatives (Asunto Oy, As Oy, Bostads Ab)
+        # and prioritize companies with matching name
+        best_match = None
+        for company in results:
+            company_name = (company.get('name') or '').lower()
+            
+            # Skip housing cooperatives
+            if any(skip in company_name for skip in ['asunto oy', 'asunto-oy', 'as oy', 'as. oy', 'bostads', 'kiinteistö oy']):
+                logger.info(f"[CompanyIntel] Skipping housing cooperative: {company.get('name')}")
+                continue
+            
+            # Check if domain name appears in company name
+            if name_part.lower() in company_name:
+                best_match = company
+                logger.info(f"[CompanyIntel] Best match found: {company.get('name')}")
+                break
+        
+        # Fallback to first non-housing result
+        if not best_match:
+            for company in results:
+                company_name = (company.get('name') or '').lower()
+                if not any(skip in company_name for skip in ['asunto oy', 'asunto-oy', 'as oy', 'as. oy', 'bostads', 'kiinteistö oy']):
+                    best_match = company
+                    break
+        
+        # Last resort - just use first result
+        if not best_match and results:
+            best_match = results[0]
+        
+        if not best_match:
+            logger.info(f"[CompanyIntel] No suitable company found for domain: {domain}")
+            return None
+        
         business_id = best_match.get('business_id')
         
         if business_id:
