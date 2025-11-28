@@ -306,8 +306,17 @@ class CompanyIntel:
         
         companies = []
         for item in results[:max_results]:
+            # Skip dissolved companies (have endDate at root level)
+            if item.get('endDate'):
+                logger.info(f"[CompanyIntel] Skipping dissolved company in search: {item.get('names', [{}])[0].get('name', 'Unknown')} (endDate: {item.get('endDate')})")
+                continue
+            
             company = self._parse_ytj_result(item)
             if company:
+                # Double-check status after parsing
+                if company.get('status') == 'dissolved':
+                    logger.info(f"[CompanyIntel] Skipping dissolved company: {company.get('name')}")
+                    continue
                 companies.append(company)
                 logger.info(f"[CompanyIntel] Found: {company.get('name')} ({company.get('business_id')})")
         
@@ -426,11 +435,18 @@ class CompanyIntel:
             if tr_status and 'Poistettu' in tr_status:
                 status = 'dissolved'
             
+            # Check for company end date (dissolved companies)
+            end_date = item.get('endDate')
+            if end_date:
+                status = 'dissolved'
+                logger.info(f"[CompanyIntel] Company {name} has endDate: {end_date}")
+            
             return {
                 'business_id': business_id,
                 'name': name,
                 'founded_year': founded_year,
                 'registration_date': reg_date,
+                'end_date': end_date,
                 'address': address,
                 'city': city,
                 'postal_code': postal_code,
