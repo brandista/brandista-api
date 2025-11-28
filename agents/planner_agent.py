@@ -72,6 +72,12 @@ class PlannerAgent(BaseAgent):
         overall_score = strategist_results.get('overall_score', 50) if strategist_results else 50
         priorities = strategist_results.get('strategic_priorities', []) if strategist_results else []
         
+        # Debug: Log what we received
+        logger.info(f"[Planner] Strategist overall_score: {overall_score}")
+        logger.info(f"[Planner] Strategist priorities count: {len(priorities)}")
+        if priorities:
+            logger.info(f"[Planner] First 3 priorities: {[p.get('title', 'no title') for p in priorities[:3]]}")
+        
         self._emit_insight(
             self._t("planner.starting"),
             priority=AgentPriority.MEDIUM,

@@ -69,6 +69,11 @@ class StrategistAgent(BaseAgent):
         guardian_results = self.get_dependency_results(context, 'guardian')
         prospector_results = self.get_dependency_results(context, 'prospector')
         
+        # Debug: Log what we received
+        logger.info(f"[Strategist] Guardian results keys: {list(guardian_results.keys()) if guardian_results else 'None'}")
+        logger.info(f"[Strategist] Guardian priority_actions count: {len(guardian_results.get('priority_actions', [])) if guardian_results else 0}")
+        logger.info(f"[Strategist] Prospector growth_opportunities count: {len(prospector_results.get('growth_opportunities', [])) if prospector_results else 0}")
+        
         self._emit_insight(
             self._t("strategist.starting"),
             priority=AgentPriority.MEDIUM,
