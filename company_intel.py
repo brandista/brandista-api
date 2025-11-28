@@ -562,9 +562,8 @@ class CompanyIntel:
                         number_str = revenue_data.get('number', '')
                         unit = revenue_data.get('unit', '').upper()
                         
-                        # Parse the number
-                        # Remove spaces (thousand separators in Finnish)
-                        clean_num = number_str.replace(' ', '').replace(',', '.')
+                        # Parse the number - handle non-breaking spaces (\xa0) and regular spaces
+                        clean_num = number_str.replace('\xa0', '').replace(' ', '').replace(',', '.')
                         
                         try:
                             value = float(clean_num)
@@ -589,17 +588,13 @@ class CompanyIntel:
                         const allText = document.body.innerText;
                         
                         // Look for "Henkilöstömäärä" or "Henkilöstö" followed by a number
-                        // The number is typically just digits, maybe with spaces
-                        const match = allText.match(/Henkilöstö(?:määrä)?[\\*\\s:]*([\\d\\s]+)/i);
+                        // Take ONLY the first number (current year), not historical data
+                        const match = allText.match(/Henkilöstö(?:määrä)?[\\*\\s:\\n\\t]*([\\d]+)/i);
                         if (match) {
-                            // Get just the digits, remove any trailing text
-                            const numMatch = match[1].match(/^[\\d\\s]+/);
-                            if (numMatch) {
-                                return {
-                                    text: match[0],
-                                    number: numMatch[0].replace(/\\s/g, '')
-                                };
-                            }
+                            return {
+                                text: 'Henkilöstö: ' + match[1],
+                                number: match[1]
+                            };
                         }
                         return null;
                     }''')
@@ -608,8 +603,8 @@ class CompanyIntel:
                         logger.info(f"[CompanyIntel] Kauppalehti JS found employees: {employees_data}")
                         try:
                             emp_count = int(employees_data.get('number', '0'))
-                            # Sanity check - employees should be reasonable (1-1,000,000)
-                            if 1 <= emp_count <= 1_000_000:
+                            # Sanity check - employees should be reasonable (1-100,000)
+                            if 1 <= emp_count <= 100_000:
                                 data['employees'] = emp_count
                                 data['employees_text'] = employees_data.get('text', '')
                                 logger.info(f"[CompanyIntel] Parsed employees: {emp_count}")
