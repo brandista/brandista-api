@@ -660,6 +660,11 @@ async def websocket_agent_analysis(
                             'competitors_missing': mg.get('competitors_missing', len(competitor_urls_found))
                         })
                     
+                    # DEBUG: Log what we're about to send
+                    logger.info(f"[WS] competitor_threats count: {len(competitor_threats)}")
+                    logger.info(f"[WS] action_plan_mapped: phase1={len(action_plan_mapped.get('phase1', []))} phase2={len(action_plan_mapped.get('phase2', []))} phase3={len(action_plan_mapped.get('phase3', []))} this_week={action_plan_mapped.get('this_week') is not None}" if action_plan_mapped else "[WS] action_plan_mapped: None")
+                    logger.info(f"[WS] market_gaps_mapped count: {len(market_gaps_mapped)}")
+                    
                     # Lähetä lopputulos with all mapped data
                     await manager.send_json(websocket, {
                         "type": WSMessageType.ANALYSIS_COMPLETE.value,
