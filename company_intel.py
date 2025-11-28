@@ -271,8 +271,12 @@ class CompanyIntel:
         """Parse YTJ V3 API result into clean format"""
         
         try:
-            # Basic info - V3 uses 'businessId' 
-            business_id = item.get('businessId', '')
+            # Basic info - V3 'businessId' is a dict with 'value' key, not a string!
+            business_id_raw = item.get('businessId', '')
+            if isinstance(business_id_raw, dict):
+                business_id = business_id_raw.get('value', '')
+            else:
+                business_id = business_id_raw
             
             # Get names - V3 uses 'names' array with 'name' and 'type' fields
             names = item.get('names', [])
