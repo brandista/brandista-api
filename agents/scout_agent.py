@@ -157,11 +157,14 @@ class ScoutAgent(BaseAgent):
             insight_type=InsightType.FINDING
         )
         
+        # Generate search terms based on detected industry
         search_terms = generate_smart_search_terms(
-            context.url,
-            website_data,
-            context.language
+            industry,           # Industry detected earlier (e.g., "korut", "jewelry")
+            context.language,   # Country code (fi, en)
+            None                # No custom terms
         )
+        
+        logger.info(f"[Scout] Industry: {industry}, Search terms: {search_terms}")
         
         searching_msg = {"fi": f"Haetaan: {search_terms[0]}...", "en": f"Searching: {search_terms[0]}..."}
         self._update_progress(50, searching_msg.get(self._language, searching_msg["en"]) if search_terms else "...")
@@ -267,16 +270,27 @@ class ScoutAgent(BaseAgent):
         content = str(website_data).lower()
         
         industry_keywords = {
-            'saas': ['software', 'saas', 'platform', 'cloud', 'app', 'ohjelmisto'],
-            'ecommerce': ['shop', 'store', 'buy', 'cart', 'kauppa', 'osta', 'tuote'],
-            'consulting': ['consulting', 'advisory', 'konsultointi', 'neuvonta'],
-            'marketing': ['marketing', 'agency', 'markkinointi', 'mainos', 'brändi'],
-            'finance': ['finance', 'bank', 'investment', 'rahoitus', 'pankki', 'sijoitus'],
-            'healthcare': ['health', 'medical', 'clinic', 'terveys', 'lääkäri', 'klinikka'],
-            'education': ['education', 'training', 'course', 'koulutus', 'kurssi', 'oppi'],
-            'technology': ['tech', 'digital', 'it', 'software', 'teknologia', 'digitaalinen'],
-            'real_estate': ['real estate', 'property', 'kiinteistö', 'asunto', 'talo'],
-            'manufacturing': ['manufacturing', 'factory', 'production', 'tuotanto', 'tehdas'],
+            # Retail & Products
+            'jewelry': ['jewelry', 'jewellery', 'koru', 'korut', 'koruliike', 'timantit', 'kultaseppä', 'hopeakoru', 'ring', 'necklace', 'bracelet', 'earring', 'sormus', 'kaulakoru', 'rannekoru', 'kultakoru'],
+            'fashion': ['fashion', 'clothing', 'vaate', 'muoti', 'pukeutuminen', 'design', 'accessories', 'asusteet'],
+            'ecommerce': ['shop', 'store', 'buy', 'cart', 'kauppa', 'osta', 'tuote', 'verkkokauppa', 'tilaa'],
+            
+            # Tech
+            'saas': ['software', 'saas', 'platform', 'cloud', 'app', 'ohjelmisto', 'palvelu'],
+            'technology': ['tech', 'digital', 'it', 'software', 'teknologia', 'digitaalinen', 'järjestelmä'],
+            
+            # Services
+            'consulting': ['consulting', 'advisory', 'konsultointi', 'neuvonta', 'asiantuntija'],
+            'marketing': ['marketing', 'agency', 'markkinointi', 'mainos', 'brändi', 'viestintä'],
+            'finance': ['finance', 'bank', 'investment', 'rahoitus', 'pankki', 'sijoitus', 'vakuutus'],
+            'healthcare': ['health', 'medical', 'clinic', 'terveys', 'lääkäri', 'klinikka', 'hyvinvointi'],
+            'education': ['education', 'training', 'course', 'koulutus', 'kurssi', 'oppi', 'valmennus'],
+            
+            # Other
+            'real_estate': ['real estate', 'property', 'kiinteistö', 'asunto', 'talo', 'vuokra'],
+            'manufacturing': ['manufacturing', 'factory', 'production', 'tuotanto', 'tehdas', 'valmistus'],
+            'hospitality': ['hotel', 'restaurant', 'ravintola', 'hotelli', 'majoitus', 'ruoka'],
+            'automotive': ['car', 'auto', 'vehicle', 'ajoneuvo', 'autokauppa', 'huolto'],
         }
         
         scores = {}
@@ -286,8 +300,11 @@ class ScoutAgent(BaseAgent):
                 scores[industry] = score
         
         if scores:
-            return max(scores, key=scores.get)
+            detected = max(scores, key=scores.get)
+            logger.info(f"[Scout] Industry detection scores: {scores}, selected: {detected}")
+            return detected
         
+        logger.info(f"[Scout] No industry detected, using 'general'")
         return 'general'
     
     async def _validate_competitors(
