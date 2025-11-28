@@ -58,18 +58,23 @@ class ScoutAgent(BaseAgent):
         return SCOUT_TASKS.get(key, {}).get(self._language, key)
     
     async def execute(self, context: AnalysisContext) -> Dict[str, Any]:
-        from main import (
-            get_website_content,
-            multi_provider_search,
-            generate_smart_search_terms,
-            clean_url,
-            get_domain_from_url
-        )
-        
-        # DEBUG: Log at very start of run
+        # DEBUG: Log BEFORE any imports to catch import errors
         logger.info(f"[Scout] ========== SCOUT AGENT STARTING ==========")
         logger.info(f"[Scout] URL: {context.url}")
         logger.info(f"[Scout] COMPANY_INTEL_AVAILABLE at start: {COMPANY_INTEL_AVAILABLE}")
+        
+        try:
+            from main import (
+                get_website_content,
+                multi_provider_search,
+                generate_smart_search_terms,
+                clean_url,
+                get_domain_from_url
+            )
+            logger.info(f"[Scout] ✅ Main imports successful")
+        except Exception as e:
+            logger.error(f"[Scout] ❌ IMPORT FAILED: {e}")
+            raise
         
         self._update_progress(15, self._task("analyzing_company"))
         
