@@ -134,6 +134,9 @@ class ScoutAgent(BaseAgent):
             self._update_progress(75, self._task("enriching_companies"))
             enriched_competitors = await self._enrich_with_company_intel(validated_competitors)
             
+            # Get your own company intel
+            your_company_intel = await self._get_own_company_intel(context.url)
+            
             return {
                 'company': company_name,
                 'industry': industry,
@@ -141,7 +144,8 @@ class ScoutAgent(BaseAgent):
                 'competitor_count': len(validated_competitors),
                 'discovery_method': 'user_provided',
                 'website_data': website_data,
-                'competitors_enriched': enriched_competitors
+                'competitors_enriched': enriched_competitors,
+                'your_company_intel': your_company_intel
             }
         
         # 4. Etsi kilpailijat automaattisesti
@@ -216,6 +220,9 @@ class ScoutAgent(BaseAgent):
             self._update_progress(85, self._task("enriching_companies"))
             enriched_competitors = await self._enrich_with_company_intel(competitor_urls)
             
+            # Get your own company intel
+            your_company_intel = await self._get_own_company_intel(context.url)
+            
             self._update_progress(95, self._task("finalizing"))
             
             return {
@@ -226,7 +233,8 @@ class ScoutAgent(BaseAgent):
                 'discovery_method': 'auto_discovered',
                 'website_data': website_data,
                 'all_candidates': scored_competitors,
-                'competitors_enriched': enriched_competitors
+                'competitors_enriched': enriched_competitors,
+                'your_company_intel': your_company_intel
             }
             
         except Exception as e:
@@ -357,6 +365,70 @@ class ScoutAgent(BaseAgent):
         scored.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
         
         return scored
+    
+    async def _get_own_company_intel(self, url: str) -> Optional[Dict[str, Any]]:
+        """
+        Get company intelligence for the user's own company.
+        
+        Returns dict with:
+        - name, business_id, city, industry
+        - revenue, employees
+        - ytj_url, kauppalehti_url
+        """
+        if not COMPANY_INTEL_AVAILABLE:
+            return None
+        
+        try:
+            intel = CompanyIntel()
+            
+            # Extract domain
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            domain = parsed.netloc or parsed.path.split('/')[0]
+            domain = domain.replace('www.', '')
+            
+            # Try to get company profile from domain
+            profile = await intel.get_company_from_domain(domain)
+            
+            if profile:
+                self._emit_insight(
+                    f"🏢 {profile.get('name', domain)} - Y-tunnus: {profile.get('business_id', 'N/A')}" 
+                    if self._language == 'fi' else 
+                    f"🏢 {profile.get('name', domain)} - Business ID: {profile.get('business_id', 'N/A')}",
+                    priority=AgentPriority.LOW,
+                    insight_type=InsightType.FINDING
+                )
+                
+                return {
+                    'name': profile.get('name'),
+                    'business_id': profile.get('business_id'),
+                    'street': profile.get('street'),
+                    'postal_code': profile.get('postal_code'),
+                    'city': profile.get('city'),
+                    'country': profile.get('country', 'FI'),
+                    'industry': profile.get('industry'),
+                    'industry_code': profile.get('industry_code'),
+                    'company_form': profile.get('company_form'),
+                    'registration_date': profile.get('registration_date'),
+                    'revenue': profile.get('revenue'),
+                    'revenue_text': profile.get('revenue_text'),
+                    'employees': profile.get('employees'),
+                    'employees_text': profile.get('employees_text'),
+                    'profit': profile.get('profit'),
+                    'profit_text': profile.get('profit_text'),
+                    'status': profile.get('status'),
+                    'ytj_url': f"https://www.ytj.fi/fi/yritystiedot.html?businessId={profile.get('business_id')}" if profile.get('business_id') else None,
+                    'kauppalehti_url': f"https://www.kauppalehti.fi/yritykset/yritys/{profile.get('business_id').replace('-', '')}" if profile.get('business_id') else None,
+                    'source': profile.get('source'),
+                    'fetched_at': profile.get('fetched_at')
+                }
+            
+            await intel.close()
+            return None
+            
+        except Exception as e:
+            logger.warning(f"[Scout] Failed to get own company intel: {e}")
+            return None
     
     async def _enrich_with_company_intel(
         self,
