@@ -528,47 +528,95 @@ class CompanyIntel:
                     pass
                 
                 # Try to find Liikevaihto (Revenue) using JavaScript
+                # Kauppalehti shows data like "10 692 000 EUR" or "10,69 milj. €"
                 try:
-                    revenue_text = await page.evaluate('''() => {
+                    revenue_data = await page.evaluate('''() => {
                         const allText = document.body.innerText;
-                        const match = allText.match(/Liikevaihto[\\s\\S]*?([\\d\\s,\\.]+)\\s*(€|EUR|milj|M€|t€)/i);
-                        if (match) return match[0];
                         
-                        // Try table cells
-                        const cells = document.querySelectorAll('td, th, dt, dd, div');
-                        for (let i = 0; i < cells.length; i++) {
-                            if (cells[i].innerText && cells[i].innerText.includes('Liikevaihto')) {
-                                const next = cells[i].nextElementSibling;
-                                if (next) return 'Liikevaihto: ' + next.innerText;
+                        // Look for pattern: "X XXX XXX EUR liikevaihtoa" or "X,X milj. € liikevaihtoa"
+                        // The number comes BEFORE "liikevaihtoa"
+                        let match = allText.match(/([\\d\\s,\\.]+)\\s*(EUR|€|milj\\.?\\s*€?)\\s*liikevaihtoa/i);
+                        if (match) {
+                            return {
+                                text: match[0],
+                                number: match[1].trim(),
+                                unit: match[2].trim()
+                            };
+                        }
+                        
+                        // Alternative: look for "Liikevaihto" followed by number
+                        match = allText.match(/Liikevaihto[:\\s]*([\\d\\s,\\.]+)\\s*(EUR|€|milj|M€|t€)?/i);
+                        if (match) {
+                            return {
+                                text: match[0],
+                                number: match[1].trim(),
+                                unit: match[2] ? match[2].trim() : 'EUR'
+                            };
+                        }
+                        
+                        return null;
+                    }''')
+                    
+                    if revenue_data:
+                        logger.info(f"[CompanyIntel] Kauppalehti JS found revenue: {revenue_data}")
+                        number_str = revenue_data.get('number', '')
+                        unit = revenue_data.get('unit', '').upper()
+                        
+                        # Parse the number
+                        # Remove spaces (thousand separators in Finnish)
+                        clean_num = number_str.replace(' ', '').replace(',', '.')
+                        
+                        try:
+                            value = float(clean_num)
+                            
+                            # Apply multiplier based on unit
+                            if 'MILJ' in unit or 'M€' in unit:
+                                value = value * 1_000_000
+                            elif 'T€' in unit:
+                                value = value * 1_000
+                            
+                            data['revenue'] = int(value)
+                            data['revenue_text'] = revenue_data.get('text', '')
+                            logger.info(f"[CompanyIntel] Parsed revenue: {data['revenue']}")
+                        except ValueError as e:
+                            logger.warning(f"[CompanyIntel] Could not parse revenue number: {number_str}")
+                except Exception as e:
+                    logger.debug(f"[CompanyIntel] Revenue extraction failed: {e}")
+                
+                # Try to find Henkilöstö (Employees) - should be a simple integer
+                try:
+                    employees_data = await page.evaluate('''() => {
+                        const allText = document.body.innerText;
+                        
+                        // Look for "Henkilöstömäärä" or "Henkilöstö" followed by a number
+                        // The number is typically just digits, maybe with spaces
+                        const match = allText.match(/Henkilöstö(?:määrä)?[\\*\\s:]*([\\d\\s]+)/i);
+                        if (match) {
+                            // Get just the digits, remove any trailing text
+                            const numMatch = match[1].match(/^[\\d\\s]+/);
+                            if (numMatch) {
+                                return {
+                                    text: match[0],
+                                    number: numMatch[0].replace(/\\s/g, '')
+                                };
                             }
                         }
                         return null;
                     }''')
                     
-                    if revenue_text:
-                        logger.info(f"[CompanyIntel] Kauppalehti JS found revenue text: {revenue_text}")
-                        parsed = self._parse_financial_value(revenue_text)
-                        if parsed.get('value'):
-                            data['revenue'] = parsed['value']
-                            data['revenue_text'] = revenue_text
-                except Exception as e:
-                    logger.debug(f"[CompanyIntel] Revenue extraction failed: {e}")
-                
-                # Try to find Henkilöstö (Employees)
-                try:
-                    employees_text = await page.evaluate('''() => {
-                        const allText = document.body.innerText;
-                        const match = allText.match(/Henkilöstö[\\s\\S]{0,30}?([\\d]+)/i);
-                        if (match) return match[0];
-                        return null;
-                    }''')
-                    
-                    if employees_text:
-                        logger.info(f"[CompanyIntel] Kauppalehti JS found employees text: {employees_text}")
-                        parsed = self._parse_financial_value(employees_text)
-                        if parsed.get('value'):
-                            data['employees'] = int(parsed['value'])
-                            data['employees_text'] = employees_text
+                    if employees_data:
+                        logger.info(f"[CompanyIntel] Kauppalehti JS found employees: {employees_data}")
+                        try:
+                            emp_count = int(employees_data.get('number', '0'))
+                            # Sanity check - employees should be reasonable (1-1,000,000)
+                            if 1 <= emp_count <= 1_000_000:
+                                data['employees'] = emp_count
+                                data['employees_text'] = employees_data.get('text', '')
+                                logger.info(f"[CompanyIntel] Parsed employees: {emp_count}")
+                            else:
+                                logger.warning(f"[CompanyIntel] Employees count seems wrong: {emp_count}")
+                        except ValueError:
+                            logger.warning(f"[CompanyIntel] Could not parse employees: {employees_data}")
                 except Exception as e:
                     logger.debug(f"[CompanyIntel] Employees extraction failed: {e}")
                 
