@@ -127,8 +127,39 @@ class GuardianAgent(BaseAgent):
         
         self._update_progress(30, self._task("calculating_impact"))
         
-        # 2. Laske revenue impact
-        annual_revenue = 500000  # Default €500k
+        # 2. Laske revenue impact - käytä aitoa dataa jos saatavilla
+        annual_revenue = 500000  # Default €500k fallback
+        revenue_source = "default"
+        
+        # Try to get real revenue from Company Intelligence (Scout results)
+        try:
+            your_company_intel = scout_results.get('your_company_intel', {}) if scout_results else {}
+            
+            if your_company_intel and your_company_intel.get('revenue'):
+                # Use actual revenue from YTJ/Kauppalehti
+                annual_revenue = int(your_company_intel.get('revenue', 500000))
+                revenue_source = "company_intel"
+                logger.info(f"[Guardian] Using real revenue from Company Intel: €{annual_revenue:,}")
+                
+                self._emit_insight(
+                    f"💰 Liikevaihto: €{annual_revenue:,.0f} (YTJ/Kauppalehti)" if self._language == 'fi' else 
+                    f"💰 Revenue: €{annual_revenue:,.0f} (YTJ/Kauppalehti)",
+                    priority=AgentPriority.LOW,
+                    insight_type=InsightType.FINDING,
+                    data={'revenue': annual_revenue, 'source': 'company_intel'}
+                )
+            elif context.revenue_input:
+                # Use user-provided revenue input
+                annual_revenue = int(context.revenue_input.get('annual_revenue', 500000))
+                revenue_source = "user_input"
+                logger.info(f"[Guardian] Using user-provided revenue: €{annual_revenue:,}")
+            else:
+                # Use default
+                logger.info(f"[Guardian] Using default revenue estimate: €{annual_revenue:,}")
+                
+        except Exception as e:
+            logger.warning(f"[Guardian] Revenue fetch failed, using default: {e}")
+            annual_revenue = 500000
         
         # Try new calculation method first, fallback to simple calculation
         try:

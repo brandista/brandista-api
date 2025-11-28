@@ -81,6 +81,9 @@ class AnalysisContext(BaseModel):
     industry_context: Optional[str] = None
     user_id: Optional[str] = None  # For unified context lookup
     
+    # Revenue input (for accurate ROI calculations)
+    revenue_input: Optional[Dict[str, Any]] = None  # {'annual_revenue': 500000} or {'monthly_revenue': 40000}
+    
     # Shared state (päivittyy agenttien edetessä)
     agent_results: Dict[str, AgentResult] = {}
     
