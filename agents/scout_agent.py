@@ -359,39 +359,94 @@ class ScoutAgent(BaseAgent):
         own_domain = get_domain_from_url(own_url)
         scored = []
         
+        # Domains to always skip
         skip_domains = [
             'google.', 'facebook.', 'linkedin.', 'twitter.', 
             'wikipedia.', 'youtube.', 'instagram.', 'tiktok.',
-            'amazon.', 'ebay.', 'reddit.', 'pinterest.'
+            'amazon.', 'ebay.', 'reddit.', 'pinterest.',
+            'yelp.', 'tripadvisor.', 'trustpilot.', 'github.',
+            'medium.', 'wordpress.com', 'blogspot.', 'tumblr.'
         ]
+        
+        # Industry-specific keywords for better matching
+        industry_keywords = {
+            'jewelry': ['koru', 'korut', 'jewelry', 'jewellery', 'kulta', 'gold', 'hopea', 'silver', 'timantit', 'diamond', 'kello', 'watch', 'sormus', 'ring', 'kaulakoru', 'necklace'],
+            'fashion': ['vaate', 'muoti', 'fashion', 'clothing', 'pukeutuminen', 'style'],
+            'ecommerce': ['verkkokauppa', 'shop', 'store', 'kauppa', 'myynti'],
+            'technology': ['tech', 'software', 'ohjelmisto', 'saas', 'app'],
+            'real_estate': ['kiinteistö', 'asunto', 'real estate', 'housing'],
+        }
+        
+        keywords = industry_keywords.get(industry.lower(), [industry.lower()])
         
         for comp in competitors:
             url = comp.get('url', '')
             domain = get_domain_from_url(url)
             
+            # Skip own domain
             if domain == own_domain:
                 continue
-            if any(skip in domain for skip in skip_domains):
+            
+            # Skip known non-competitor domains
+            if any(skip in domain.lower() for skip in skip_domains):
                 continue
             
-            score = 50
+            # Skip personal blogs/portfolios (common patterns)
+            if any(pattern in domain.lower() for pattern in ['blog', 'portfolio', 'personal', '.blogspot.', '.wordpress.']):
+                continue
             
+            score = 50  # Base score
+            
+            # Same TLD bonus (e.g., both .fi)
             if own_domain.split('.')[-1] == domain.split('.')[-1]:
                 score += 10
             
+            # Industry keyword matching in snippet
             snippet = comp.get('snippet', '').lower()
-            if industry.lower() in snippet:
+            keyword_matches = sum(1 for kw in keywords if kw in snippet)
+            score += min(keyword_matches * 10, 30)  # Max 30 points from keywords
+            
+            # Industry keyword in title
+            title = comp.get('title', '').lower()
+            title_keyword_matches = sum(1 for kw in keywords if kw in title)
+            score += min(title_keyword_matches * 8, 24)  # Max 24 points
+            
+            # Industry keyword in domain name
+            domain_lower = domain.lower()
+            if any(kw in domain_lower for kw in keywords):
                 score += 15
             
-            title = comp.get('title', '').lower()
-            if any(term in title for term in ['vs', 'alternative', 'competitor', 'vaihtoehto']):
+            # Commercial indicators
+            if any(term in title or term in snippet for term in ['oy', 'ab', 'ltd', 'inc', 'gmbh', 'yritys', 'company']):
+                score += 10
+            
+            # E-commerce indicators (good for retail competitors)
+            if any(term in snippet for term in ['verkkokauppa', 'osta', 'buy', 'shop', 'tilaa', 'order', 'hinta', 'price']):
+                score += 8
+            
+            # Penalize if looks like a personal site
+            if any(term in domain_lower for term in ['hanna', 'matti', 'personal', 'portfolio', 'blog']):
+                score -= 20
+            
+            # Penalize very generic domains
+            if len(domain.split('.')[0]) < 4:
+                score -= 10
+            
+            # Alternative/competitor mention bonus
+            if any(term in title for term in ['vs', 'alternative', 'competitor', 'vaihtoehto', 'kilpailija']):
                 score += 20
             
-            comp['relevance_score'] = min(score, 100)
-            comp['name'] = comp.get('title', domain).split(' - ')[0].split(' | ')[0][:50]
-            scored.append(comp)
+            # Only include if score is decent
+            if score >= 40:
+                comp['relevance_score'] = min(score, 100)
+                comp['name'] = comp.get('title', domain).split(' - ')[0].split(' | ')[0][:50]
+                scored.append(comp)
+            else:
+                logger.debug(f"[Scout] Filtered out low-relevance competitor: {domain} (score: {score})")
         
         scored.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
+        
+        logger.info(f"[Scout] Scored {len(scored)} relevant competitors from {len(competitors)} candidates")
         
         return scored
     
@@ -480,6 +535,10 @@ class ScoutAgent(BaseAgent):
         - founded_year
         - industry (TOL)
         - size_category
+        
+        Filters out:
+        - Dissolved/bankrupt companies (status check)
+        - Companies with endDate in YTJ data
         """
         
         if not COMPANY_INTEL_AVAILABLE:
@@ -510,6 +569,19 @@ class ScoutAgent(BaseAgent):
                     profile = await intel.get_company_from_domain(domain)
                     
                     if profile:
+                        # Check if company is still active (not dissolved/bankrupt)
+                        status = profile.get('status', '').lower()
+                        end_date = profile.get('end_date') or profile.get('endDate')
+                        
+                        # Skip dissolved/inactive companies
+                        if status in ['dissolved', 'bankrupt', 'liquidation', 'purettu', 'konkurssi']:
+                            logger.info(f"[Scout] Skipping dissolved company: {profile.get('name')} (status: {status})")
+                            continue
+                        
+                        if end_date:
+                            logger.info(f"[Scout] Skipping ended company: {profile.get('name')} (endDate: {end_date})")
+                            continue
+                        
                         competitor['company_name'] = profile.get('name')
                         competitor['business_id'] = profile.get('business_id')
                         competitor['revenue'] = profile.get('revenue')
