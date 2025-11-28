@@ -123,6 +123,8 @@ class CompanyIntel:
         2. Searches YTJ
         3. Returns best match with full profile
         """
+        logger.info(f"[CompanyIntel] Looking up company for domain: {domain}")
+        
         # Clean domain
         domain = domain.lower().strip()
         domain = re.sub(r'^https?://', '', domain)
@@ -133,6 +135,8 @@ class CompanyIntel:
         # valio.fi -> Valio
         # verkkokauppa.com -> Verkkokauppa
         name_part = domain.split('.')[0]
+        
+        logger.info(f"[CompanyIntel] Extracted name from domain: '{name_part}'")
         
         # Try search
         results = await self.search_company(name_part, max_results=3)
@@ -145,6 +149,14 @@ class CompanyIntel:
                     results = await self.search_company(clean_name, max_results=3)
                     if results:
                         break
+        
+        if not results:
+            # Try with common suffixes added
+            for suffix in [' oy', ' ab', ' koru']:
+                results = await self.search_company(f"{name_part}{suffix}", max_results=3)
+                if results:
+                    logger.info(f"[CompanyIntel] Found with suffix '{suffix}'")
+                    break
         
         if not results:
             logger.info(f"[CompanyIntel] No company found for domain: {domain}")
@@ -200,6 +212,8 @@ class CompanyIntel:
     async def _ytj_search(self, name: str, max_results: int = 5) -> List[Dict[str, Any]]:
         """Search YTJ by company name"""
         
+        logger.info(f"[CompanyIntel] Searching YTJ for: '{name}'")
+        
         url = f"{self.YTJ_API_BASE}"
         params = {
             'totalResults': 'true',
@@ -213,11 +227,14 @@ class CompanyIntel:
         data = response.json()
         results = data.get('results', [])
         
+        logger.info(f"[CompanyIntel] YTJ returned {len(results)} results for '{name}'")
+        
         companies = []
         for item in results:
             company = self._parse_ytj_result(item)
             if company:
                 companies.append(company)
+                logger.info(f"[CompanyIntel] Found: {company.get('name')} ({company.get('business_id')})")
         
         return companies
     
