@@ -12,20 +12,39 @@ from datetime import datetime
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends, Header
 from pydantic import BaseModel, Field
 
-# Import auth from main
-try:
-    from main import get_current_user, UserInfo
-except ImportError:
-    # Fallback if main not available during import
-    from typing import Optional as OptionalType
-    from pydantic import BaseModel as PydanticBaseModel
-    
-    class UserInfo(PydanticBaseModel):
-        username: str
-        role: str = "user"
-    
-    async def get_current_user(authorization: OptionalType[str] = None) -> OptionalType[UserInfo]:
-        return UserInfo(username="anonymous", role="user")
+# Auth functions - lazy import to avoid circular dependency
+def _get_auth_functions():
+    """Lazy import auth functions from main to avoid circular import"""
+    try:
+        from main import get_current_user, UserInfo
+        return get_current_user, UserInfo
+    except ImportError:
+        # Fallback if main not available
+        from pydantic import BaseModel as PydanticBaseModel
+        
+        class UserInfo(PydanticBaseModel):
+            username: str
+            role: str = "user"
+        
+        async def get_current_user(authorization: Optional[str] = None) -> Optional[UserInfo]:
+            return UserInfo(username="anonymous", role="user")
+        
+        return get_current_user, UserInfo
+
+# Will be initialized on first use
+_auth_cache = {}
+
+def get_auth():
+    """Get auth functions (cached)"""
+    if 'funcs' not in _auth_cache:
+        _auth_cache['funcs'] = _get_auth_functions()
+    return _auth_cache['funcs']
+
+# Create dependency for FastAPI
+async def get_current_user_dep(authorization: Optional[str] = Header(None)):
+    """FastAPI dependency wrapper for auth"""
+    get_current_user_func, _ = get_auth()
+    return await get_current_user_func(authorization)
 
 from agents import (
     get_orchestrator,
@@ -860,7 +879,7 @@ SUGGESTED_QUESTIONS = {
 @router.post("/chat", response_model=ChatResponse)
 async def agent_chat(
     request: ChatRequest,
-    current_user: UserInfo = Depends(get_current_user)
+    current_user = Depends(get_current_user_dep)
 ):
     """
     Chat with an AI agent about analysis results.
