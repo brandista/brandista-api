@@ -198,6 +198,7 @@ class PlannerAgent(BaseAgent):
         prospector_results: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
         phases = []
+        used_titles = set()  # Track used tasks to prevent duplicates
         
         # Get actual analysis data to determine what needs fixing
         analyst_results = self.get_dependency_results(self._context, 'analyst') if hasattr(self, '_context') else {}
@@ -209,24 +210,24 @@ class PlannerAgent(BaseAgent):
         # Build defense tasks based on ACTUAL issues (not defaults)
         defense_tasks = []
         
-        # Only add SSL task if SSL is actually missing
-        has_ssl = technical.get('has_ssl', True)
-        if not has_ssl:
+        # Only add SSL task if SSL is explicitly False (not None or missing)
+        has_ssl = technical.get('has_ssl', True) if technical else True
+        if has_ssl is False:
             defense_tasks.append({'title': 'Asenna SSL-sertifikaatti', 'category': 'security', 'source': 'defense', 'effort': 'low', 'points': 5})
         
         # Only add meta task if meta is actually weak
-        meta_score = seo.get('meta_score', 100)
+        meta_score = seo.get('meta_score', 100) if seo else 100
         if meta_score < 70:
             defense_tasks.append({'title': 'Optimoi meta-kuvaukset', 'category': 'seo', 'source': 'defense', 'effort': 'low', 'points': 3})
         
-        # Only add mobile task if mobile optimization is missing
-        has_mobile = technical.get('has_mobile_optimization', True)
-        if not has_mobile:
+        # Only add mobile task if mobile optimization is explicitly False
+        has_mobile = technical.get('has_mobile_optimization', True) if technical else True
+        if has_mobile is False:
             defense_tasks.append({'title': 'Paranna mobiilioptimointi', 'category': 'mobile', 'source': 'defense', 'effort': 'medium', 'points': 5})
         
-        # Only add analytics task if analytics is missing
-        has_analytics = technical.get('has_analytics', True)
-        if not has_analytics:
+        # Only add analytics task if analytics is explicitly False
+        has_analytics = technical.get('has_analytics', True) if technical else True
+        if has_analytics is False:
             defense_tasks.append({'title': 'Lisää analytiikka', 'category': 'technical', 'source': 'defense', 'effort': 'low', 'points': 2})
         
         # Check page speed
@@ -243,52 +244,97 @@ class PlannerAgent(BaseAgent):
         
         if guardian_results:
             priority_actions = guardian_results.get('priority_actions', [])
-            for action in priority_actions[:4]:
-                growth_tasks.append({
-                    'title': action.get('action', action.get('title', '')),
-                    'category': action.get('category', 'growth'),
-                    'source': 'defense',
-                    'effort': action.get('effort', 'medium'),
-                    'points': 3
-                })
+            for action in priority_actions[:6]:
+                title = action.get('action', action.get('title', ''))
+                if title:
+                    growth_tasks.append({
+                        'title': title,
+                        'category': action.get('category', 'growth'),
+                        'source': 'defense',
+                        'effort': action.get('effort', 'medium'),
+                        'points': action.get('points', 3)
+                    })
         
-        if prospector_results and not growth_tasks:
+        if prospector_results:
             opportunities = prospector_results.get('growth_opportunities', [])
-            for opp in opportunities[:4]:
-                growth_tasks.append({
-                    'title': opp.get('title', opp.get('name', '')),
-                    'category': opp.get('category', 'growth'),
-                    'source': 'growth',
-                    'effort': opp.get('effort', 'medium'),
-                    'points': opp.get('potential_score_gain', 3)
-                })
+            for opp in opportunities[:6]:
+                title = opp.get('title', opp.get('name', ''))
+                if title:
+                    growth_tasks.append({
+                        'title': title,
+                        'category': opp.get('category', 'growth'),
+                        'source': 'growth',
+                        'effort': opp.get('effort', 'medium'),
+                        'points': opp.get('potential_score_gain', 3)
+                    })
         
-        # Fallback growth tasks only if nothing else
-        if not growth_tasks:
-            growth_tasks = [
-                {'title': 'Luo sisältöstrategia', 'category': 'content', 'source': 'growth', 'effort': 'medium', 'points': 3},
-                {'title': 'Rakenna backlink-profiilia', 'category': 'seo', 'source': 'growth', 'effort': 'high', 'points': 5},
-                {'title': 'Optimoi konversiot', 'category': 'ux', 'source': 'growth', 'effort': 'medium', 'points': 4},
-            ]
+        # Collect ALL available tasks and deduplicate
+        all_tasks = []
+        seen_titles = set()
         
-        # Use real priorities if available
-        defense_priorities = [p for p in priorities if p.get('source') == 'defense'] or defense_tasks
-        growth_priorities = [p for p in priorities if p.get('source') == 'growth'] or growth_tasks
-        medium_priorities = [p for p in priorities if p.get('effort') == 'medium']
+        # Add priorities first (highest value)
+        for p in priorities:
+            title = p.get('title', '')
+            if title and title not in seen_titles:
+                seen_titles.add(title)
+                all_tasks.append(p)
         
-        if not medium_priorities:
-            medium_priorities = defense_priorities[:2] + growth_priorities[:2]
+        # Add defense tasks
+        for t in defense_tasks:
+            title = t.get('title', '')
+            if title and title not in seen_titles:
+                seen_titles.add(title)
+                all_tasks.append(t)
         
-        # Phase 1: Days 1-30
+        # Add growth tasks
+        for t in growth_tasks:
+            title = t.get('title', '')
+            if title and title not in seen_titles:
+                seen_titles.add(title)
+                all_tasks.append(t)
+        
+        # Add quick wins from prospector
+        if prospector_results:
+            quick_wins = prospector_results.get('quick_wins', [])
+            for qw in quick_wins:
+                title = qw.get('title', '')
+                if title and title not in seen_titles:
+                    seen_titles.add(title)
+                    all_tasks.append({
+                        'title': title,
+                        'category': qw.get('category', 'optimization'),
+                        'source': 'quick_win',
+                        'effort': qw.get('effort', 'low'),
+                        'points': 3
+                    })
+        
+        logger.info(f"[Planner] Total unique tasks collected: {len(all_tasks)}")
+        
+        # Sort by effort (low first for Phase 1, then medium, then high)
+        effort_order = {'low': 0, 'medium': 1, 'high': 2}
+        all_tasks.sort(key=lambda x: effort_order.get(x.get('effort', 'medium'), 1))
+        
+        # Helper function to get unique tasks for a phase
+        def get_phase_tasks(count: int) -> List[Dict[str, Any]]:
+            phase_tasks = []
+            for task in all_tasks:
+                title = task.get('title', '')
+                if title and title not in used_titles:
+                    used_titles.add(title)
+                    phase_tasks.append(task)
+                    if len(phase_tasks) >= count:
+                        break
+            return phase_tasks
+        
+        # Phase 1: Days 1-30 - Quick wins (low effort)
         if overall_score < 50:
             phase1_name = self._phase("phase1_fix")
             phase1_goal = {"fi": "Korjaa kriittiset puutteet", "en": "Fix critical gaps"}.get(self._language)
-            phase1_tasks = defense_priorities[:4]
         else:
             phase1_name = self._phase("phase1_optimize")
             phase1_goal = {"fi": "Toteuta nopeat voitot", "en": "Implement quick wins"}.get(self._language)
-            quick_wins = prospector_results.get('quick_wins', []) if prospector_results else []
-            phase1_tasks = quick_wins[:4] if quick_wins else growth_priorities[:4]
+        
+        phase1_tasks = get_phase_tasks(4)
         
         phases.append({
             'phase': 1,
@@ -298,27 +344,33 @@ class PlannerAgent(BaseAgent):
             'tasks': phase1_tasks
         })
         
-        # Phase 2: Days 31-60
+        # Phase 2: Days 31-60 - Build (medium effort)
         phase2_name = self._phase("phase2")
+        phase2_tasks = get_phase_tasks(4)
         
         phases.append({
             'phase': 2,
             'name': phase2_name,
             'duration': {"fi": "Päivät 31-60", "en": "Days 31-60"}.get(self._language),
             'goal': {"fi": "Rakenna kilpailuetua", "en": "Build competitive advantage"}.get(self._language),
-            'tasks': medium_priorities[:4]
+            'tasks': phase2_tasks
         })
         
-        # Phase 3: Days 61-90
+        # Phase 3: Days 61-90 - Scale (remaining tasks)
         phase3_name = self._phase("phase3")
+        phase3_tasks = get_phase_tasks(4)
         
         phases.append({
             'phase': 3,
             'name': phase3_name,
             'duration': {"fi": "Päivät 61-90", "en": "Days 61-90"}.get(self._language),
             'goal': {"fi": "Skaalaa kasvua", "en": "Scale growth"}.get(self._language),
-            'tasks': growth_priorities[:4]
+            'tasks': phase3_tasks
         })
+        
+        # Log final distribution
+        total_tasks = sum(len(p.get('tasks', [])) for p in phases)
+        logger.info(f"[Planner] Distributed {total_tasks} unique tasks across 3 phases")
         
         return phases
     
