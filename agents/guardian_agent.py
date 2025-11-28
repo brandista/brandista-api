@@ -60,7 +60,7 @@ class GuardianAgent(BaseAgent):
         """Execute Guardian analysis with RASM™"""
         
         self._update_progress(10, self._task("starting_rasm"))
-        self.insight(self._task("starting_rasm"), InsightType.INFO)
+        self._emit_insight(self._task("starting_rasm"), InsightType.INFO)
         
         # Get Scout and Analyst results
         scout_results = context.agent_results.get('scout', {})
@@ -148,7 +148,7 @@ class GuardianAgent(BaseAgent):
                 'fix_effort': 'low',
                 'fix_cost_estimate': 0  # Free with Let's Encrypt
             })
-            self.insight("🔴 KRIITTINEN: SSL-sertifikaatti puuttuu!", InsightType.CRITICAL)
+            self._emit_insight("🔴 KRIITTINEN: SSL-sertifikaatti puuttuu!", InsightType.CRITICAL)
         
         # Check SEO basics
         seo_basics = your_analysis.get('detailed_analysis', {}).get('seo_basics', {})
@@ -164,7 +164,7 @@ class GuardianAgent(BaseAgent):
                 'fix_effort': 'low',
                 'fix_cost_estimate': 500
             })
-            self.insight("🟠 SEO: Heikko hakukonenäkyvyys", InsightType.WARNING)
+            self._emit_insight("🟠 SEO: Heikko hakukonenäkyvyys", InsightType.WARNING)
         
         # Check mobile
         has_mobile = technical.get('has_mobile_optimization', True)
@@ -178,7 +178,7 @@ class GuardianAgent(BaseAgent):
                 'fix_effort': 'medium',
                 'fix_cost_estimate': 2000
             })
-            self.insight("🟠 MOBILE: Puutteellinen mobiilioptimointi", InsightType.WARNING)
+            self._emit_insight("🟠 MOBILE: Puutteellinen mobiilioptimointi", InsightType.WARNING)
         
         # Check page speed
         speed_score = technical.get('page_speed_score', 80)
@@ -219,12 +219,12 @@ class GuardianAgent(BaseAgent):
         
         # Show revenue at risk insight (only if we have real data)
         if revenue_source != "default_estimate" and total_annual_risk > 0:
-            self.insight(
+            self._emit_insight(
                 f"🚨 KRIITTINEN: Tunnistin €{total_annual_risk:,}/vuosi liikevaihtoriskin!",
                 InsightType.CRITICAL
             )
         elif total_annual_risk > 0:
-            self.insight(
+            self._emit_insight(
                 f"⚠️ Arvioin ~€{total_annual_risk:,}/vuosi liikevaihtoriskin (perustuu arvioon)",
                 InsightType.WARNING
             )
@@ -300,7 +300,7 @@ class GuardianAgent(BaseAgent):
             
             age_text = f", perustettu {comp_age}+ v sitten" if comp_age else ""
             
-            self.insight(
+            self._emit_insight(
                 f"{threat_emoji} {name}: {threat_text} — Pisteet {comp_score}/100{age_text}",
                 InsightType.INFO
             )
@@ -310,7 +310,7 @@ class GuardianAgent(BaseAgent):
         medium_threats = len([c for c in competitor_threats if c['threat_level'] == 'medium'])
         low_threats = len([c for c in competitor_threats if c['threat_level'] == 'low'])
         
-        self.insight(
+        self._emit_insight(
             f"🎯 Kilpailija-arviointi valmis: {high_threats} korkean uhkan, {medium_threats} kohtalaisen, {low_threats} matalan",
             InsightType.SUCCESS
         )
@@ -333,7 +333,7 @@ class GuardianAgent(BaseAgent):
             })
             
             if i < 3:  # Show top 3
-                self.insight(
+                self._emit_insight(
                     f"🎯 Prioriteetti #{i+1}: {risk['name']} (ROI: {risk['roi_score']})",
                     InsightType.ACTION
                 )
@@ -341,7 +341,7 @@ class GuardianAgent(BaseAgent):
         # Calculate RASM score (0-100, higher = more secure)
         rasm_score = max(0, 100 - (total_risk_pct * 2))
         
-        self.insight(
+        self._emit_insight(
             f"🛡️ RASM valmis: {len(threats)} uhkaa tunnistettu, turvallisuuspistemäärä {rasm_score}/100",
             InsightType.SUCCESS
         )
