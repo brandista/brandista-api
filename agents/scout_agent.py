@@ -21,7 +21,7 @@ except ImportError:
     COMPANY_INTEL_AVAILABLE = False
     CompanyIntel = None
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("agents.scout_agent")
 
 
 # Progress task translations
