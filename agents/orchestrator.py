@@ -62,6 +62,7 @@ class GrowthEngineOrchestrator:
         self._on_insight: Optional[Callable] = None
         self._on_progress: Optional[Callable] = None
         self._on_agent_complete: Optional[Callable] = None
+        self._on_agent_start: Optional[Callable] = None  # NEW: Notify when agent starts
         
         # State
         self.is_running = False
@@ -88,7 +89,8 @@ class GrowthEngineOrchestrator:
         self,
         on_insight: Optional[Callable[[AgentInsight], None]] = None,
         on_progress: Optional[Callable[[AgentProgress], None]] = None,
-        on_agent_complete: Optional[Callable[[str, AgentResult], None]] = None
+        on_agent_complete: Optional[Callable[[str, AgentResult], None]] = None,
+        on_agent_start: Optional[Callable[[str, str], None]] = None  # NEW: (agent_id, agent_name)
     ):
         """
         Aseta callbackit real-time päivityksille.
@@ -97,6 +99,7 @@ class GrowthEngineOrchestrator:
         self._on_insight = on_insight
         self._on_progress = on_progress
         self._on_agent_complete = on_agent_complete
+        self._on_agent_start = on_agent_start  # NEW
         
         # Välitä agenteille
         for agent in self.agents.values():
@@ -230,6 +233,13 @@ class GrowthEngineOrchestrator:
             return None
         
         logger.info(f"[Orchestrator] Running agent: {agent.name}")
+        
+        # NEW: Notify that agent is starting
+        if self._on_agent_start:
+            try:
+                self._on_agent_start(agent_id, agent.name)
+            except Exception as e:
+                logger.error(f"[Orchestrator] on_agent_start callback error: {e}")
         
         try:
             result = await agent.run(self.context)
