@@ -105,6 +105,32 @@ class GuardianAgent(BaseAgent):
         competitor_analyses = analyst_results.get('competitor_analyses', [])
         your_score = analyst_results.get('your_score', 0)
         
+        # Merge company_intel from Scout into competitor_analyses
+        if scout_results:
+            enriched_competitors = scout_results.get('competitors_enriched', [])
+            
+            # Create lookup by URL/domain
+            enriched_lookup = {}
+            for enriched in enriched_competitors:
+                url = enriched.get('url', '')
+                if url:
+                    # Normalize URL for matching
+                    domain = url.replace('https://', '').replace('http://', '').replace('www.', '').rstrip('/')
+                    enriched_lookup[domain] = enriched
+            
+            # Merge company_intel into competitor_analyses
+            for comp in competitor_analyses:
+                comp_url = comp.get('url', '')
+                if comp_url:
+                    comp_domain = comp_url.replace('https://', '').replace('http://', '').replace('www.', '').rstrip('/')
+                    if comp_domain in enriched_lookup:
+                        enriched_data = enriched_lookup[comp_domain]
+                        comp['company_intel'] = enriched_data.get('company_intel', {})
+                        comp['employees'] = enriched_data.get('employees')
+                        comp['revenue'] = enriched_data.get('revenue')
+                        comp['company_name'] = enriched_data.get('company_name')
+                        logger.info(f"[Guardian] Merged company_intel for {comp_domain}: employees={comp.get('employees')}")
+        
         self._update_progress(15, self._task("building_risk_register"))
         
         self._emit_insight(
@@ -580,9 +606,46 @@ class GuardianAgent(BaseAgent):
         }
     
     def _estimate_company_size(self, competitor: Dict[str, Any]) -> Dict[str, Any]:
-        """Arvioi yrityksen koko meta-signaaleista"""
+        """Arvioi yrityksen koko - käytä company_intel dataa jos saatavilla"""
         
-        # Signaaleja sivuston analyysistä
+        # FIRST: Check for real company intel data (from Scout enrichment)
+        company_intel = competitor.get('company_intel', {})
+        real_employees = company_intel.get('employees') or competitor.get('employees')
+        real_revenue = company_intel.get('revenue') or competitor.get('revenue')
+        
+        if real_employees:
+            # Use real data!
+            if real_employees >= 100:
+                estimated = '100+'
+                size_category = 'large'
+            elif real_employees >= 50:
+                estimated = '50-100'
+                size_category = 'medium-large'
+            elif real_employees >= 20:
+                estimated = '20-50'
+                size_category = 'medium'
+            elif real_employees >= 5:
+                estimated = '5-20'
+                size_category = 'small'
+            else:
+                estimated = '1-5'
+                size_category = 'micro'
+            
+            logger.info(f"[Guardian] Using real employee count: {real_employees} -> {estimated}")
+            
+            return {
+                'has_careers_page': real_employees >= 20,
+                'has_multiple_locations': real_employees >= 50,
+                'has_team_page': real_employees >= 10,
+                'content_volume': 'high' if real_employees >= 50 else 'medium' if real_employees >= 10 else 'low',
+                'estimated_employees': estimated,
+                'actual_employees': real_employees,
+                'actual_revenue': real_revenue,
+                'size_category': size_category,
+                'source': 'company_intel'
+            }
+        
+        # FALLBACK: Estimate from meta-signals if no real data
         basic = competitor.get('basic', {})
         content = competitor.get('content', {})
         
@@ -591,7 +654,8 @@ class GuardianAgent(BaseAgent):
             'has_multiple_locations': False,
             'has_team_page': False,
             'content_volume': 'low',
-            'estimated_employees': 'unknown'
+            'estimated_employees': 'unknown',
+            'source': 'estimated'
         }
         
         # Tarkista sivustolta löytyvät signaalit

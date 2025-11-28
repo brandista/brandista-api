@@ -360,17 +360,26 @@ class PlannerAgent(BaseAgent):
         phase3_name = self._phase("phase3")
         phase3_tasks = get_phase_tasks(4)
         
-        phases.append({
-            'phase': 3,
-            'name': phase3_name,
-            'duration': {"fi": "Päivät 61-90", "en": "Days 61-90"}.get(self._language),
-            'goal': {"fi": "Skaalaa kasvua", "en": "Scale growth"}.get(self._language),
-            'tasks': phase3_tasks
-        })
+        # Only add Phase 3 if it has tasks
+        if phase3_tasks:
+            phases.append({
+                'phase': 3,
+                'name': phase3_name,
+                'duration': {"fi": "Päivät 61-90", "en": "Days 61-90"}.get(self._language),
+                'goal': {"fi": "Skaalaa kasvua", "en": "Scale growth"}.get(self._language),
+                'tasks': phase3_tasks
+            })
+        
+        # Remove empty phases (Phase 2 might also be empty)
+        phases = [p for p in phases if p.get('tasks')]
+        
+        # Re-number phases if some were removed
+        for i, phase in enumerate(phases):
+            phase['phase'] = i + 1
         
         # Log final distribution
         total_tasks = sum(len(p.get('tasks', [])) for p in phases)
-        logger.info(f"[Planner] Distributed {total_tasks} unique tasks across 3 phases")
+        logger.info(f"[Planner] Distributed {total_tasks} unique tasks across {len(phases)} phases")
         
         return phases
     
