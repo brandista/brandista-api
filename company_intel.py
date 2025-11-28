@@ -446,14 +446,16 @@ class CompanyIntel:
             return None
     
     # =========================================================================
-    # KAUPPALEHTI (Web Scraping)
+    # KAUPPALEHTI (Web Scraping with Playwright for JS content)
     # =========================================================================
     
     async def _kauppalehti_get_company(self, business_id: str) -> Optional[Dict[str, Any]]:
         """
         Scrape company financial data from Kauppalehti.
+        Uses Playwright for JavaScript-rendered content.
         
-        Note: This is scraping, may break if they change their HTML.
+        Note: Kauppalehti loads financial data via JavaScript, so we need
+        a headless browser to get the actual numbers.
         """
         
         # Format: https://www.kauppalehti.fi/yritykset/yritys/01167544
@@ -461,6 +463,16 @@ class CompanyIntel:
         clean_id = business_id.replace('-', '')
         url = f"{self.KAUPPALEHTI_BASE}/{clean_id}"
         
+        # Try Playwright first (for JS-rendered content)
+        try:
+            result = await self._kauppalehti_playwright(url, business_id)
+            if result and (result.get('revenue') or result.get('employees')):
+                logger.info(f"[CompanyIntel] ✅ Kauppalehti Playwright success: revenue={result.get('revenue')}, employees={result.get('employees')}")
+                return result
+        except Exception as e:
+            logger.warning(f"[CompanyIntel] Playwright failed for Kauppalehti: {e}")
+        
+        # Fallback to simple HTTP (may not get financial data)
         try:
             response = await self.client.get(url)
             
@@ -477,6 +489,118 @@ class CompanyIntel:
                 return None
             raise
     
+    async def _kauppalehti_playwright(self, url: str, business_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Use Playwright to scrape Kauppalehti with full JavaScript rendering.
+        This is needed because financial data is loaded dynamically.
+        """
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            logger.warning("[CompanyIntel] Playwright not available, skipping JS rendering")
+            return None
+        
+        data = {
+            'business_id': business_id,
+            'source': 'kauppalehti'
+        }
+        
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                context = await browser.new_context(
+                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                )
+                page = await context.new_page()
+                
+                # Navigate and wait for content to load
+                await page.goto(url, wait_until='networkidle', timeout=30000)
+                
+                # Wait a bit for any lazy-loaded content
+                await page.wait_for_timeout(2000)
+                
+                # Try to find company name
+                try:
+                    h1 = await page.query_selector('h1')
+                    if h1:
+                        data['name'] = await h1.inner_text()
+                except:
+                    pass
+                
+                # Try to find Liikevaihto (Revenue) using JavaScript
+                try:
+                    revenue_text = await page.evaluate('''() => {
+                        const allText = document.body.innerText;
+                        const match = allText.match(/Liikevaihto[\\s\\S]*?([\\d\\s,\\.]+)\\s*(€|EUR|milj|M€|t€)/i);
+                        if (match) return match[0];
+                        
+                        // Try table cells
+                        const cells = document.querySelectorAll('td, th, dt, dd, div');
+                        for (let i = 0; i < cells.length; i++) {
+                            if (cells[i].innerText && cells[i].innerText.includes('Liikevaihto')) {
+                                const next = cells[i].nextElementSibling;
+                                if (next) return 'Liikevaihto: ' + next.innerText;
+                            }
+                        }
+                        return null;
+                    }''')
+                    
+                    if revenue_text:
+                        logger.info(f"[CompanyIntel] Kauppalehti JS found revenue text: {revenue_text}")
+                        parsed = self._parse_financial_value(revenue_text)
+                        if parsed.get('value'):
+                            data['revenue'] = parsed['value']
+                            data['revenue_text'] = revenue_text
+                except Exception as e:
+                    logger.debug(f"[CompanyIntel] Revenue extraction failed: {e}")
+                
+                # Try to find Henkilöstö (Employees)
+                try:
+                    employees_text = await page.evaluate('''() => {
+                        const allText = document.body.innerText;
+                        const match = allText.match(/Henkilöstö[\\s\\S]{0,30}?([\\d]+)/i);
+                        if (match) return match[0];
+                        return null;
+                    }''')
+                    
+                    if employees_text:
+                        logger.info(f"[CompanyIntel] Kauppalehti JS found employees text: {employees_text}")
+                        parsed = self._parse_financial_value(employees_text)
+                        if parsed.get('value'):
+                            data['employees'] = int(parsed['value'])
+                            data['employees_text'] = employees_text
+                except Exception as e:
+                    logger.debug(f"[CompanyIntel] Employees extraction failed: {e}")
+                
+                # Try to find Tulos (Profit)
+                try:
+                    profit_text = await page.evaluate('''() => {
+                        const allText = document.body.innerText;
+                        const match = allText.match(/Tulos[\\s\\S]*?(-?[\\d\\s,\\.]+)\\s*(€|EUR|milj|M€|t€)/i);
+                        if (match) return match[0];
+                        return null;
+                    }''')
+                    
+                    if profit_text:
+                        parsed = self._parse_financial_value(profit_text)
+                        if parsed.get('value'):
+                            data['profit'] = parsed['value']
+                            data['profit_text'] = profit_text
+                except Exception as e:
+                    logger.debug(f"[CompanyIntel] Profit extraction failed: {e}")
+                
+                await browser.close()
+                
+                # If we got any financial data, return it
+                if data.get('revenue') or data.get('employees') or data.get('name'):
+                    return data
+                
+                return None
+                
+        except Exception as e:
+            logger.warning(f"[CompanyIntel] Playwright Kauppalehti error: {e}")
+            return None
+    
     def _parse_kauppalehti_html(self, html: str, business_id: str) -> Optional[Dict[str, Any]]:
         """Parse Kauppalehti company page HTML"""
         
@@ -492,6 +616,7 @@ class CompanyIntel:
             h1 = soup.find('h1')
             if h1:
                 data['name'] = h1.get_text(strip=True)
+                logger.info(f"[CompanyIntel] Kauppalehti found company: {data['name']}")
             
             # Look for key metrics in the page
             # Kauppalehti uses various div structures, try common patterns
@@ -511,9 +636,11 @@ class CompanyIntel:
                             if 'Liikevaihto' in label_text:
                                 data['revenue'] = parsed.get('value')
                                 data['revenue_text'] = value_text
+                                logger.info(f"[CompanyIntel] Kauppalehti revenue: {value_text} -> {parsed.get('value')}")
                             elif 'Henkilöstö' in label_text:
                                 data['employees'] = parsed.get('value')
                                 data['employees_text'] = value_text
+                                logger.info(f"[CompanyIntel] Kauppalehti employees: {value_text} -> {parsed.get('value')}")
                             elif 'Tulos' in label_text:
                                 data['profit'] = parsed.get('value')
                                 data['profit_text'] = value_text
@@ -691,6 +818,7 @@ class CompanyIntel:
         # Enrich with Kauppalehti data (financial)
         if kl_data:
             profile['sources'].append('kauppalehti')
+            logger.info(f"[CompanyIntel] Kauppalehti data for {business_id}: revenue={kl_data.get('revenue')}, employees={kl_data.get('employees')}")
             
             # Only override name if YTJ didn't have it
             if not profile.get('name') and kl_data.get('name'):
@@ -711,6 +839,8 @@ class CompanyIntel:
             
             if kl_data.get('financial_history'):
                 profile['financial_history'] = kl_data['financial_history']
+        else:
+            logger.warning(f"[CompanyIntel] No Kauppalehti data for {business_id}")
         
         # Calculate company age
         if profile.get('founded_year'):
