@@ -391,10 +391,29 @@ async def websocket_agent_analysis(
                     except Exception as e:
                         logger.error(f"[WS] Failed to queue status: {e}")
                 
+                def sync_start(agent_id: str, agent_name: str):
+                    """NEW: Callback when agent starts running"""
+                    try:
+                        msg = {
+                            "type": WSMessageType.AGENT_STATUS.value,
+                            "data": {
+                                "agent_id": agent_id,
+                                "status": "running",
+                                "agent_name": agent_name
+                            },
+                            "timestamp": datetime.now().isoformat()
+                        }
+                        message_queue.put_nowait(msg)
+                        pending_messages.append(msg)
+                        logger.info(f"[WS] Agent {agent_name} started - status sent")
+                    except Exception as e:
+                        logger.error(f"[WS] Failed to queue start status: {e}")
+                
                 orchestrator.set_callbacks(
                     on_insight=sync_insight,
                     on_progress=sync_progress,
-                    on_agent_complete=sync_complete
+                    on_agent_complete=sync_complete,
+                    on_agent_start=sync_start  # NEW
                 )
                 
                 # Suorita analyysi

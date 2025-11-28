@@ -1,15 +1,24 @@
 """
-Growth Engine 2.0 - Agent Orchestrator
-Coordinates the execution of all agents in the correct order
+Growth Engine 2.0 - Orchestrator
+Koordinoi agenttien suoritusta ja hallitsee tiedonkulkua
 """
 
-import logging
 import asyncio
-from typing import Dict, Any, List, Optional, Callable
+import logging
 from datetime import datetime
-from dataclasses import dataclass, field
+from typing import Dict, Any, List, Optional, Callable
 
-from .types import AnalysisContext, AgentStatus, AgentInsight, AgentProgress
+from .types import (
+    AgentStatus,
+    AgentInsight,
+    AgentProgress,
+    AgentResult,
+    AnalysisContext,
+    OrchestrationResult,
+    WSMessage,
+    WSMessageType
+)
+from .base_agent import BaseAgent
 from .scout_agent import ScoutAgent
 from .analyst_agent import AnalystAgent
 from .guardian_agent import GuardianAgent
@@ -20,179 +29,343 @@ from .planner_agent import PlannerAgent
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class OrchestrationResult:
-    """Result of a complete analysis run"""
-    success: bool
-    duration_seconds: float
-    agents_completed: int
-    agents_failed: int
-    results: Dict[str, Any] = field(default_factory=dict)
-    errors: List[str] = field(default_factory=list)
-    insights: List[AgentInsight] = field(default_factory=list)
-
-
-class AgentOrchestrator:
+class GrowthEngineOrchestrator:
     """
-    Orchestrates the execution of all Growth Engine agents.
+    Growth Engine Orchestrator
     
-    Execution order (respecting dependencies):
-    1. Scout (no dependencies)
-    2. Analyst (depends on Scout)
-    3. Guardian + Prospector (parallel, depend on Analyst)
-    4. Strategist (depends on Analyst, Guardian, Prospector)
-    5. Planner (depends on Analyst, Strategist)
+    Koordinoi 6 agentin suoritusta:
+    1. Scout → 2. Analyst → 3. Guardian + Prospector (rinnakkain) → 4. Strategist → 5. Planner
+    
+    Hoitaa:
+    - Riippuvuuksien hallinnan
+    - Rinnakkaisen suorituksen (tier 3)
+    - Real-time päivitykset WebSocketiin
+    - Virheenkäsittelyn ja graceful degradation
     """
+    
+    # Suoritusjärjestys (tierit)
+    EXECUTION_PLAN = [
+        ['scout'],                      # Tier 1: Kilpailijoiden haku
+        ['analyst'],                    # Tier 2: Syvällinen analyysi
+        ['guardian', 'prospector'],     # Tier 3: Uhkat + Mahdollisuudet (RINNAKKAIN)
+        ['strategist'],                 # Tier 4: Synteesi
+        ['planner']                     # Tier 5: 90-päivän suunnitelma
+    ]
     
     def __init__(self):
-        # Initialize all agents
-        self.agents = {
-            'scout': ScoutAgent(),
-            'analyst': AnalystAgent(),
-            'guardian': GuardianAgent(),
-            'prospector': ProspectorAgent(),
-            'strategist': StrategistAgent(),
-            'planner': PlannerAgent()
-        }
+        """Alusta orchestrator ja rekisteröi agentit"""
         
-        # Execution tiers (agents in same tier can run in parallel)
-        self.execution_tiers = [
-            ['scout'],                      # Tier 1: Discovery
-            ['analyst'],                    # Tier 2: Analysis
-            ['guardian', 'prospector'],     # Tier 3: Risk + Opportunities (parallel)
-            ['strategist'],                 # Tier 4: Strategy
-            ['planner']                     # Tier 5: Planning
-        ]
+        self.agents: Dict[str, BaseAgent] = {}
+        self._register_agents()
         
-        self._insights: List[AgentInsight] = []
+        # Callbacks
         self._on_insight: Optional[Callable] = None
         self._on_progress: Optional[Callable] = None
-        self._on_status: Optional[Callable] = None
+        self._on_agent_complete: Optional[Callable] = None
+        self._on_agent_start: Optional[Callable] = None  # NEW: Notify when agent starts
+        
+        # State
+        self.is_running = False
+        self.start_time: Optional[datetime] = None
+        self.context: Optional[AnalysisContext] = None
+    
+    def _register_agents(self):
+        """Rekisteröi kaikki agentit"""
+        
+        agents = [
+            ScoutAgent(),
+            AnalystAgent(),
+            GuardianAgent(),
+            ProspectorAgent(),
+            StrategistAgent(),
+            PlannerAgent()
+        ]
+        
+        for agent in agents:
+            self.agents[agent.id] = agent
+            logger.info(f"[Orchestrator] Registered agent: {agent.name} ({agent.id})")
     
     def set_callbacks(
         self,
-        on_insight: Optional[Callable] = None,
-        on_progress: Optional[Callable] = None,
-        on_status: Optional[Callable] = None
+        on_insight: Optional[Callable[[AgentInsight], None]] = None,
+        on_progress: Optional[Callable[[AgentProgress], None]] = None,
+        on_agent_complete: Optional[Callable[[str, AgentResult], None]] = None,
+        on_agent_start: Optional[Callable[[str, str], None]] = None  # NEW: (agent_id, agent_name)
     ):
-        """Set callbacks for real-time updates"""
+        """
+        Aseta callbackit real-time päivityksille.
+        Nämä välitetään agenteille.
+        """
         self._on_insight = on_insight
         self._on_progress = on_progress
-        self._on_status = on_status
+        self._on_agent_complete = on_agent_complete
+        self._on_agent_start = on_agent_start  # NEW
+        
+        # Välitä agenteille
+        for agent in self.agents.values():
+            agent.set_callbacks(
+                on_insight=self._handle_insight,
+                on_progress=self._handle_progress
+            )
+    
+    def _handle_insight(self, insight: AgentInsight):
+        """Käsittele agentti-insight"""
+        if self._on_insight:
+            try:
+                self._on_insight(insight)
+            except Exception as e:
+                logger.error(f"[Orchestrator] Insight callback error: {e}")
+    
+    def _handle_progress(self, progress: AgentProgress):
+        """Käsittele edistymispäivitys"""
+        if self._on_progress:
+            try:
+                self._on_progress(progress)
+            except Exception as e:
+                logger.error(f"[Orchestrator] Progress callback error: {e}")
     
     async def run_analysis(
         self,
         url: str,
-        competitor_urls: Optional[List[str]] = None,
-        industry: Optional[str] = None,
-        country_code: str = "fi",
-        user: Optional[Any] = None
+        competitor_urls: List[str] = None,
+        language: str = "fi",
+        industry_context: Optional[str] = None,
+        user_id: Optional[str] = None
     ) -> OrchestrationResult:
-        """Run complete analysis with all agents"""
+        """
+        Suorita täysi agentti-analyysi.
         
-        start_time = datetime.now()
-        self._insights = []
+        Args:
+            url: Analysoitava URL
+            competitor_urls: Lista kilpailijoiden URL:ista (valinnainen)
+            language: Kieli ('fi' tai 'en')
+            industry_context: Toimiala-konteksti (valinnainen)
+            user_id: Käyttäjä-ID unified contextin hakuun
+            
+        Returns:
+            OrchestrationResult sisältäen kaikkien agenttien tulokset
+        """
         
-        # Create shared context
-        context = AnalysisContext(
+        self.is_running = True
+        self.start_time = datetime.now()
+        
+        # Hae unified context jos user_id annettu
+        unified_context_data = None
+        if user_id:
+            try:
+                from unified_context import get_unified_context
+                unified_ctx = get_unified_context(user_id)
+                unified_context_data = unified_ctx.to_dict()
+                logger.info(f"[Orchestrator] Loaded unified context for {user_id}: "
+                           f"{len(unified_ctx.recent_analyses)} analyses, "
+                           f"{len(unified_ctx.tracked_competitors)} tracked")
+            except Exception as e:
+                logger.warning(f"[Orchestrator] Could not load unified context: {e}")
+        
+        # Luo konteksti
+        self.context = AnalysisContext(
             url=url,
             competitor_urls=competitor_urls or [],
-            industry=industry,
-            country_code=country_code,
-            user=user,
-            agent_results={},
-            on_insight=self._handle_insight,
-            on_progress=self._handle_progress,
-            on_status=self._handle_status
+            language=language,
+            industry_context=industry_context,
+            user_id=user_id,
+            unified_context=unified_context_data
         )
         
         logger.info(f"[Orchestrator] Starting analysis for {url}")
-        logger.info(f"[Orchestrator] Competitors: {len(competitor_urls or [])}")
-        logger.info(f"[Orchestrator] Agents: {list(self.agents.keys())}")
+        logger.info(f"[Orchestrator] Competitors: {competitor_urls}")
+        logger.info(f"[Orchestrator] Language: {language}")
         
-        results = {}
         errors = []
-        agents_completed = 0
-        agents_failed = 0
         
-        # Execute each tier
-        for tier_idx, tier in enumerate(self.execution_tiers):
-            logger.info(f"[Orchestrator] Executing Tier {tier_idx + 1}: {tier}")
-            
-            # Run agents in this tier (parallel if multiple)
-            tier_tasks = []
-            for agent_id in tier:
-                agent = self.agents.get(agent_id)
-                if agent:
-                    tier_tasks.append(self._run_agent(agent, context))
-            
-            # Wait for all agents in tier to complete
-            tier_results = await asyncio.gather(*tier_tasks, return_exceptions=True)
-            
-            # Process results
-            for idx, result in enumerate(tier_results):
-                agent_id = tier[idx]
+        try:
+            # Suorita tierit järjestyksessä
+            for tier_idx, tier_agents in enumerate(self.EXECUTION_PLAN, 1):
+                logger.info(f"[Orchestrator] === TIER {tier_idx}: {tier_agents} ===")
                 
-                if isinstance(result, Exception):
-                    logger.error(f"[Orchestrator] {agent_id} failed: {result}")
-                    errors.append(f"{agent_id}: {str(result)}")
-                    agents_failed += 1
+                # Tarkista riippuvuudet
+                if not self._check_dependencies(tier_agents):
+                    error_msg = f"Dependencies not met for tier {tier_idx}"
+                    logger.error(f"[Orchestrator] {error_msg}")
+                    errors.append(error_msg)
+                    continue
+                
+                # Suorita agentit (rinnakkain jos useampi)
+                if len(tier_agents) > 1:
+                    # Rinnakkainen suoritus
+                    results = await self._run_parallel(tier_agents)
                 else:
-                    # Store result for dependent agents
-                    context.agent_results[agent_id] = result
-                    results[agent_id] = result
-                    agents_completed += 1
-                    logger.info(f"[Orchestrator] {agent_id} completed")
+                    # Yksittäinen agentti
+                    results = [await self._run_agent(tier_agents[0])]
+                
+                # Tallenna tulokset kontekstiin
+                for result in results:
+                    if result:
+                        self.context.agent_results[result.agent_id] = result
+                        
+                        if self._on_agent_complete:
+                            self._on_agent_complete(result.agent_id, result)
+                        
+                        if result.status == AgentStatus.ERROR:
+                            errors.append(f"{result.agent_name}: {result.error}")
+                
+                logger.info(f"[Orchestrator] Tier {tier_idx} complete")
         
-        # Calculate duration
-        duration = (datetime.now() - start_time).total_seconds()
+        except Exception as e:
+            logger.error(f"[Orchestrator] Fatal error: {e}", exc_info=True)
+            errors.append(f"Orchestration error: {str(e)}")
         
-        logger.info(
-            f"[Orchestrator] Analysis complete in {duration:.1f}s "
-            f"({agents_completed} succeeded, {agents_failed} failed)"
-        )
+        finally:
+            self.is_running = False
+        
+        # Koosta lopputulos
+        end_time = datetime.now()
+        execution_time = int((end_time - self.start_time).total_seconds() * 1000)
+        
+        return self._build_result(execution_time, errors)
+    
+    async def _run_agent(self, agent_id: str) -> Optional[AgentResult]:
+        """Suorita yksittäinen agentti"""
+        
+        agent = self.agents.get(agent_id)
+        if not agent:
+            logger.error(f"[Orchestrator] Agent not found: {agent_id}")
+            return None
+        
+        logger.info(f"[Orchestrator] Running agent: {agent.name}")
+        
+        # NEW: Notify that agent is starting
+        if self._on_agent_start:
+            try:
+                self._on_agent_start(agent_id, agent.name)
+            except Exception as e:
+                logger.error(f"[Orchestrator] on_agent_start callback error: {e}")
+        
+        try:
+            result = await agent.run(self.context)
+            logger.info(f"[Orchestrator] Agent {agent.name} completed: {result.status}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"[Orchestrator] Agent {agent_id} failed: {e}", exc_info=True)
+            return AgentResult(
+                agent_id=agent_id,
+                agent_name=agent.name,
+                status=AgentStatus.ERROR,
+                execution_time_ms=0,
+                error=str(e)
+            )
+    
+    async def _run_parallel(self, agent_ids: List[str]) -> List[AgentResult]:
+        """Suorita useampi agentti rinnakkain"""
+        
+        logger.info(f"[Orchestrator] Running parallel: {agent_ids}")
+        
+        tasks = [self._run_agent(agent_id) for agent_id in agent_ids]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Käsittele poikkeukset
+        processed = []
+        for idx, result in enumerate(results):
+            if isinstance(result, Exception):
+                agent_id = agent_ids[idx]
+                agent = self.agents.get(agent_id)
+                processed.append(AgentResult(
+                    agent_id=agent_id,
+                    agent_name=agent.name if agent else agent_id,
+                    status=AgentStatus.ERROR,
+                    execution_time_ms=0,
+                    error=str(result)
+                ))
+            elif result:
+                processed.append(result)
+        
+        return processed
+    
+    def _check_dependencies(self, agent_ids: List[str]) -> bool:
+        """Tarkista onko riippuvuudet täytetty"""
+        
+        for agent_id in agent_ids:
+            agent = self.agents.get(agent_id)
+            if not agent:
+                continue
+            
+            for dep_id in agent.dependencies:
+                if dep_id not in self.context.agent_results:
+                    logger.warning(f"[Orchestrator] Dependency {dep_id} not met for {agent_id}")
+                    return False
+                
+                dep_result = self.context.agent_results[dep_id]
+                if dep_result.status == AgentStatus.ERROR:
+                    logger.warning(f"[Orchestrator] Dependency {dep_id} failed for {agent_id}")
+                    # Salli silti jatkaminen (graceful degradation)
+        
+        return True
+    
+    def _build_result(
+        self,
+        execution_time: int,
+        errors: List[str]
+    ) -> OrchestrationResult:
+        """Rakenna lopputulos"""
+        
+        # Kerää kaikki insightit
+        all_insights = []
+        for result in self.context.agent_results.values():
+            all_insights.extend(result.insights)
+        
+        # Järjestä prioriteetin mukaan
+        critical = [i for i in all_insights if i.priority.value == 1]
+        high = [i for i in all_insights if i.priority.value == 2]
+        
+        # Hae kokonaispistemäärä strategistilta
+        strategist_result = self.context.agent_results.get('strategist')
+        overall_score = 50
+        composite_scores = {}
+        
+        if strategist_result and strategist_result.data:
+            overall_score = strategist_result.data.get('overall_score', 50)
+            composite_scores = strategist_result.data.get('composite_scores', {})
+        
+        # Hae toimintasuunnitelma plannerilta
+        planner_result = self.context.agent_results.get('planner')
+        action_plan = None
+        if planner_result and planner_result.data:
+            action_plan = planner_result.data
+        
+        # Laske onnistuminen
+        success = len(errors) == 0 and overall_score > 0
         
         return OrchestrationResult(
-            success=agents_failed == 0,
-            duration_seconds=duration,
-            agents_completed=agents_completed,
-            agents_failed=agents_failed,
-            results=results,
-            errors=errors,
-            insights=self._insights
+            success=success,
+            execution_time_ms=execution_time,
+            url=self.context.url,
+            competitor_count=len(self.context.competitor_urls),
+            overall_score=overall_score,
+            composite_scores=composite_scores,
+            agent_results={k: v for k, v in self.context.agent_results.items()},
+            critical_insights=critical,
+            high_insights=high,
+            action_plan=action_plan,
+            errors=errors
         )
     
-    async def _run_agent(self, agent, context: AnalysisContext) -> Dict[str, Any]:
-        """Run a single agent with error handling"""
-        try:
-            return await agent.run(context)
-        except Exception as e:
-            logger.error(f"[Orchestrator] Agent {agent.agent_id} error: {e}", exc_info=True)
-            raise
-    
-    def _handle_insight(self, insight: AgentInsight):
-        """Handle insight from agent"""
-        self._insights.append(insight)
-        if self._on_insight:
-            self._on_insight(insight)
-    
-    def _handle_progress(self, progress: AgentProgress):
-        """Handle progress update from agent"""
-        if self._on_progress:
-            self._on_progress(progress)
-    
-    def _handle_status(self, agent_id: str, status: AgentStatus):
-        """Handle status change from agent"""
-        if self._on_status:
-            self._on_status(agent_id, status)
-    
     def get_agent_info(self) -> List[Dict[str, Any]]:
-        """Get info about all agents"""
-        return [agent.to_dict() for agent in self.agents.values()]
+        """Palauta kaikkien agenttien info frontendille"""
+        return [agent.to_info_dict() for agent in self.agents.values()]
     
-    def reset(self):
-        """Reset all agents to idle state"""
-        for agent in self.agents.values():
-            agent._status = AgentStatus.IDLE
-            agent._progress = 0
-        self._insights = []
+    def get_execution_plan(self) -> List[List[str]]:
+        """Palauta suoritusjärjestys"""
+        return self.EXECUTION_PLAN
+
+
+# Singleton instance
+_orchestrator: Optional[GrowthEngineOrchestrator] = None
+
+
+def get_orchestrator() -> GrowthEngineOrchestrator:
+    """Hae tai luo orchestrator-instanssi"""
+    global _orchestrator
+    if _orchestrator is None:
+        _orchestrator = GrowthEngineOrchestrator()
+    return _orchestrator
