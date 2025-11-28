@@ -348,6 +348,21 @@ def get_user_profile(user_id: str) -> Optional[Dict[str, Any]]:
 # ANALYSIS HISTORY
 # ============================================================================
 
+def _serialize_for_json(obj):
+    """Convert Pydantic models and other non-serializable objects to JSON-safe format"""
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        return {k: _serialize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_serialize_for_json(item) for item in obj]
+    if hasattr(obj, 'model_dump'):  # Pydantic v2
+        return obj.model_dump()
+    if hasattr(obj, 'dict'):  # Pydantic v1
+        return obj.dict()
+    return obj
+
+
 def save_analysis(
     user_id: str,
     url: str,
@@ -381,11 +396,11 @@ def save_analysis(
         """, (
             user_id, url, score, ranking, total_competitors,
             revenue_at_risk, rasm_score,
-            json.dumps(benchmark or {}),
-            json.dumps(threats or []),
-            json.dumps(opportunities or []),
-            json.dumps(action_plan or {}),
-            json.dumps(raw_results or {}),
+            json.dumps(_serialize_for_json(benchmark) or {}),
+            json.dumps(_serialize_for_json(threats) or []),
+            json.dumps(_serialize_for_json(opportunities) or []),
+            json.dumps(_serialize_for_json(action_plan) or {}),
+            json.dumps(_serialize_for_json(raw_results) or {}),
             duration_seconds
         ))
         
