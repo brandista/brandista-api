@@ -116,6 +116,35 @@ def init_unified_context_tables():
     try:
         cursor = conn.cursor()
         
+        # =====================================================
+        # MIGRATION: Add missing columns to existing tables
+        # This runs on every startup but is safe (IF NOT EXISTS)
+        # =====================================================
+        migration_queries = [
+            # analyses table - add missing columns
+            "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS score INTEGER",
+            "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS ranking INTEGER",
+            "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS total_competitors INTEGER",
+            "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS revenue_at_risk DECIMAL(15,2)",
+            "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS rasm_score INTEGER",
+            "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS benchmark JSONB",
+            "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS threats JSONB",
+            "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS opportunities JSONB",
+            "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS action_plan JSONB",
+            "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS raw_results JSONB",
+            "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS duration_seconds DECIMAL(10,2)",
+        ]
+        
+        for query in migration_queries:
+            try:
+                cursor.execute(query)
+            except Exception as e:
+                # Column might already exist or table doesn't exist yet
+                logger.debug(f"Migration query skipped: {e}")
+        
+        conn.commit()
+        logger.info("✅ Database migration completed - columns verified")
+        
         # 1. User Profiles (Growth Engine profiles)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS user_profiles (
