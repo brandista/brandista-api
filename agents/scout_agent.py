@@ -50,6 +50,8 @@ class ScoutAgent(BaseAgent):
             personality="Utelias ja perusteellinen tutkimusmatkailija"
         )
         self.dependencies = []
+        # DEBUG: Log when Scout is instantiated
+        logger.info(f"[Scout] *** ScoutAgent initialized, COMPANY_INTEL_AVAILABLE={COMPANY_INTEL_AVAILABLE} ***")
     
     def _task(self, key: str) -> str:
         """Get task text in current language"""
