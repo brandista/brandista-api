@@ -882,8 +882,8 @@ SUGGESTED_QUESTIONS = {
         "en": ["Why is my score this?", "Where am I ahead of competitors?", "What technical gaps do I have?"]
     },
     "guardian": {
-        "fi": ["Mikä on suurin riski?", "Miten 65000€ riski muodostuu?", "Mitä teen ensimmäiseksi?"],
-        "en": ["What's the biggest risk?", "How is the €65,000 risk calculated?", "What should I do first?"]
+        "fi": ["Mikä on suurin riski?", "Miten Revenue at Risk lasketaan?", "Mitä teen ensimmäiseksi?"],
+        "en": ["What's the biggest risk?", "How is Revenue at Risk calculated?", "What should I do first?"]
     },
     "prospector": {
         "fi": ["Mikä on helpoin quick win?", "Missä kilpailijat jättävät rahaa pöydälle?", "Mikä kasvumahdollisuus on suurin?"],
