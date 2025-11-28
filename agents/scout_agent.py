@@ -392,7 +392,11 @@ class ScoutAgent(BaseAgent):
         - revenue, employees
         - ytj_url, kauppalehti_url
         """
+        logger.info(f"[Scout] _get_own_company_intel called for: {url}")
+        logger.info(f"[Scout] COMPANY_INTEL_AVAILABLE: {COMPANY_INTEL_AVAILABLE}")
+        
         if not COMPANY_INTEL_AVAILABLE:
+            logger.warning("[Scout] Company Intel module not available!")
             return None
         
         try:
@@ -403,6 +407,8 @@ class ScoutAgent(BaseAgent):
             parsed = urlparse(url)
             domain = parsed.netloc or parsed.path.split('/')[0]
             domain = domain.replace('www.', '')
+            
+            logger.info(f"[Scout] Searching company for domain: {domain}")
             
             # Try to get company profile from domain
             profile = await intel.get_company_from_domain(domain)
