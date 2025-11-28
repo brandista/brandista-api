@@ -226,8 +226,9 @@ class ProspectorAgent(BaseAgent):
     
     def _find_quick_wins(self, analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
         quick_wins = []
-        basic = analysis.get('basic', {})
-        tech = analysis.get('technical', {})
+        basic = analysis.get('basic_analysis', analysis.get('basic', {}))
+        # Tech data is in detailed_analysis.technical_audit, not at root level
+        tech = analysis.get('detailed_analysis', {}).get('technical_audit', analysis.get('technical', {}))
         
         # SEO quick wins
         if not basic.get('meta_description') or len(basic.get('meta_description', '')) < 50:
