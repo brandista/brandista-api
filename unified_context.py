@@ -410,13 +410,14 @@ def get_recent_analyses(user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
     
     try:
         cursor = conn.cursor()
+        # Query compatible with analysis_history_schema.sql structure
         cursor.execute("""
-            SELECT id, url, score, ranking, total_competitors, revenue_at_risk,
-                   rasm_score, benchmark, threats, opportunities, action_plan,
-                   duration_seconds, created_at
-            FROM analyses
-            WHERE user_id = %s
-            ORDER BY created_at DESC
+            SELECT a.id, a.url, ar.digital_maturity_score as score, 
+                   a.status, a.analysis_type, a.duration_seconds, a.created_at
+            FROM analyses a
+            LEFT JOIN analysis_results ar ON ar.analysis_id = a.id
+            WHERE a.user_id = %s
+            ORDER BY a.created_at DESC
             LIMIT %s
         """, (user_id, limit))
         
@@ -425,17 +426,17 @@ def get_recent_analyses(user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
             results.append({
                 'id': row[0],
                 'url': row[1],
-                'score': row[2],
-                'ranking': row[3],
-                'total_competitors': row[4],
-                'revenue_at_risk': float(row[5]) if row[5] else 0,
-                'rasm_score': row[6],
-                'benchmark': row[7] or {},
-                'threats': row[8] or [],
-                'opportunities': row[9] or [],
-                'action_plan': row[10] or {},
-                'duration_seconds': float(row[11]) if row[11] else 0,
-                'created_at': row[12].isoformat() if row[12] else None
+                'score': row[2] or 0,
+                'ranking': None,  # Not in current schema
+                'total_competitors': None,  # Not in current schema
+                'revenue_at_risk': 0,
+                'rasm_score': None,
+                'benchmark': {},
+                'threats': [],
+                'opportunities': [],
+                'action_plan': {},
+                'duration_seconds': float(row[5]) if row[5] else 0,
+                'created_at': row[6].isoformat() if row[6] else None
             })
         return results
     except Exception as e:
