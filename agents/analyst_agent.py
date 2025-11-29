@@ -73,6 +73,7 @@ class AnalystAgent(BaseAgent):
                 data={'score': your_score}
             )
             
+            # Mobile check - improved
             breakdown = basic.get('score_breakdown', {})
             mobile_weighted = breakdown.get('mobile', 0)
             mobile_score_raw = basic.get('mobile_score_raw', 0)
