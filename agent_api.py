@@ -550,14 +550,26 @@ async def websocket_agent_analysis(
                         # Extract domain from URL
                         url = ct.get('url', '')
                         domain = url.replace('https://', '').replace('http://', '').split('/')[0] if url else ''
+                        name = ct.get('name', domain)
+                        threat_level = ct.get('threat_level', 'medium')
+                        
+                        # Map threat_level to severity for frontend
+                        severity_map = {'high': 'critical', 'medium': 'high', 'low': 'medium'}
+                        severity = severity_map.get(threat_level, 'medium')
                         
                         competitor_threats_mapped.append({
+                            # Frontend expected fields
+                            'title': f"{name}: {ct.get('threat_label', 'Competitive Threat')}",
+                            'name': name,
+                            'description': ct.get('reasoning', f"Competitor with digital score {ct.get('digital_score', 0)}/100. {', '.join(signal_descriptions)}"),
+                            'severity': severity,
+                            # Additional data
                             'domain': domain,
-                            'company': ct.get('name', domain),
+                            'company': name,
                             'url': url,
                             'score': ct.get('digital_score', 0),
                             'score_diff': ct.get('score_diff', 0),
-                            'threat_level': ct.get('threat_level', 'medium'),
+                            'threat_level': threat_level,
                             'threat_score': ct.get('threat_score', 5),
                             'threat_label': ct.get('threat_label', ''),
                             'reasoning': ct.get('reasoning', ''),
@@ -722,6 +734,9 @@ async def websocket_agent_analysis(
                             "duration_seconds": result.execution_time_ms / 1000,
                             "agents_completed": len([r for r in agent_results.values() if r]),
                             "agents_failed": len(result.errors),
+                            
+                            # URL (from original request)
+                            "url": url,
                             
                             # Scout data (NEW)
                             "competitors_found": len(competitor_urls_found),
