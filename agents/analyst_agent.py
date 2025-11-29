@@ -78,9 +78,33 @@ class AnalystAgent(BaseAgent):
                 data={'score': your_score}
             )
             
-            # Mobiili-insight
-            mobile_status = your_analysis.get('basic', {}).get('mobile_ready', '')
-            if mobile_status in ['Kyllä', 'Yes', True]:
+            # Mobiili-insight - tarkista useita kenttiä
+            basic = your_analysis.get('basic', {})
+            
+            # 1. Tarkista mobile_score_raw (0-100 scale)
+            mobile_score_raw = basic.get('mobile_score_raw', 0)
+            
+            # 2. Tarkista responsive_design.score
+            responsive = basic.get('responsive_design', {})
+            responsive_score = responsive.get('score', 0) if isinstance(responsive, dict) else 0
+            
+            # 3. Tarkista has_viewport
+            has_viewport = basic.get('has_viewport', basic.get('has_mobile_viewport', False))
+            
+            # 4. Fallback: breakdown.mobile (0-15 scale -> convert to 0-100)
+            breakdown = basic.get('score_breakdown', {})
+            mobile_weighted = breakdown.get('mobile', 0)
+            mobile_from_breakdown = int((mobile_weighted / 15) * 100) if mobile_weighted else 0
+            
+            # Käytä parasta saatavilla olevaa arvoa
+            mobile_score = mobile_score_raw or responsive_score or mobile_from_breakdown
+            
+            # Mobile on OK jos score >= 60 JA viewport löytyy
+            mobile_ok = mobile_score >= 60 and has_viewport
+            
+            logger.info(f"[Analyst] Mobile check: score_raw={mobile_score_raw}, responsive={responsive_score}, breakdown={mobile_from_breakdown}, viewport={has_viewport} -> OK={mobile_ok}")
+            
+            if mobile_ok:
                 self._emit_insight(
                     self._t("analyst.mobile_ok"),
                     priority=AgentPriority.LOW,
