@@ -1,7 +1,6 @@
-# -*- coding: utf-8 -*-
 """
 Growth Engine 2.0 - Analyst Agent
-"The Data Scientist" - Syvallinen analyysi ja benchmark-vertailu
+The Data Scientist - Deep analysis and benchmark comparison
 """
 
 import asyncio
@@ -23,21 +22,19 @@ ANALYST_TASKS = {
     "analyzing_competitors": {"fi": "Analysoimassa kilpailijoita...", "en": "Analyzing competitors..."},
     "calculating_benchmark": {"fi": "Laskemassa benchmark-vertailua...", "en": "Calculating benchmark comparison..."},
     "comparing_categories": {"fi": "Vertailemassa kategorioita...", "en": "Comparing categories..."},
-    "finalizing": {"fi": "Viimeistellään analyysiä...", "en": "Finalizing analysis..."},
+    "finalizing": {"fi": "Viimeistellaan analyysia...", "en": "Finalizing analysis..."},
 }
 
 
 class AnalystAgent(BaseAgent):
-    """
-    📊 Analyst Agent - Data-analyytikko
-    """
+    """Analyst Agent - Data Scientist"""
     
     def __init__(self):
         super().__init__(
             agent_id="analyst",
             name="Analyst",
             role="Data-analyytikko",
-            avatar="📊",
+            avatar="A",
             personality="Tarkka ja datavetoinen analyytikko"
         )
         self.dependencies = ['scout']
@@ -49,9 +46,8 @@ class AnalystAgent(BaseAgent):
         from main import _perform_comprehensive_analysis_internal
         
         scout_results = self.get_dependency_results(context, 'scout')
-        competitor_urls = scout_results.get('competitor_urls', []) if scout_results else []
         
-        self._update_progress(15, self._task("analyzing_target"))
+        self._update_progress(10, self._task("analyzing_target"))
         
         self._emit_insight(
             self._t("analyst.starting"),
@@ -63,12 +59,11 @@ class AnalystAgent(BaseAgent):
         try:
             your_analysis = await _perform_comprehensive_analysis_internal(
                 context.url,
+                use_playwright=True,
                 language=context.language
             )
             
-            # Map digital_maturity_score to final_score for consistency
-            # Score is nested inside basic_analysis, not at root level!
-            basic = your_analysis.get('basic_analysis', {})
+            basic = your_analysis.get('basic', {})
             your_analysis['final_score'] = basic.get('digital_maturity_score', 0) or your_analysis.get('digital_maturity_score', 0)
             your_score = your_analysis.get('final_score', 0)
             
@@ -79,12 +74,10 @@ class AnalystAgent(BaseAgent):
                 data={'score': your_score}
             )
             
-            # Mobiili-insight - yksinkertainen tarkistus
-            basic = your_analysis.get('basic', {})
+            # Mobile check - simple
             breakdown = basic.get('score_breakdown', {})
             mobile_score = breakdown.get('mobile', 0)
             
-            # mobile on 0-15 scale, 9+ = OK (60%)
             if mobile_score >= 9:
                 self._emit_insight(
                     self._t("analyst.mobile_ok"),
@@ -108,233 +101,145 @@ class AnalystAgent(BaseAgent):
             your_analysis = {'final_score': 0}
         
         # 2. Analysoi kilpailijat
-        competitor_analyses = []
+        self._update_progress(40, self._task("analyzing_competitors"))
         
-        if not competitor_urls:
-            self._emit_insight(
-                self._t("analyst.no_competitors"),
-                priority=AgentPriority.MEDIUM,
-                insight_type=InsightType.FINDING
-            )
-        else:
-            self._update_progress(35, self._task("analyzing_competitors"))
-            
-            self._emit_insight(
-                self._t("analyst.analyzing_competitors", count=len(competitor_urls)),
-                priority=AgentPriority.MEDIUM,
-                insight_type=InsightType.FINDING
-            )
-            
-            # Analysoi rinnakkain
-            tasks = []
-            for url in competitor_urls[:5]:
-                tasks.append(self._analyze_competitor(url, context.language))
-            
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            for idx, result in enumerate(results):
-                if isinstance(result, Exception):
-                    self._emit_insight(
-                        self._t("analyst.competitor_failed", idx=idx+1),
-                        priority=AgentPriority.LOW,
-                        insight_type=InsightType.FINDING
-                    )
-                    continue
-                    
-                if result:
-                    competitor_analyses.append(result)
-                    
-                    comp_score = result.get('final_score', 0)
-                    comp_name = result.get('domain', f'Competitor {idx+1}')
-                    diff = comp_score - your_analysis.get('final_score', 0)
-                    
-                    if diff > 10:
-                        self._emit_insight(
-                            self._t("analyst.competitor_stronger", 
-                                   name=comp_name, score=comp_score, diff=f"+{diff}"),
-                            priority=AgentPriority.HIGH,
-                            insight_type=InsightType.THREAT,
-                            data={'competitor': comp_name, 'score': comp_score, 'diff': diff}
-                        )
-                    elif diff < -10:
-                        self._emit_insight(
-                            self._t("analyst.competitor_weaker",
-                                   name=comp_name, score=comp_score, diff=str(diff)),
-                            priority=AgentPriority.MEDIUM,
-                            insight_type=InsightType.OPPORTUNITY,
-                            data={'competitor': comp_name, 'score': comp_score, 'diff': diff}
-                        )
-                    else:
-                        self._emit_insight(
-                            self._t("analyst.competitor_equal",
-                                   name=comp_name, score=comp_score),
-                            priority=AgentPriority.LOW,
-                            insight_type=InsightType.FINDING,
-                            data={'competitor': comp_name, 'score': comp_score}
-                        )
+        competitor_analyses = []
+        validated_competitors = scout_results.get('validated_competitors', []) if scout_results else []
+        
+        for i, comp in enumerate(validated_competitors):
+            comp_url = comp if isinstance(comp, str) else comp.get('url', '')
+            if not comp_url:
+                continue
                 
-                self._update_progress(35 + (idx + 1) * 10, f"Analysoitu {idx + 1}/{len(competitor_urls)}...")
+            try:
+                self._emit_insight(
+                    self._t("analyst.analyzing_competitor", url=comp_url),
+                    priority=AgentPriority.LOW,
+                    insight_type=InsightType.FINDING
+                )
+                
+                comp_analysis = await _perform_comprehensive_analysis_internal(
+                    comp_url,
+                    use_playwright=True,
+                    language=context.language
+                )
+                
+                comp_basic = comp_analysis.get('basic', {})
+                comp_analysis['final_score'] = comp_basic.get('digital_maturity_score', 0) or comp_analysis.get('digital_maturity_score', 0)
+                comp_analysis['url'] = comp_url
+                competitor_analyses.append(comp_analysis)
+                
+            except Exception as e:
+                logger.warning(f"[Analyst] Competitor {comp_url} analysis failed: {e}")
         
         # 3. Laske benchmark
-        self._update_progress(75, self._task("calculating_benchmark"))
+        self._update_progress(70, self._task("calculating_benchmark"))
         
-        benchmark = self._calculate_benchmark(your_analysis, competitor_analyses)
+        your_score = your_analysis.get('final_score', 0)
+        comp_scores = [c.get('final_score', 0) for c in competitor_analyses if c.get('final_score', 0) > 0]
         
-        # Benchmark insight
-        your_position = benchmark.get('your_position', 1)
-        total = benchmark.get('total_analyzed', 1)
-        avg = benchmark.get('avg_competitor_score', 0)
-        your_score = benchmark.get('your_score', 0)
+        if comp_scores:
+            avg_score = sum(comp_scores) / len(comp_scores)
+            max_score = max(comp_scores)
+            min_score = min(comp_scores)
+        else:
+            avg_score = your_score
+            max_score = your_score
+            min_score = your_score
         
-        if your_position <= (total / 2):
+        all_scores = [your_score] + comp_scores
+        all_scores_sorted = sorted(all_scores, reverse=True)
+        your_ranking = all_scores_sorted.index(your_score) + 1
+        total_in_ranking = len(all_scores_sorted)
+        
+        benchmark = {
+            'your_score': your_score,
+            'competitor_avg': round(avg_score, 1),
+            'competitor_max': max_score,
+            'competitor_min': min_score,
+            'your_ranking': your_ranking,
+            'total_competitors': total_in_ranking,
+            'gap_to_leader': max_score - your_score if max_score > your_score else 0,
+            'lead_over_avg': your_score - avg_score if your_score > avg_score else 0
+        }
+        
+        # Emit ranking insight
+        if your_ranking == 1:
             self._emit_insight(
-                self._t("analyst.benchmark_ahead",
-                       position=your_position, total=total, avg=avg, score=your_score),
+                self._t("analyst.ranking_leader", total=total_in_ranking),
+                priority=AgentPriority.HIGH,
+                insight_type=InsightType.OPPORTUNITY
+            )
+        elif your_ranking <= 3:
+            self._emit_insight(
+                self._t("analyst.ranking_top3", rank=your_ranking, total=total_in_ranking),
                 priority=AgentPriority.MEDIUM,
-                insight_type=InsightType.FINDING,
-                data=benchmark
+                insight_type=InsightType.FINDING
             )
         else:
             self._emit_insight(
-                self._t("analyst.benchmark_behind",
-                       position=your_position, avg=avg, score=your_score),
+                self._t("analyst.ranking_behind", rank=your_ranking, total=total_in_ranking, gap=benchmark['gap_to_leader']),
                 priority=AgentPriority.HIGH,
-                insight_type=InsightType.THREAT,
-                data=benchmark
+                insight_type=InsightType.THREAT
             )
         
-        # 4. Vertaa kategorioittain
+        # 4. Kategoria-vertailu
         self._update_progress(85, self._task("comparing_categories"))
         
-        category_comparison = self._compare_categories(your_analysis, competitor_analyses)
+        categories = ['security', 'seo_basics', 'content', 'technical', 'mobile', 'social']
+        category_comparison = {}
+        
+        your_breakdown = your_analysis.get('basic', {}).get('score_breakdown', {})
+        
+        for cat in categories:
+            your_cat_score = your_breakdown.get(cat, 0)
+            comp_cat_scores = []
+            
+            for comp in competitor_analyses:
+                comp_breakdown = comp.get('basic', {}).get('score_breakdown', {})
+                comp_cat_scores.append(comp_breakdown.get(cat, 0))
+            
+            if comp_cat_scores:
+                avg_cat = sum(comp_cat_scores) / len(comp_cat_scores)
+                max_cat = max(comp_cat_scores)
+            else:
+                avg_cat = your_cat_score
+                max_cat = your_cat_score
+            
+            category_comparison[cat] = {
+                'your_score': your_cat_score,
+                'competitor_avg': round(avg_cat, 1),
+                'competitor_max': max_cat,
+                'difference': round(your_cat_score - avg_cat, 1),
+                'status': 'leading' if your_cat_score > avg_cat else ('behind' if your_cat_score < avg_cat else 'equal')
+            }
+        
+        # Find strengths and weaknesses
+        strengths = [cat for cat, data in category_comparison.items() if data['status'] == 'leading']
+        weaknesses = [cat for cat, data in category_comparison.items() if data['status'] == 'behind']
+        
+        if strengths:
+            self._emit_insight(
+                self._t("analyst.strengths", categories=", ".join(strengths)),
+                priority=AgentPriority.MEDIUM,
+                insight_type=InsightType.OPPORTUNITY
+            )
+        
+        if weaknesses:
+            self._emit_insight(
+                self._t("analyst.weaknesses", categories=", ".join(weaknesses)),
+                priority=AgentPriority.HIGH,
+                insight_type=InsightType.THREAT
+            )
+        
+        self._update_progress(100, self._task("finalizing"))
         
         return {
             'your_analysis': your_analysis,
+            'your_score': your_score,
             'competitor_analyses': competitor_analyses,
             'benchmark': benchmark,
             'category_comparison': category_comparison,
-            'your_score': your_analysis.get('final_score', 0)
+            'your_ranking': your_ranking,
+            'total_competitors': total_in_ranking
         }
-    
-    async def _analyze_competitor(self, url: str, language: str) -> Optional[Dict[str, Any]]:
-        from main import _perform_comprehensive_analysis_internal, get_domain_from_url
-        
-        try:
-            analysis = await _perform_comprehensive_analysis_internal(url, language=language)
-            analysis['domain'] = get_domain_from_url(url)
-            analysis['url'] = url
-            # Map digital_maturity_score to final_score for consistency
-            # Score is nested inside basic_analysis, not at root level!
-            basic = analysis.get('basic_analysis', {})
-            analysis['final_score'] = basic.get('digital_maturity_score', 0) or analysis.get('digital_maturity_score', 0)
-            return analysis
-        except Exception as e:
-            logger.error(f"[Analyst] Competitor analysis failed for {url}: {e}")
-            return None
-    
-    def _calculate_benchmark(
-        self,
-        your_analysis: Dict[str, Any],
-        competitor_analyses: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
-        your_score = your_analysis.get('final_score', 0)
-        
-        if not competitor_analyses:
-            return {
-                'your_score': your_score,
-                'avg_competitor_score': 0,
-                'max_competitor_score': 0,
-                'min_competitor_score': 0,
-                'your_position': 1,
-                'total_analyzed': 1
-            }
-        
-        comp_scores = [c.get('final_score', 0) for c in competitor_analyses]
-        
-        all_scores = [your_score] + comp_scores
-        all_scores.sort(reverse=True)
-        your_position = all_scores.index(your_score) + 1
-        
-        return {
-            'your_score': your_score,
-            'avg_competitor_score': round(sum(comp_scores) / len(comp_scores)),
-            'max_competitor_score': max(comp_scores),
-            'min_competitor_score': min(comp_scores),
-            'your_position': your_position,
-            'total_analyzed': len(all_scores)
-        }
-    
-    def _compare_categories(
-        self,
-        your_analysis: Dict[str, Any],
-        competitor_analyses: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
-        categories = ['seo', 'performance', 'security', 'content', 'ux']
-        comparison = {}
-        
-        for cat in categories:
-            your_cat_score = self._extract_category_score(your_analysis, cat)
-            
-            if competitor_analyses:
-                comp_cat_scores = [
-                    self._extract_category_score(c, cat) 
-                    for c in competitor_analyses
-                ]
-                avg_comp = sum(comp_cat_scores) / len(comp_cat_scores) if comp_cat_scores else 0
-            else:
-                avg_comp = 0
-            
-            diff = your_cat_score - avg_comp
-            
-            comparison[cat] = {
-                'your_score': your_cat_score,
-                'competitor_avg': round(avg_comp),
-                'difference': round(diff),
-                'status': 'ahead' if diff > 5 else 'behind' if diff < -5 else 'even'
-            }
-        
-        return comparison
-    
-    def _extract_category_score(self, analysis: Dict[str, Any], category: str) -> int:
-        if category == 'seo':
-            basic = analysis.get('basic', {})
-            seo_score = 0
-            if basic.get('title'):
-                seo_score += 25
-            if basic.get('meta_description'):
-                seo_score += 25
-            if basic.get('h1_text'):
-                seo_score += 25
-            if basic.get('canonical'):
-                seo_score += 25
-            return seo_score
-            
-        elif category == 'performance':
-            tech = analysis.get('technical', {})
-            return tech.get('performance_score', 50)
-            
-        elif category == 'security':
-            tech = analysis.get('technical', {})
-            security = 50
-            if tech.get('has_ssl'):
-                security += 30
-            if tech.get('security_headers', {}).get('x-frame-options'):
-                security += 10
-            if tech.get('security_headers', {}).get('content-security-policy'):
-                security += 10
-            return min(security, 100)
-            
-        elif category == 'content':
-            content = analysis.get('content', {})
-            return content.get('quality_score', 50)
-            
-        elif category == 'ux':
-            basic = analysis.get('basic', {})
-            ux_score = 50
-            if basic.get('mobile_ready') in ['Kyllä', 'Yes', True]:
-                ux_score += 25
-            if basic.get('has_clear_cta'):
-                ux_score += 25
-            return min(ux_score, 100)
-        
-        return 50
