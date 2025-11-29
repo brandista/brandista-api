@@ -74,9 +74,14 @@ class AnalystAgent(BaseAgent):
             )
             
             breakdown = basic.get('score_breakdown', {})
-            mobile_score = breakdown.get('mobile', 0)
+            mobile_weighted = breakdown.get('mobile', 0)
+            mobile_score_raw = basic.get('mobile_score_raw', 0)
+            mobile_from_breakdown = int((mobile_weighted / 15) * 100) if mobile_weighted else 0
+            mobile_score = mobile_score_raw if mobile_score_raw else mobile_from_breakdown
+            has_viewport = basic.get('has_viewport', basic.get('has_mobile_viewport', True))
+            mobile_ok = mobile_score >= 60 and has_viewport
             
-            if mobile_score >= 9:
+            if mobile_ok:
                 self._emit_insight(
                     self._t("analyst.mobile_ok"),
                     priority=AgentPriority.LOW,
