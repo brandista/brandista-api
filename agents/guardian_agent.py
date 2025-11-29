@@ -1,6 +1,6 @@
 """
 Growth Engine 2.0 - Guardian Agent
-🛡️ "The Risk Manager" - RASM™, uhka-analyysi ja Competitor Threat Assessment
+The Risk Manager - RASM, threat analysis and Competitor Threat Assessment
 """
 
 import logging
@@ -21,21 +21,21 @@ logger = logging.getLogger(__name__)
 
 
 GUARDIAN_TASKS = {
-    "building_risk_register": {"fi": "Rakennetaan riskiregisteriä...", "en": "Building risk register..."},
+    "building_risk_register": {"fi": "Rakennetaan riskiregisteria...", "en": "Building risk register..."},
     "calculating_impact": {"fi": "Lasketaan liikevaihtovaikutusta...", "en": "Calculating revenue impact..."},
     "identifying_threats": {"fi": "Tunnistetaan uhkia...", "en": "Identifying threats..."},
-    "prioritizing_actions": {"fi": "Priorisoidaan toimenpiteitä...", "en": "Prioritizing actions..."},
-    "calculating_rasm": {"fi": "Lasketaan RASM-pistemäärää...", "en": "Calculating RASM score..."},
+    "prioritizing_actions": {"fi": "Priorisoidaan toimenpiteita...", "en": "Prioritizing actions..."},
+    "calculating_rasm": {"fi": "Lasketaan RASM-pistemaaraa...", "en": "Calculating RASM score..."},
     "assessing_competitors": {"fi": "Arvioidaan kilpailijoiden uhkatasoa...", "en": "Assessing competitor threat levels..."},
 }
 
 THREAT_TITLES = {
-    "seo": {"fi": "Heikko hakukonenäkyvyys", "en": "Poor search engine visibility"},
+    "seo": {"fi": "Heikko hakukonenakyvyys", "en": "Poor search engine visibility"},
     "mobile": {"fi": "Puutteellinen mobiilioptimointi", "en": "Inadequate mobile optimization"},
     "ssl": {"fi": "SSL-sertifikaatti puuttuu", "en": "SSL certificate missing"},
     "performance": {"fi": "Hidas sivusto", "en": "Slow website"},
-    "competitive": {"fi": "Jäät kilpailijoista jälkeen", "en": "Falling behind competitors"},
-    "content": {"fi": "Heikko sisällön laatu", "en": "Poor content quality"},
+    "competitive": {"fi": "Jaat kilpailijoista jalkeen", "en": "Falling behind competitors"},
+    "content": {"fi": "Heikko sisallon laatu", "en": "Poor content quality"},
 }
 
 THREAT_LEVEL_LABELS = {
@@ -46,27 +46,27 @@ THREAT_LEVEL_LABELS = {
 
 COMPETITOR_INSIGHTS = {
     "high_threat": {
-        "fi": "🔴 {name}: {label} — Pisteet {score}/100, {reason}",
-        "en": "🔴 {name}: {label} — Score {score}/100, {reason}"
+        "fi": "[HIGH] {name}: {label} - Pisteet {score}/100, {reason}",
+        "en": "[HIGH] {name}: {label} - Score {score}/100, {reason}"
     },
     "medium_threat": {
-        "fi": "🟡 {name}: {label} — Pisteet {score}/100, {reason}",
-        "en": "🟡 {name}: {label} — Score {score}/100, {reason}"
+        "fi": "[MED] {name}: {label} - Pisteet {score}/100, {reason}",
+        "en": "[MED] {name}: {label} - Score {score}/100, {reason}"
     },
     "low_threat": {
-        "fi": "🟢 {name}: {label} — Pisteet {score}/100, {reason}",
-        "en": "🟢 {name}: {label} — Score {score}/100, {reason}"
+        "fi": "[LOW] {name}: {label} - Pisteet {score}/100, {reason}",
+        "en": "[LOW] {name}: {label} - Score {score}/100, {reason}"
     },
     "assessment_complete": {
-        "fi": "🎯 Kilpailija-arviointi valmis: {high} korkean uhkan, {medium} kohtalaisen, {low} matalan",
-        "en": "🎯 Competitor assessment complete: {high} high threat, {medium} medium, {low} low"
+        "fi": "[TARGET] Kilpailija-arviointi valmis: {high} korkean uhkan, {medium} kohtalaisen, {low} matalan",
+        "en": "[TARGET] Competitor assessment complete: {high} high threat, {medium} medium, {low} low"
     },
 }
 
 
 class GuardianAgent(BaseAgent):
     """
-    🛡️ Guardian Agent - Riskienhallitsija (RASM)
+     Guardian Agent - Riskienhallitsija (RASM)
     """
     
     def __init__(self):
@@ -74,7 +74,7 @@ class GuardianAgent(BaseAgent):
             agent_id="guardian",
             name="Guardian",
             role="Riskienhallitsija",
-            avatar="🛡️",
+            avatar="",
             personality="Valpas ja huolellinen turvallisuusasiantuntija"
         )
         self.dependencies = ['scout', 'analyst']
@@ -113,7 +113,7 @@ class GuardianAgent(BaseAgent):
             insight_type=InsightType.FINDING
         )
         
-        # 1. Rakenna riskiregisteri (vanha tapa, säilytetään yhteensopivuus)
+        # 1. Rakenna riskiregisteri (vanha tapa, sailytetaan yhteensopivuus)
         try:
             risk_register = build_risk_register(
                 your_analysis.get('basic', {}),
@@ -136,13 +136,13 @@ class GuardianAgent(BaseAgent):
                 revenue_impact_to_dict
             )
             USE_NEW_REVENUE_MODEL = True
-            logger.info("[Guardian] ✅ revenue_impact_model loaded successfully")
+            logger.info("[Guardian] [OK] revenue_impact_model loaded successfully")
         except ImportError as e:
-            logger.warning(f"[Guardian] ⚠️ revenue_impact_model not available, using fallback: {e}")
+            logger.warning(f"[Guardian] [WARN] revenue_impact_model not available, using fallback: {e}")
             USE_NEW_REVENUE_MODEL = False
         
         # Hae liikevaihto
-        annual_revenue = 500000  # Default €500k fallback
+        annual_revenue = 500000  # Default EUR500k fallback
         revenue_source = "default"
         company_name = "Company"
         
@@ -153,18 +153,18 @@ class GuardianAgent(BaseAgent):
                 annual_revenue = int(your_company_intel.get('revenue', 500000))
                 revenue_source = "company_intel"
                 company_name = your_company_intel.get('name', 'Company')
-                logger.info(f"[Guardian] Using real revenue from Company Intel: €{annual_revenue:,}")
+                logger.info(f"[Guardian] Using real revenue from Company Intel: EUR{annual_revenue:,}")
             elif context.revenue_input:
                 annual_revenue = int(context.revenue_input.get('annual_revenue', 500000))
                 revenue_source = "user_input"
             else:
-                logger.info(f"[Guardian] Using default revenue estimate: €{annual_revenue:,}")
+                logger.info(f"[Guardian] Using default revenue estimate: EUR{annual_revenue:,}")
                 
         except Exception as e:
             logger.warning(f"[Guardian] Revenue fetch failed, using default: {e}")
             annual_revenue = 500000
         
-        # Käytä uutta mallia jos saatavilla
+        # Kayta uutta mallia jos saatavilla
         if USE_NEW_REVENUE_MODEL:
             # Tunnista toimiala
             industry = detect_industry(
@@ -198,24 +198,24 @@ class GuardianAgent(BaseAgent):
             total_impact = revenue_impact_analysis.total_impact_expected
             if total_impact > 100000:
                 self._emit_insight(
-                    f"⚠️ {'Arvioitu vuotuinen riski' if self._language == 'fi' else 'Estimated annual risk'}: €{total_impact:,.0f} ({revenue_impact_analysis.total_impact_percentage}% {'liikevaihdosta' if self._language == 'fi' else 'of revenue'})",
+                    f"[WARN] {'Arvioitu vuotuinen riski' if self._language == 'fi' else 'Estimated annual risk'}: EUR{total_impact:,.0f} ({revenue_impact_analysis.total_impact_percentage}% {'liikevaihdosta' if self._language == 'fi' else 'of revenue'})",
                     priority=AgentPriority.CRITICAL,
                     insight_type=InsightType.THREAT,
                     data={'annual_risk': total_impact, 'percentage': revenue_impact_analysis.total_impact_percentage}
                 )
             elif total_impact > 20000:
                 self._emit_insight(
-                    f"💡 {'Arvioitu vuotuinen riski' if self._language == 'fi' else 'Estimated annual risk'}: €{total_impact:,.0f}",
+                    f"[TIP] {'Arvioitu vuotuinen riski' if self._language == 'fi' else 'Estimated annual risk'}: EUR{total_impact:,.0f}",
                     priority=AgentPriority.HIGH,
                     insight_type=InsightType.THREAT,
                     data={'annual_risk': total_impact}
                 )
             
             # Log methodology
-            logger.info(f"[Guardian] Revenue Impact: €{total_impact:,} ({revenue_impact_analysis.confidence_level} confidence)")
+            logger.info(f"[Guardian] Revenue Impact: EUR{total_impact:,} ({revenue_impact_analysis.confidence_level} confidence)")
             logger.info(f"[Guardian] Methodology: {revenue_impact_analysis.methodology_note}")
             
-            # Vanha business_impact säilytetään yhteensopivuutta varten
+            # Vanha business_impact sailytetaan yhteensopivuutta varten
             business_impact = {
                 'total_monthly_risk': total_impact // 12,
                 'total_annual_risk': total_impact,
@@ -320,7 +320,7 @@ class GuardianAgent(BaseAgent):
         
         self._update_progress(90, self._task("calculating_rasm"))
         
-        # 5. Laske RASM-pistemäärä
+        # 5. Laske RASM-pistemaara
         rasm_score = self._calculate_rasm_score(threats, your_analysis)
         
         self._emit_insight(
@@ -370,7 +370,7 @@ class GuardianAgent(BaseAgent):
             })
         
         # Mobile threats
-        if basic.get('mobile_ready') not in ['Kyllä', 'Yes', True]:
+        if basic.get('mobile_ready') not in ['Kylla', 'Yes', True]:
             threats.append({
                 'category': 'mobile',
                 'title': self._threat_title('mobile'),
@@ -493,8 +493,8 @@ class GuardianAgent(BaseAgent):
         """
         Arvioi kilpailijoiden todellinen uhkataso.
         
-        Ei riitä, että kilpailijan digitaalinen pistemäärä on korkea.
-        Pitää myös arvioida: onko tämä vakavasti otettava toimija?
+        Ei riita, etta kilpailijan digitaalinen pistemaara on korkea.
+        Pitaa myos arvioida: onko tama vakavasti otettava toimija?
         """
         if not competitor_analyses:
             return {
@@ -554,13 +554,13 @@ class GuardianAgent(BaseAgent):
         your_score: int,
         scout_data: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Arvioi yksittäisen kilpailijan uhkataso"""
+        """Arvioi yksittaisen kilpailijan uhkataso"""
         
         url = competitor.get('url', '')
         name = competitor.get('name', '') or self._extract_domain_name(url)
         digital_score = competitor.get('final_score', 0) or competitor.get('score', 0)
         
-        # Kerää signaalit
+        # Keraa signaalit
         signals = {
             'digital_score': digital_score,
             'score_diff': digital_score - your_score,  # Positive = they're ahead
@@ -573,7 +573,7 @@ class GuardianAgent(BaseAgent):
         # Laske uhkataso
         threat_score, reasoning = self._calculate_threat_level(signals)
         
-        # Määritä threat level
+        # Maarita threat level
         if threat_score >= 7:
             threat_level = 'high'
         elif threat_score >= 4:
@@ -594,7 +594,7 @@ class GuardianAgent(BaseAgent):
         }
     
     async def _check_domain_age(self, url: str) -> Dict[str, Any]:
-        """Tarkista domainin ikä WHOIS:sta"""
+        """Tarkista domainin ika WHOIS:sta"""
         try:
             import whois
             domain = urlparse(url).netloc or url
@@ -631,7 +631,7 @@ class GuardianAgent(BaseAgent):
     def _estimate_company_size(self, competitor: Dict[str, Any]) -> Dict[str, Any]:
         """Arvioi yrityksen koko meta-signaaleista"""
         
-        # Signaaleja sivuston analyysistä
+        # Signaaleja sivuston analyysista
         basic = competitor.get('basic', {})
         content = competitor.get('content', {})
         
@@ -643,7 +643,7 @@ class GuardianAgent(BaseAgent):
             'estimated_employees': 'unknown'
         }
         
-        # Tarkista sivustolta löytyvät signaalit
+        # Tarkista sivustolta loytyvat signaalit
         page_count = basic.get('page_count', 0)
         word_count = content.get('word_count', 0)
         
@@ -658,11 +658,11 @@ class GuardianAgent(BaseAgent):
             signals['content_volume'] = 'low'
             signals['estimated_employees'] = '1-5'
         
-        # Muita signaaleja HTML:stä (jos saatavilla)
+        # Muita signaaleja HTML:sta (jos saatavilla)
         html = competitor.get('html', '') or ''
         html_lower = html.lower()
         
-        if any(term in html_lower for term in ['careers', 'jobs', 'työpaikat', 'avoimet']):
+        if any(term in html_lower for term in ['careers', 'jobs', 'tyopaikat', 'avoimet']):
             signals['has_careers_page'] = True
             signals['estimated_employees'] = '10+'
         
@@ -749,27 +749,27 @@ class GuardianAgent(BaseAgent):
         """
         Laske kilpailijan uhkataso 1-10.
         
-        Korkea uhka = vahva digitaalinen läsnäolo + vakiintunut yritys + kasvusignaalit
-        Matala uhka = heikko läsnäolo TAI uusi startup ilman resursseja
+        Korkea uhka = vahva digitaalinen lasnaolo + vakiintunut yritys + kasvusignaalit
+        Matala uhka = heikko lasnaolo TAI uusi startup ilman resursseja
         """
         score = 5  # Baseline
         reasons = []
         
-        # 1. Digitaalinen pistemäärä vs. sinun
+        # 1. Digitaalinen pistemaara vs. sinun
         score_diff = signals.get('score_diff', 0)
         if score_diff > 20:
             score += 2
-            reasons.append(f"+{score_diff} points ahead" if self._language == 'en' else f"+{score_diff} pistettä edellä")
+            reasons.append(f"+{score_diff} points ahead" if self._language == 'en' else f"+{score_diff} pistetta edella")
         elif score_diff > 10:
             score += 1
-            reasons.append(f"+{score_diff} points ahead" if self._language == 'en' else f"+{score_diff} pistettä edellä")
+            reasons.append(f"+{score_diff} points ahead" if self._language == 'en' else f"+{score_diff} pistetta edella")
         elif score_diff < -20:
             score -= 2
-            reasons.append(f"{score_diff} points behind" if self._language == 'en' else f"{score_diff} pistettä jäljessä")
+            reasons.append(f"{score_diff} points behind" if self._language == 'en' else f"{score_diff} pistetta jaljessa")
         elif score_diff < -10:
             score -= 1
         
-        # 2. Domain-ikä
+        # 2. Domain-ika
         domain_age = signals.get('domain_age', {})
         if domain_age.get('is_established'):
             score += 1.5
@@ -784,7 +784,7 @@ class GuardianAgent(BaseAgent):
         employees = company_size.get('estimated_employees', 'unknown')
         if employees == '20+':
             score += 1.5
-            reasons.append(f"~{employees} employees" if self._language == 'en' else f"~{employees} työntekijää")
+            reasons.append(f"~{employees} employees" if self._language == 'en' else f"~{employees} tyontekijaa")
         elif employees == '1-5':
             score -= 1
         
@@ -800,20 +800,20 @@ class GuardianAgent(BaseAgent):
         trust = signals.get('trust_signals', {})
         if trust.get('has_case_studies'):
             score += 1
-            reasons.append("proven track record" if self._language == 'en' else "referenssejä")
+            reasons.append("proven track record" if self._language == 'en' else "referensseja")
         if trust.get('trust_score', 0) >= 5:
             score += 0.5
         
         # Rajoita 1-10
         score = max(1, min(10, round(score)))
         
-        # Yhdistä syyt
+        # Yhdista syyt
         reasoning = ", ".join(reasons[:3]) if reasons else ("no strong signals" if self._language == 'en' else "ei vahvoja signaaleja")
         
         return score, reasoning
     
     def _emit_competitor_insight(self, assessment: Dict[str, Any]):
-        """Lähetä insight kilpailija-arvioinnista"""
+        """Laheta insight kilpailija-arvioinnista"""
         
         level = assessment['threat_level']
         name = assessment['name']
