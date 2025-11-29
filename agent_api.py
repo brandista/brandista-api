@@ -665,6 +665,12 @@ async def websocket_agent_analysis(
                     logger.info(f"[WS] action_plan_mapped: phase1={len(action_plan_mapped.get('phase1', []))} phase2={len(action_plan_mapped.get('phase2', []))} phase3={len(action_plan_mapped.get('phase3', []))} this_week={action_plan_mapped.get('this_week') is not None}" if action_plan_mapped else "[WS] action_plan_mapped: None")
                     logger.info(f"[WS] market_gaps_mapped count: {len(market_gaps_mapped)}")
                     
+                    # Log AI analysis data
+                    ai_analysis_data = your_analysis.get('ai_analysis', {})
+                    logger.info(f"[WS] ai_analysis keys: {list(ai_analysis_data.keys()) if ai_analysis_data else 'empty'}")
+                    if ai_analysis_data.get('ai_search_visibility'):
+                        logger.info(f"[WS] ai_search_visibility score: {ai_analysis_data.get('ai_search_visibility', {}).get('overall_ai_search_score', 'N/A')}")
+                    
                     # Lähetä lopputulos with all mapped data
                     await manager.send_json(websocket, {
                         "type": WSMessageType.ANALYSIS_COMPLETE.value,
@@ -712,7 +718,21 @@ async def websocket_agent_analysis(
                             # Legacy fields
                             "overall_score": result.overall_score,
                             "composite_scores": result.composite_scores,
-                            "errors": result.errors
+                            "errors": result.errors,
+                            
+                            # AI Analysis data (from your_analysis)
+                            "your_company_intel": your_company,  # Alias for compatibility
+                            "ai_analysis": your_analysis.get('ai_analysis', {}),
+                            
+                            # Full agent results for deep dive views
+                            "agent_results": {
+                                "scout": {"data": scout_result},
+                                "analyst": {"data": analyst_result},
+                                "guardian": {"data": guardian_result},
+                                "prospector": {"data": prospector_result},
+                                "strategist": {"data": strategist_result},
+                                "planner": {"data": planner}
+                            }
                         },
                         "timestamp": datetime.now().isoformat()
                     })
@@ -882,8 +902,8 @@ SUGGESTED_QUESTIONS = {
         "en": ["Why is my score this?", "Where am I ahead of competitors?", "What technical gaps do I have?"]
     },
     "guardian": {
-        "fi": ["Mikä on suurin riski?", "Miten Revenue at Risk lasketaan?", "Mitä teen ensimmäiseksi?"],
-        "en": ["What's the biggest risk?", "How is Revenue at Risk calculated?", "What should I do first?"]
+        "fi": ["Mikä on suurin riski?", "Miten 65000€ riski muodostuu?", "Mitä teen ensimmäiseksi?"],
+        "en": ["What's the biggest risk?", "How is the €65,000 risk calculated?", "What should I do first?"]
     },
     "prospector": {
         "fi": ["Mikä on helpoin quick win?", "Missä kilpailijat jättävät rahaa pöydälle?", "Mikä kasvumahdollisuus on suurin?"],
