@@ -462,6 +462,14 @@ def detect_risks_from_analysis(basic: Dict[str, Any], technical: Dict[str, Any],
     detected_risks = []
     breakdown = basic.get('score_breakdown', {})
     
+    # Debug logging
+    logger.info(f"[RevenueImpact] Detecting risks from analysis data:")
+    logger.info(f"[RevenueImpact]   - has_ssl: {basic.get('has_ssl')}")
+    logger.info(f"[RevenueImpact]   - mobile_score_raw: {basic.get('mobile_score_raw')}")
+    logger.info(f"[RevenueImpact]   - has_viewport: {basic.get('has_viewport', basic.get('has_mobile_viewport'))}")
+    logger.info(f"[RevenueImpact]   - breakdown.mobile: {breakdown.get('mobile')}")
+    logger.info(f"[RevenueImpact]   - page_speed_score: {technical.get('page_speed_score')}")
+    
     # SSL
     if not basic.get('has_ssl', True):
         detected_risks.append('ssl_missing')
@@ -473,9 +481,23 @@ def detect_risks_from_analysis(basic: Dict[str, Any], technical: Dict[str, Any],
     elif speed_score < 50:
         detected_risks.append('page_speed_slow')
     
-    # Mobile
-    mobile_score = breakdown.get('mobile', 20)
-    if mobile_score < 10:
+    # Mobile - check multiple sources
+    # 1. First try mobile_score_raw (0-100 scale)
+    # 2. Then try responsive_design.score (0-100 scale)
+    # 3. Finally fallback to breakdown.mobile (0-15 scale, need to convert)
+    mobile_score_100 = basic.get('mobile_score_raw', 0)
+    if not mobile_score_100:
+        responsive = basic.get('responsive_design', {})
+        mobile_score_100 = responsive.get('score', 0) if isinstance(responsive, dict) else 0
+    if not mobile_score_100:
+        # breakdown.mobile is 0-15, convert to 0-100
+        mobile_weighted = breakdown.get('mobile', 15)
+        mobile_score_100 = int((mobile_weighted / 15) * 100)
+    
+    # Also check specific mobile signals
+    has_viewport = basic.get('has_mobile_viewport', basic.get('has_viewport', True))
+    
+    if mobile_score_100 < 50 or not has_viewport:
         detected_risks.append('mobile_not_optimized')
     
     # Meta descriptions
