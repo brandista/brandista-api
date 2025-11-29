@@ -424,8 +424,8 @@ def detect_industry(url: str, basic_analysis: Dict[str, Any], company_intel: Dic
     
     # Yritä ensin company_intel:sta
     if company_intel:
-        industry_code = company_intel.get('industry_code', '')
-        industry_name = company_intel.get('industry', '').lower()
+        industry_code = company_intel.get('industry_code') or ''
+        industry_name = (company_intel.get('industry') or '').lower()
         
         # TOL-koodit (Suomi)
         if industry_code:
