@@ -58,8 +58,8 @@ class AnalystAgent(BaseAgent):
         try:
             your_analysis = await _perform_comprehensive_analysis_internal(
                 context.url,
-                use_playwright=True,
-                language=context.language
+                language=context.language,
+                force_playwright=True
             )
             
             basic = your_analysis.get('basic', {})
@@ -123,8 +123,8 @@ class AnalystAgent(BaseAgent):
                 
                 comp_analysis = await _perform_comprehensive_analysis_internal(
                     comp_url,
-                    use_playwright=True,
-                    language=context.language
+                    language=context.language,
+                    force_playwright=True
                 )
                 
                 comp_basic = comp_analysis.get('basic', {})
