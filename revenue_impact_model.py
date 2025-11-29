@@ -6,11 +6,11 @@ Laskee realistisen "Revenue at Risk" perustuen:
 2. Konkreettiset ongelmat ja niiden vaikutus konversioon
 3. Industry benchmarks ja tutkimusdata
 
-Lähteet:
-- Google: 53% mobiilikäyttäjistä poistuu jos sivu latautuu >3s
+Lahteet:
+- Google: 53% mobiilikayttajista poistuu jos sivu latautuu >3s
 - Portent: Jokainen sekunti latausaikaa = -4.42% konversio
-- GlobalSign: 84% käyttäjistä hylkää ostoksen jos ei SSL
-- Baymard Institute: Keskimääräinen cart abandonment 70%
+- GlobalSign: 84% kayttajista hylkaa ostoksen jos ei SSL
+- Baymard Institute: Keskimaarainen cart abandonment 70%
 - Backlinko: #1 Google-tulos saa 27.6% klikkauksista
 """
 
@@ -31,12 +31,12 @@ INDUSTRY_PROFILES = {
     'ecommerce': {
         'name': {'fi': 'Verkkokauppa', 'en': 'E-commerce'},
         'digital_revenue_share': 0.85,  # 85% tulee verkosta
-        'organic_traffic_share': 0.40,  # 40% liikenteestä orgaanista
-        'mobile_traffic_share': 0.65,   # 65% mobiilikäyttäjiä
+        'organic_traffic_share': 0.40,  # 40% liikenteesta orgaanista
+        'mobile_traffic_share': 0.65,   # 65% mobiilikayttajia
         'avg_conversion_rate': 0.025,   # 2.5% konversio
     },
     'retail': {
-        'name': {'fi': 'Vähittäiskauppa', 'en': 'Retail'},
+        'name': {'fi': 'Vahittaiskauppa', 'en': 'Retail'},
         'digital_revenue_share': 0.35,  # 35% verkosta (omnichannel)
         'organic_traffic_share': 0.35,
         'mobile_traffic_share': 0.60,
@@ -44,7 +44,7 @@ INDUSTRY_PROFILES = {
     },
     'jewelry': {
         'name': {'fi': 'Koruala', 'en': 'Jewelry'},
-        'digital_revenue_share': 0.25,  # 25% verkosta, paljon myymälöitä
+        'digital_revenue_share': 0.25,  # 25% verkosta, paljon myymaloita
         'organic_traffic_share': 0.30,
         'mobile_traffic_share': 0.55,
         'avg_conversion_rate': 0.015,   # Korkeampi AOV, matalampi konversio
@@ -52,7 +52,7 @@ INDUSTRY_PROFILES = {
     # B2B - matalampi digitaalinen osuus
     'b2b_services': {
         'name': {'fi': 'B2B-palvelut', 'en': 'B2B Services'},
-        'digital_revenue_share': 0.20,  # 20% liideistä verkosta
+        'digital_revenue_share': 0.20,  # 20% liideista verkosta
         'organic_traffic_share': 0.45,
         'mobile_traffic_share': 0.35,
         'avg_conversion_rate': 0.030,   # Lead conversion
@@ -66,7 +66,7 @@ INDUSTRY_PROFILES = {
     },
     'manufacturing': {
         'name': {'fi': 'Teollisuus', 'en': 'Manufacturing'},
-        'digital_revenue_share': 0.10,  # Pääosin offline
+        'digital_revenue_share': 0.10,  # Paaosin offline
         'organic_traffic_share': 0.25,
         'mobile_traffic_share': 0.25,
         'avg_conversion_rate': 0.015,
@@ -88,12 +88,12 @@ INDUSTRY_PROFILES = {
 
 @dataclass
 class RiskFactor:
-    """Yksittäinen riskitekijä"""
+    """Yksittainen riskitekija"""
     id: str
     name: Dict[str, str]
     description: Dict[str, str]
     
-    # Vaikutus eri osa-alueisiin (0.0 - 1.0 = prosenttiosuus menetetystä)
+    # Vaikutus eri osa-alueisiin (0.0 - 1.0 = prosenttiosuus menetetysta)
     conversion_impact: float      # Vaikutus konversioon
     traffic_impact: float         # Vaikutus liikenteeseen
     trust_impact: float           # Vaikutus luottamukseen
@@ -103,7 +103,7 @@ class RiskFactor:
     affects_organic: bool = False
     affects_all: bool = False
     
-    # Todennäköisyys että vaikutus toteutuu
+    # Todennakoisyys etta vaikutus toteutuu
     probability: float = 0.8
     
     # Korjauksen vaikeus ja kustannus
@@ -111,24 +111,24 @@ class RiskFactor:
     fix_cost_eur: Tuple[int, int] = (500, 2000)
     fix_time_days: Tuple[int, int] = (1, 7)
     
-    # Lähteet/perustelut
+    # Lahteet/perustelut
     sources: List[str] = None
 
 
-# Määritellään riskitekijät tutkimusdataan perustuen
+# Maaritellaan riskitekijat tutkimusdataan perustuen
 RISK_FACTORS = {
     # ==========================================================================
-    # KRIITTISET (välitön vaikutus)
+    # KRIITTISET (valiton vaikutus)
     # ==========================================================================
     'ssl_missing': RiskFactor(
         id='ssl_missing',
         name={'fi': 'SSL-sertifikaatti puuttuu', 'en': 'Missing SSL Certificate'},
         description={
-            'fi': 'Selaimet näyttävät "Ei turvallinen" -varoituksen. 84% käyttäjistä hylkää ostoksen.',
+            'fi': 'Selaimet nayttavat "Ei turvallinen" -varoituksen. 84% kayttajista hylkaa ostoksen.',
             'en': 'Browsers show "Not Secure" warning. 84% of users abandon purchase.'
         },
         conversion_impact=0.40,  # -40% konversio (GlobalSign tutkimus)
-        traffic_impact=0.10,     # -10% liikenne (Google rankaa alaspäin)
+        traffic_impact=0.10,     # -10% liikenne (Google rankaa alaspain)
         trust_impact=0.50,       # -50% luottamus
         affects_all=True,
         probability=0.95,
@@ -142,7 +142,7 @@ RISK_FACTORS = {
         id='page_speed_critical',
         name={'fi': 'Kriittisen hidas sivusto (>5s)', 'en': 'Critically Slow Website (>5s)'},
         description={
-            'fi': 'Sivusto latautuu yli 5 sekunnissa. 90% mobiilikäyttäjistä poistuu.',
+            'fi': 'Sivusto latautuu yli 5 sekunnissa. 90% mobiilikayttajista poistuu.',
             'en': 'Page loads in over 5 seconds. 90% of mobile users leave.'
         },
         conversion_impact=0.35,  # -35% konversio
@@ -158,13 +158,13 @@ RISK_FACTORS = {
     ),
     
     # ==========================================================================
-    # KORKEAT (merkittävä vaikutus)
+    # KORKEAT (merkittava vaikutus)
     # ==========================================================================
     'mobile_not_optimized': RiskFactor(
         id='mobile_not_optimized',
         name={'fi': 'Heikko mobiilioptimointi', 'en': 'Poor Mobile Optimization'},
         description={
-            'fi': 'Sivusto ei toimi hyvin mobiilissa. 61% käyttäjistä ei palaa huonon mobiilikokemuksen jälkeen.',
+            'fi': 'Sivusto ei toimi hyvin mobiilissa. 61% kayttajista ei palaa huonon mobiilikokemuksen jalkeen.',
             'en': 'Website doesn\'t work well on mobile. 61% won\'t return after poor mobile experience.'
         },
         conversion_impact=0.25,  # -25% mobiilikonversio
@@ -182,7 +182,7 @@ RISK_FACTORS = {
         id='no_meta_descriptions',
         name={'fi': 'Meta-kuvaukset puuttuvat', 'en': 'Missing Meta Descriptions'},
         description={
-            'fi': 'Hakutuloksissa näkyy satunnainen teksti. CTR voi laskea 5-10%.',
+            'fi': 'Hakutuloksissa nakyy satunnainen teksti. CTR voi laskea 5-10%.',
             'en': 'Search results show random text. CTR can drop 5-10%.'
         },
         conversion_impact=0.05,
@@ -198,9 +198,9 @@ RISK_FACTORS = {
     
     'thin_content': RiskFactor(
         id='thin_content',
-        name={'fi': 'Ohut sisältö', 'en': 'Thin Content'},
+        name={'fi': 'Ohut sisalto', 'en': 'Thin Content'},
         description={
-            'fi': 'Liian vähän sisältöä hakukoneoptimointiin. Vaikuttaa orgaaniseen näkyvyyteen.',
+            'fi': 'Liian vahan sisaltoa hakukoneoptimointiin. Vaikuttaa orgaaniseen nakyvyyteen.',
             'en': 'Too little content for SEO. Affects organic visibility.'
         },
         conversion_impact=0.10,
@@ -218,7 +218,7 @@ RISK_FACTORS = {
         id='no_h1_tags',
         name={'fi': 'H1-otsikot puuttuvat', 'en': 'Missing H1 Tags'},
         description={
-            'fi': 'Pääotsikot puuttuvat. Heikentää hakukonenäkyvyyttä.',
+            'fi': 'Paaotsikot puuttuvat. Heikentaa hakukonenakyvyytta.',
             'en': 'Main headings missing. Weakens search visibility.'
         },
         conversion_impact=0.03,
@@ -239,7 +239,7 @@ RISK_FACTORS = {
         id='page_speed_slow',
         name={'fi': 'Hidas sivusto (3-5s)', 'en': 'Slow Website (3-5s)'},
         description={
-            'fi': 'Sivusto latautuu 3-5 sekunnissa. Konversio kärsii.',
+            'fi': 'Sivusto latautuu 3-5 sekunnissa. Konversio karsii.',
             'en': 'Page loads in 3-5 seconds. Conversion suffers.'
         },
         conversion_impact=0.15,
@@ -257,10 +257,10 @@ RISK_FACTORS = {
         id='no_analytics',
         name={'fi': 'Analytiikka puuttuu', 'en': 'Missing Analytics'},
         description={
-            'fi': 'Ei dataa päätöksentekoon. Et tiedä mikä toimii ja mikä ei.',
+            'fi': 'Ei dataa paatoksentekoon. Et tieda mika toimii ja mika ei.',
             'en': 'No data for decisions. You don\'t know what works and what doesn\'t.'
         },
-        conversion_impact=0.10,  # Epäsuora: et voi optimoida
+        conversion_impact=0.10,  # Epasuora: et voi optimoida
         traffic_impact=0.05,
         trust_impact=0.0,
         affects_all=True,
@@ -275,7 +275,7 @@ RISK_FACTORS = {
         id='no_structured_data',
         name={'fi': 'Schema markup puuttuu', 'en': 'Missing Structured Data'},
         description={
-            'fi': 'Ei rich snippetejä hakutuloksissa. CTR voi olla 30% matalampi.',
+            'fi': 'Ei rich snippeteja hakutuloksissa. CTR voi olla 30% matalampi.',
             'en': 'No rich snippets in search results. CTR can be 30% lower.'
         },
         conversion_impact=0.02,
@@ -291,9 +291,9 @@ RISK_FACTORS = {
     
     'spa_not_rendered': RiskFactor(
         id='spa_not_rendered',
-        name={'fi': 'SPA ei renderöidy hakukoneille', 'en': 'SPA Not Search Engine Rendered'},
+        name={'fi': 'SPA ei renderoidy hakukoneille', 'en': 'SPA Not Search Engine Rendered'},
         description={
-            'fi': 'JavaScript-sovellus ei näy hakukoneille. Orgaaninen liikenne kärsii merkittävästi.',
+            'fi': 'JavaScript-sovellus ei nay hakukoneille. Orgaaninen liikenne karsii merkittavasti.',
             'en': 'JavaScript app not visible to search engines. Organic traffic suffers significantly.'
         },
         conversion_impact=0.05,
@@ -314,7 +314,7 @@ RISK_FACTORS = {
         id='missing_alt_texts',
         name={'fi': 'Kuva-alt-tekstit puuttuvat', 'en': 'Missing Image Alt Texts'},
         description={
-            'fi': 'Kuvien alt-tekstit puuttuvat. Vaikuttaa kuvahaun näkyvyyteen.',
+            'fi': 'Kuvien alt-tekstit puuttuvat. Vaikuttaa kuvahaun nakyvyyteen.',
             'en': 'Image alt texts missing. Affects image search visibility.'
         },
         conversion_impact=0.01,
@@ -354,7 +354,7 @@ RISK_FACTORS = {
 
 @dataclass
 class RiskImpactItem:
-    """Yksittäisen riskin vaikutus euroissa"""
+    """Yksittaisen riskin vaikutus euroissa"""
     risk_id: str
     risk_name: str
     description: str
@@ -390,7 +390,7 @@ class RevenueImpactAnalysis:
     industry: str
     industry_name: str
     
-    # Digitaalinen jalanjälki
+    # Digitaalinen jalanjalki
     digital_revenue: int
     digital_revenue_share: float
     organic_revenue: int
@@ -420,16 +420,16 @@ class RevenueImpactAnalysis:
 
 
 def detect_industry(url: str, basic_analysis: Dict[str, Any], company_intel: Dict[str, Any] = None) -> str:
-    """Tunnista toimiala URL:n, sisällön ja yritystietojen perusteella"""
+    """Tunnista toimiala URL:n, sisallon ja yritystietojen perusteella"""
     
-    # Yritä ensin company_intel:sta
+    # Yrita ensin company_intel:sta
     if company_intel:
         industry_code = company_intel.get('industry_code') or ''
         industry_name = (company_intel.get('industry') or '').lower()
         
         # TOL-koodit (Suomi)
         if industry_code:
-            if industry_code.startswith('47'):  # Vähittäiskauppa
+            if industry_code.startswith('47'):  # Vahittaiskauppa
                 if '4791' in industry_code:  # Verkkokauppa
                     return 'ecommerce'
                 return 'retail'
@@ -440,7 +440,7 @@ def detect_industry(url: str, basic_analysis: Dict[str, Any], company_intel: Dic
             if industry_code.startswith('C'):   # Teollisuus
                 return 'manufacturing'
         
-        # Toimialan nimestä
+        # Toimialan nimesta
         if any(x in industry_name for x in ['koru', 'jewelry', 'gold', 'kulta']):
             return 'jewelry'
         if any(x in industry_name for x in ['verkkokauppa', 'ecommerce', 'e-commerce']):
@@ -550,7 +550,7 @@ def calculate_revenue_impact(
     Logiikka:
     1. Ota digitaalinen osuus liikevaihdosta (toimialan mukaan)
     2. Laske jokaisen riskin vaikutus erikseen
-    3. Huomioi päällekkäisyydet (riskit eivät summaudu 100%)
+    3. Huomioi paallekkaisyydet (riskit eivat summaudu 100%)
     4. Anna range (low-high) ja expected arvo
     """
     
@@ -572,7 +572,7 @@ def calculate_revenue_impact(
             
         risk = RISK_FACTORS[risk_id]
         
-        # Määritä mihin liikevaihtoon vaikuttaa
+        # Maarita mihin liikevaihtoon vaikuttaa
         if risk.affects_all:
             affected_base = digital_revenue
             affected_area = 'all_digital'
@@ -594,7 +594,7 @@ def calculate_revenue_impact(
             risk.trust_impact * 0.15
         )
         
-        # Huomioi todennäköisyys
+        # Huomioi todennakoisyys
         expected_impact_rate = total_impact_rate * risk.probability
         
         # Laske eurot
@@ -635,26 +635,26 @@ def calculate_revenue_impact(
             affected_revenue_base=affected_base,
             affected_area=affected_area,
             fix_effort=risk.fix_effort,
-            fix_cost_range=f"€{fix_cost_low:,} - €{fix_cost_high:,}",
-            fix_time_range=f"{fix_time_low}-{fix_time_high} päivää" if language == 'fi' else f"{fix_time_low}-{fix_time_high} days",
+            fix_cost_range=f"EUR{fix_cost_low:,} - EUR{fix_cost_high:,}",
+            fix_time_range=f"{fix_time_low}-{fix_time_high} paivaa" if language == 'fi' else f"{fix_time_low}-{fix_time_high} days",
             priority=priority,
             roi_ratio=round(roi_ratio, 1)
         ))
     
-    # Järjestä prioriteetin mukaan
+    # Jarjesta prioriteetin mukaan
     risk_items.sort(key=lambda x: (x.priority, -x.annual_impact_expected))
     
     # Laske kokonaisvaikutus
-    # HUOM: Riskit eivät summaudu suoraan - käytetään "diminishing returns" logiikkaa
-    # Ensimmäinen riski = 100%, toinen = 80%, kolmas = 60%, jne.
+    # HUOM: Riskit eivat summaudu suoraan - kaytetaan "diminishing returns" logiikkaa
+    # Ensimmainen riski = 100%, toinen = 80%, kolmas = 60%, jne.
     total_impact_expected = 0
     diminishing_factor = 1.0
     
     for item in risk_items:
         total_impact_expected += int(item.annual_impact_expected * diminishing_factor)
-        diminishing_factor *= 0.75  # Jokainen seuraava riski vaikuttaa vähemmän
+        diminishing_factor *= 0.75  # Jokainen seuraava riski vaikuttaa vahemman
     
-    # Cap total impact to max 40% of digital revenue (realistinen yläraja)
+    # Cap total impact to max 40% of digital revenue (realistinen ylaraja)
     total_impact_expected = min(total_impact_expected, int(digital_revenue * 0.40))
     total_impact_low = int(total_impact_expected * 0.6)
     total_impact_high = int(total_impact_expected * 1.4)
@@ -675,13 +675,13 @@ def calculate_revenue_impact(
         confidence_note = 'Perustuu havaittuihin riskeihin ja toimiala-arvioihin' if language == 'fi' else 'Based on detected risks and industry estimates'
     else:
         confidence_level = 'low'
-        confidence_note = 'Rajoitettu data - suosittelemme lisäanalyysiä' if language == 'fi' else 'Limited data - we recommend additional analysis'
+        confidence_note = 'Rajoitettu data - suosittelemme lisaanalyysia' if language == 'fi' else 'Limited data - we recommend additional analysis'
     
     methodology_note = (
         f"Laskelma perustuu {profile['name'][language]}-toimialan keskiarvoihin: "
         f"{int(profile['digital_revenue_share']*100)}% liikevaihdosta digitaalista, "
-        f"{int(profile['organic_traffic_share']*100)}% liikenteestä orgaanista, "
-        f"{int(profile['mobile_traffic_share']*100)}% mobiilikäyttäjiä."
+        f"{int(profile['organic_traffic_share']*100)}% liikenteesta orgaanista, "
+        f"{int(profile['mobile_traffic_share']*100)}% mobiilikayttajia."
     ) if language == 'fi' else (
         f"Calculation based on {profile['name'][language]} industry averages: "
         f"{int(profile['digital_revenue_share']*100)}% digital revenue, "
