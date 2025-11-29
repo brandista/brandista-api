@@ -105,32 +105,6 @@ class GuardianAgent(BaseAgent):
         competitor_analyses = analyst_results.get('competitor_analyses', [])
         your_score = analyst_results.get('your_score', 0)
         
-        # Merge company_intel from Scout into competitor_analyses
-        if scout_results:
-            enriched_competitors = scout_results.get('competitors_enriched', [])
-            
-            # Create lookup by URL/domain
-            enriched_lookup = {}
-            for enriched in enriched_competitors:
-                url = enriched.get('url', '')
-                if url:
-                    # Normalize URL for matching
-                    domain = url.replace('https://', '').replace('http://', '').replace('www.', '').rstrip('/')
-                    enriched_lookup[domain] = enriched
-            
-            # Merge company_intel into competitor_analyses
-            for comp in competitor_analyses:
-                comp_url = comp.get('url', '')
-                if comp_url:
-                    comp_domain = comp_url.replace('https://', '').replace('http://', '').replace('www.', '').rstrip('/')
-                    if comp_domain in enriched_lookup:
-                        enriched_data = enriched_lookup[comp_domain]
-                        comp['company_intel'] = enriched_data.get('company_intel', {})
-                        comp['employees'] = enriched_data.get('employees')
-                        comp['revenue'] = enriched_data.get('revenue')
-                        comp['company_name'] = enriched_data.get('company_name')
-                        logger.info(f"[Guardian] Merged company_intel for {comp_domain}: employees={comp.get('employees')}")
-        
         self._update_progress(15, self._task("building_risk_register"))
         
         self._emit_insight(
@@ -139,7 +113,7 @@ class GuardianAgent(BaseAgent):
             insight_type=InsightType.FINDING
         )
         
-        # 1. Rakenna riskiregisteri
+        # 1. Rakenna riskiregisteri (vanha tapa, säilytetään yhteensopivuus)
         try:
             risk_register = build_risk_register(
                 your_analysis.get('basic', {}),
@@ -153,65 +127,95 @@ class GuardianAgent(BaseAgent):
         
         self._update_progress(30, self._task("calculating_impact"))
         
-        # 2. Laske revenue impact - käytä aitoa dataa jos saatavilla
+        # 2. UUSI: Realistinen Revenue Impact Model
+        from revenue_impact_model import (
+            calculate_revenue_impact, 
+            detect_risks_from_analysis,
+            detect_industry,
+            revenue_impact_to_dict
+        )
+        
+        # Hae liikevaihto
         annual_revenue = 500000  # Default €500k fallback
         revenue_source = "default"
+        company_name = "Company"
         
-        # Try to get real revenue from Company Intelligence (Scout results)
         try:
             your_company_intel = scout_results.get('your_company_intel', {}) if scout_results else {}
             
             if your_company_intel and your_company_intel.get('revenue'):
-                # Use actual revenue from YTJ/Kauppalehti
                 annual_revenue = int(your_company_intel.get('revenue', 500000))
                 revenue_source = "company_intel"
+                company_name = your_company_intel.get('name', 'Company')
                 logger.info(f"[Guardian] Using real revenue from Company Intel: €{annual_revenue:,}")
-                
-                self._emit_insight(
-                    f"💰 Liikevaihto: €{annual_revenue:,.0f} (YTJ/Kauppalehti)" if self._language == 'fi' else 
-                    f"💰 Revenue: €{annual_revenue:,.0f} (YTJ/Kauppalehti)",
-                    priority=AgentPriority.LOW,
-                    insight_type=InsightType.FINDING,
-                    data={'revenue': annual_revenue, 'source': 'company_intel'}
-                )
             elif context.revenue_input:
-                # Use user-provided revenue input
                 annual_revenue = int(context.revenue_input.get('annual_revenue', 500000))
                 revenue_source = "user_input"
-                logger.info(f"[Guardian] Using user-provided revenue: €{annual_revenue:,}")
             else:
-                # Use default
                 logger.info(f"[Guardian] Using default revenue estimate: €{annual_revenue:,}")
                 
         except Exception as e:
             logger.warning(f"[Guardian] Revenue fetch failed, using default: {e}")
             annual_revenue = 500000
         
-        # Try new calculation method first, fallback to simple calculation
-        try:
-            # Calculate annual risk from risk_register items
-            risk_multipliers = {12: 0.06, 9: 0.04, 8: 0.03, 6: 0.02}
-            total_risk_percent = 0
-            for risk_item in risk_register:
-                risk_score = getattr(risk_item, 'risk_score', 0) if hasattr(risk_item, 'risk_score') else (risk_item.get('risk_score', 0) if isinstance(risk_item, dict) else 0)
-                multiplier = risk_multipliers.get(risk_score, risk_score * 0.005)
-                total_risk_percent += multiplier
-            
-            total_risk_percent = min(total_risk_percent, 0.25)
-            annual_risk = int(annual_revenue * total_risk_percent)
-            
-            business_impact = {
-                'total_monthly_risk': annual_risk // 12,
-                'total_annual_risk': annual_risk
-            }
-        except Exception as e:
-            logger.warning(f"[Guardian] Risk calculation fallback: {e}")
-            business_impact = {
-                'total_monthly_risk': 0,
-                'total_annual_risk': 0
-            }
+        # Tunnista toimiala
+        industry = detect_industry(
+            context.url,
+            your_analysis.get('basic', {}),
+            scout_results.get('your_company_intel', {}) if scout_results else None
+        )
+        logger.info(f"[Guardian] Detected industry: {industry}")
         
-        annual_risk = business_impact.get('total_annual_risk', 0)
+        # Tunnista riskit analyysidatasta
+        detected_risks = detect_risks_from_analysis(
+            your_analysis.get('basic', {}),
+            your_analysis.get('technical', {}),
+            your_analysis.get('content', {})
+        )
+        logger.info(f"[Guardian] Detected risks: {detected_risks}")
+        
+        # Laske realistinen revenue impact
+        revenue_impact_analysis = calculate_revenue_impact(
+            annual_revenue=annual_revenue,
+            detected_risks=detected_risks,
+            industry=industry,
+            company_name=company_name,
+            language=context.language
+        )
+        
+        # Muunna dictiksi
+        revenue_impact_data = revenue_impact_to_dict(revenue_impact_analysis)
+        
+        # Emit insight
+        total_impact = revenue_impact_analysis.total_impact_expected
+        if total_impact > 100000:
+            self._emit_insight(
+                f"⚠️ {'Arvioitu vuotuinen riski' if self._language == 'fi' else 'Estimated annual risk'}: €{total_impact:,.0f} ({revenue_impact_analysis.total_impact_percentage}% {'liikevaihdosta' if self._language == 'fi' else 'of revenue'})",
+                priority=AgentPriority.CRITICAL,
+                insight_type=InsightType.THREAT,
+                data={'annual_risk': total_impact, 'percentage': revenue_impact_analysis.total_impact_percentage}
+            )
+        elif total_impact > 20000:
+            self._emit_insight(
+                f"💡 {'Arvioitu vuotuinen riski' if self._language == 'fi' else 'Estimated annual risk'}: €{total_impact:,.0f}",
+                priority=AgentPriority.HIGH,
+                insight_type=InsightType.THREAT,
+                data={'annual_risk': total_impact}
+            )
+        
+        # Log methodology
+        logger.info(f"[Guardian] Revenue Impact: €{total_impact:,} ({revenue_impact_analysis.confidence_level} confidence)")
+        logger.info(f"[Guardian] Methodology: {revenue_impact_analysis.methodology_note}")
+        
+        # Vanha business_impact säilytetään yhteensopivuutta varten
+        business_impact = {
+            'total_monthly_risk': total_impact // 12,
+            'total_annual_risk': total_impact,
+            # Uusi rikas data
+            'revenue_impact_analysis': revenue_impact_data
+        }
+        
+        annual_risk = total_impact
         
         # Emit revenue risk insight
         if annual_risk > 50000:
@@ -340,12 +344,8 @@ class GuardianAgent(BaseAgent):
                 'effort': 'medium'
             })
         
-        # Mobile threats - only if explicitly marked as not mobile ready
-        mobile_ready = basic.get('mobile_ready') if basic else None
-        # Accept various "yes" values, default to assuming mobile-ready if no data
-        is_mobile_ready = mobile_ready in ['Kyllä', 'Yes', True, 'yes', 'kyllä', None]
-        logger.info(f"[Guardian] Mobile check: mobile_ready={mobile_ready}, is_mobile_ready={is_mobile_ready}")
-        if not is_mobile_ready:
+        # Mobile threats
+        if basic.get('mobile_ready') not in ['Kyllä', 'Yes', True]:
             threats.append({
                 'category': 'mobile',
                 'title': self._threat_title('mobile'),
@@ -354,10 +354,8 @@ class GuardianAgent(BaseAgent):
                 'effort': 'medium'
             })
         
-        # SSL threats - default to True (assume SSL exists unless explicitly False)
-        has_ssl = tech.get('has_ssl', True) if tech else True
-        logger.info(f"[Guardian] SSL check: has_ssl={has_ssl} (tech exists: {bool(tech)})")
-        if has_ssl is False:  # Only trigger if explicitly False, not None
+        # SSL threats
+        if not tech.get('has_ssl'):
             threats.append({
                 'category': 'ssl',
                 'title': self._threat_title('ssl'),
@@ -606,46 +604,9 @@ class GuardianAgent(BaseAgent):
         }
     
     def _estimate_company_size(self, competitor: Dict[str, Any]) -> Dict[str, Any]:
-        """Arvioi yrityksen koko - käytä company_intel dataa jos saatavilla"""
+        """Arvioi yrityksen koko meta-signaaleista"""
         
-        # FIRST: Check for real company intel data (from Scout enrichment)
-        company_intel = competitor.get('company_intel', {})
-        real_employees = company_intel.get('employees') or competitor.get('employees')
-        real_revenue = company_intel.get('revenue') or competitor.get('revenue')
-        
-        if real_employees:
-            # Use real data!
-            if real_employees >= 100:
-                estimated = '100+'
-                size_category = 'large'
-            elif real_employees >= 50:
-                estimated = '50-100'
-                size_category = 'medium-large'
-            elif real_employees >= 20:
-                estimated = '20-50'
-                size_category = 'medium'
-            elif real_employees >= 5:
-                estimated = '5-20'
-                size_category = 'small'
-            else:
-                estimated = '1-5'
-                size_category = 'micro'
-            
-            logger.info(f"[Guardian] Using real employee count: {real_employees} -> {estimated}")
-            
-            return {
-                'has_careers_page': real_employees >= 20,
-                'has_multiple_locations': real_employees >= 50,
-                'has_team_page': real_employees >= 10,
-                'content_volume': 'high' if real_employees >= 50 else 'medium' if real_employees >= 10 else 'low',
-                'estimated_employees': estimated,
-                'actual_employees': real_employees,
-                'actual_revenue': real_revenue,
-                'size_category': size_category,
-                'source': 'company_intel'
-            }
-        
-        # FALLBACK: Estimate from meta-signals if no real data
+        # Signaaleja sivuston analyysistä
         basic = competitor.get('basic', {})
         content = competitor.get('content', {})
         
@@ -654,8 +615,7 @@ class GuardianAgent(BaseAgent):
             'has_multiple_locations': False,
             'has_team_page': False,
             'content_volume': 'low',
-            'estimated_employees': 'unknown',
-            'source': 'estimated'
+            'estimated_employees': 'unknown'
         }
         
         # Tarkista sivustolta löytyvät signaalit
