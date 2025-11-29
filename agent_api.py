@@ -745,6 +745,7 @@ async def websocket_agent_analysis(
                             "competitor_threats": competitor_threats,
                             "rasm_score": rasm_score,
                             "risk_count": risk_count,  # NEW
+                            "revenue_impact_analysis": revenue_impact.get('revenue_impact_analysis', {}),  # NEW: Detailed breakdown
                             
                             # Prospector data
                             "market_gaps": market_gaps_mapped,  # Now mapped to frontend format
