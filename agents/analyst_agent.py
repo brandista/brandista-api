@@ -1,6 +1,7 @@
-
+# -*- coding: utf-8 -*-
+"""
 Growth Engine 2.0 - Analyst Agent
-📊 "The Data Scientist" - Syvällinen analyysi ja benchmark-vertailu
+"The Data Scientist" - Syvallinen analyysi ja benchmark-vertailu
 """
 
 import asyncio
