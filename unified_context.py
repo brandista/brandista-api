@@ -116,35 +116,6 @@ def init_unified_context_tables():
     try:
         cursor = conn.cursor()
         
-        # =====================================================
-        # MIGRATION: Add missing columns to existing tables
-        # This runs on every startup but is safe (IF NOT EXISTS)
-        # =====================================================
-        migration_queries = [
-            # analyses table - add missing columns
-            "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS score INTEGER",
-            "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS ranking INTEGER",
-            "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS total_competitors INTEGER",
-            "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS revenue_at_risk DECIMAL(15,2)",
-            "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS rasm_score INTEGER",
-            "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS benchmark JSONB",
-            "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS threats JSONB",
-            "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS opportunities JSONB",
-            "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS action_plan JSONB",
-            "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS raw_results JSONB",
-            "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS duration_seconds DECIMAL(10,2)",
-        ]
-        
-        for query in migration_queries:
-            try:
-                cursor.execute(query)
-            except Exception as e:
-                # Column might already exist or table doesn't exist yet
-                logger.debug(f"Migration query skipped: {e}")
-        
-        conn.commit()
-        logger.info("✅ Database migration completed - columns verified")
-        
         # 1. User Profiles (Growth Engine profiles)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS user_profiles (
@@ -405,7 +376,8 @@ def save_analysis(
     opportunities: List = None,
     action_plan: Dict = None,
     raw_results: Dict = None,
-    duration_seconds: float = 0
+    duration_seconds: float = 0,
+    analysis_type: str = "growth_engine"  # NEW: analysis type
 ) -> Optional[int]:
     """Save analysis result, return analysis ID"""
     conn = connect_db()
@@ -418,9 +390,10 @@ def save_analysis(
             INSERT INTO analyses (
                 user_id, url, score, ranking, total_competitors,
                 revenue_at_risk, rasm_score, benchmark, threats,
-                opportunities, action_plan, raw_results, duration_seconds
+                opportunities, action_plan, raw_results, duration_seconds,
+                analysis_type
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """, (
             user_id, url, score, ranking, total_competitors,
@@ -430,7 +403,8 @@ def save_analysis(
             json.dumps(_serialize_for_json(opportunities) or []),
             json.dumps(_serialize_for_json(action_plan) or {}),
             json.dumps(_serialize_for_json(raw_results) or {}),
-            duration_seconds
+            duration_seconds,
+            analysis_type
         ))
         
         analysis_id = cursor.fetchone()[0]

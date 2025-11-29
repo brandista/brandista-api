@@ -12,6 +12,49 @@ from datetime import datetime
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends, Header
 from pydantic import BaseModel, Field
 
+def serialize_for_json(obj: Any) -> Any:
+    """
+    Recursively convert Pydantic models and other non-serializable objects to JSON-safe types.
+    """
+    if obj is None:
+        return None
+    
+    # Handle Pydantic models (v1 and v2)
+    if hasattr(obj, 'model_dump'):
+        return serialize_for_json(obj.model_dump())
+    if hasattr(obj, 'dict'):
+        return serialize_for_json(obj.dict())
+    
+    # Handle dictionaries
+    if isinstance(obj, dict):
+        return {k: serialize_for_json(v) for k, v in obj.items()}
+    
+    # Handle lists and tuples
+    if isinstance(obj, (list, tuple)):
+        return [serialize_for_json(item) for item in obj]
+    
+    # Handle sets
+    if isinstance(obj, set):
+        return [serialize_for_json(item) for item in obj]
+    
+    # Handle datetime
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    
+    # Handle enums
+    if hasattr(obj, 'value'):
+        return obj.value
+    
+    # Return primitives as-is
+    if isinstance(obj, (str, int, float, bool)):
+        return obj
+    
+    # Fallback: try to convert to string
+    try:
+        return str(obj)
+    except:
+        return None
+
 # Auth functions - lazy import to avoid circular dependency
 def _get_auth_functions():
     """Lazy import auth functions from main to avoid circular import"""
@@ -722,17 +765,17 @@ async def websocket_agent_analysis(
                             
                             # AI Analysis data (from your_analysis)
                             "your_company_intel": your_company,  # Alias for compatibility
-                            "ai_analysis": your_analysis.get('ai_analysis', {}),
+                            "ai_analysis": serialize_for_json(your_analysis.get('ai_analysis', {})),
                             
-                            # Full agent results for deep dive views
-                            "agent_results": {
+                            # Full agent results for deep dive views (serialized to avoid Pydantic issues)
+                            "agent_results": serialize_for_json({
                                 "scout": {"data": scout_result},
                                 "analyst": {"data": analyst_result},
                                 "guardian": {"data": guardian_result},
                                 "prospector": {"data": prospector_result},
                                 "strategist": {"data": strategist_result},
                                 "planner": {"data": planner}
-                            }
+                            })
                         },
                         "timestamp": datetime.now().isoformat()
                     })
