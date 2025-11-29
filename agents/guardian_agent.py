@@ -128,12 +128,18 @@ class GuardianAgent(BaseAgent):
         self._update_progress(30, self._task("calculating_impact"))
         
         # 2. UUSI: Realistinen Revenue Impact Model
-        from revenue_impact_model import (
-            calculate_revenue_impact, 
-            detect_risks_from_analysis,
-            detect_industry,
-            revenue_impact_to_dict
-        )
+        try:
+            from revenue_impact_model import (
+                calculate_revenue_impact, 
+                detect_risks_from_analysis,
+                detect_industry,
+                revenue_impact_to_dict
+            )
+            USE_NEW_REVENUE_MODEL = True
+            logger.info("[Guardian] ✅ revenue_impact_model loaded successfully")
+        except ImportError as e:
+            logger.warning(f"[Guardian] ⚠️ revenue_impact_model not available, using fallback: {e}")
+            USE_NEW_REVENUE_MODEL = False
         
         # Hae liikevaihto
         annual_revenue = 500000  # Default €500k fallback
@@ -158,64 +164,83 @@ class GuardianAgent(BaseAgent):
             logger.warning(f"[Guardian] Revenue fetch failed, using default: {e}")
             annual_revenue = 500000
         
-        # Tunnista toimiala
-        industry = detect_industry(
-            context.url,
-            your_analysis.get('basic', {}),
-            scout_results.get('your_company_intel', {}) if scout_results else None
-        )
-        logger.info(f"[Guardian] Detected industry: {industry}")
-        
-        # Tunnista riskit analyysidatasta
-        detected_risks = detect_risks_from_analysis(
-            your_analysis.get('basic', {}),
-            your_analysis.get('technical', {}),
-            your_analysis.get('content', {})
-        )
-        logger.info(f"[Guardian] Detected risks: {detected_risks}")
-        
-        # Laske realistinen revenue impact
-        revenue_impact_analysis = calculate_revenue_impact(
-            annual_revenue=annual_revenue,
-            detected_risks=detected_risks,
-            industry=industry,
-            company_name=company_name,
-            language=context.language
-        )
-        
-        # Muunna dictiksi
-        revenue_impact_data = revenue_impact_to_dict(revenue_impact_analysis)
-        
-        # Emit insight
-        total_impact = revenue_impact_analysis.total_impact_expected
-        if total_impact > 100000:
-            self._emit_insight(
-                f"⚠️ {'Arvioitu vuotuinen riski' if self._language == 'fi' else 'Estimated annual risk'}: €{total_impact:,.0f} ({revenue_impact_analysis.total_impact_percentage}% {'liikevaihdosta' if self._language == 'fi' else 'of revenue'})",
-                priority=AgentPriority.CRITICAL,
-                insight_type=InsightType.THREAT,
-                data={'annual_risk': total_impact, 'percentage': revenue_impact_analysis.total_impact_percentage}
+        # Käytä uutta mallia jos saatavilla
+        if USE_NEW_REVENUE_MODEL:
+            # Tunnista toimiala
+            industry = detect_industry(
+                context.url,
+                your_analysis.get('basic', {}),
+                scout_results.get('your_company_intel', {}) if scout_results else None
             )
-        elif total_impact > 20000:
-            self._emit_insight(
-                f"💡 {'Arvioitu vuotuinen riski' if self._language == 'fi' else 'Estimated annual risk'}: €{total_impact:,.0f}",
-                priority=AgentPriority.HIGH,
-                insight_type=InsightType.THREAT,
-                data={'annual_risk': total_impact}
+            logger.info(f"[Guardian] Detected industry: {industry}")
+            
+            # Tunnista riskit analyysidatasta
+            detected_risks = detect_risks_from_analysis(
+                your_analysis.get('basic', {}),
+                your_analysis.get('technical', {}),
+                your_analysis.get('content', {})
             )
-        
-        # Log methodology
-        logger.info(f"[Guardian] Revenue Impact: €{total_impact:,} ({revenue_impact_analysis.confidence_level} confidence)")
-        logger.info(f"[Guardian] Methodology: {revenue_impact_analysis.methodology_note}")
-        
-        # Vanha business_impact säilytetään yhteensopivuutta varten
-        business_impact = {
-            'total_monthly_risk': total_impact // 12,
-            'total_annual_risk': total_impact,
-            # Uusi rikas data
-            'revenue_impact_analysis': revenue_impact_data
-        }
-        
-        annual_risk = total_impact
+            logger.info(f"[Guardian] Detected risks: {detected_risks}")
+            
+            # Laske realistinen revenue impact
+            revenue_impact_analysis = calculate_revenue_impact(
+                annual_revenue=annual_revenue,
+                detected_risks=detected_risks,
+                industry=industry,
+                company_name=company_name,
+                language=context.language
+            )
+            
+            # Muunna dictiksi
+            revenue_impact_data = revenue_impact_to_dict(revenue_impact_analysis)
+            
+            # Emit insight
+            total_impact = revenue_impact_analysis.total_impact_expected
+            if total_impact > 100000:
+                self._emit_insight(
+                    f"⚠️ {'Arvioitu vuotuinen riski' if self._language == 'fi' else 'Estimated annual risk'}: €{total_impact:,.0f} ({revenue_impact_analysis.total_impact_percentage}% {'liikevaihdosta' if self._language == 'fi' else 'of revenue'})",
+                    priority=AgentPriority.CRITICAL,
+                    insight_type=InsightType.THREAT,
+                    data={'annual_risk': total_impact, 'percentage': revenue_impact_analysis.total_impact_percentage}
+                )
+            elif total_impact > 20000:
+                self._emit_insight(
+                    f"💡 {'Arvioitu vuotuinen riski' if self._language == 'fi' else 'Estimated annual risk'}: €{total_impact:,.0f}",
+                    priority=AgentPriority.HIGH,
+                    insight_type=InsightType.THREAT,
+                    data={'annual_risk': total_impact}
+                )
+            
+            # Log methodology
+            logger.info(f"[Guardian] Revenue Impact: €{total_impact:,} ({revenue_impact_analysis.confidence_level} confidence)")
+            logger.info(f"[Guardian] Methodology: {revenue_impact_analysis.methodology_note}")
+            
+            # Vanha business_impact säilytetään yhteensopivuutta varten
+            business_impact = {
+                'total_monthly_risk': total_impact // 12,
+                'total_annual_risk': total_impact,
+                # Uusi rikas data
+                'revenue_impact_analysis': revenue_impact_data
+            }
+            
+            annual_risk = total_impact
+        else:
+            # FALLBACK: Vanha yksinkertainen laskenta
+            logger.info("[Guardian] Using fallback revenue calculation")
+            risk_multipliers = {12: 0.06, 9: 0.04, 8: 0.03, 6: 0.02}
+            total_risk_percent = 0
+            for risk_item in risk_register:
+                risk_score = getattr(risk_item, 'risk_score', 0) if hasattr(risk_item, 'risk_score') else (risk_item.get('risk_score', 0) if isinstance(risk_item, dict) else 0)
+                multiplier = risk_multipliers.get(risk_score, risk_score * 0.005)
+                total_risk_percent += multiplier
+            
+            total_risk_percent = min(total_risk_percent, 0.25)
+            annual_risk = int(annual_revenue * total_risk_percent)
+            
+            business_impact = {
+                'total_monthly_risk': annual_risk // 12,
+                'total_annual_risk': annual_risk
+            }
         
         # Emit revenue risk insight
         if annual_risk > 50000:
