@@ -3095,8 +3095,9 @@ async def analyze_technical_aspects(url: str, html: str, headers: Optional[httpx
     soup = BeautifulSoup(html, 'html.parser')
     tech_score = 0
     
-    # SSL Check
-    has_ssl = url.startswith('https')
+    # SSL Check - check if URL uses HTTPS (already normalized by clean_url)
+    # Since clean_url adds https:// by default, we check if site actually responded via HTTPS
+    has_ssl = url.startswith('https://')
     if has_ssl: tech_score += 20
 
     # Mobile optimization
@@ -4009,6 +4010,10 @@ def build_role_summaries(url: str, basic: Dict[str, Any], impact: BusinessImpact
     
     state = ("leader" if s >= 75 else "strong" if s >= 60 else "baseline" if s >= 45 else "early")
     
+    # Check specific security issues
+    has_ssl = basic.get('has_ssl', True)  # Default true if not specified
+    has_security_headers = basic.get('has_security_headers', False)
+    
     # Identify top priorities dynamically by calculating completion percentage
     weights = SCORING_CONFIG.weights
     completion = {
@@ -4024,17 +4029,18 @@ def build_role_summaries(url: str, basic: Dict[str, Any], impact: BusinessImpact
     top_gaps = [gap[0] for gap in sorted_gaps[:3]]
     
     # Map categories to actionable business language (language-aware)
+    # Be specific about security issues - don't mention SSL if it's fine
     if language == 'fi':
         action_map = {
-            'security': 'SSL + turvallisuusotsikot',
+            'security': 'turvallisuusotsikot' if has_ssl else 'SSL + turvallisuusotsikot',
             'seo': 'SEO-perusteet',
-            'content': 'sisällön syvyys',
-            'mobile': 'mobiilikäyttökokemus',
+            'content': 'sisallon syvyys',
+            'mobile': 'mobiilikayttokokemus',
             'technical': 'tekninen SEO + analytiikka',
         }
     else:
         action_map = {
-            'security': 'SSL + security headers',
+            'security': 'security headers' if has_ssl else 'SSL + security headers',
             'seo': 'SEO fundamentals',
             'content': 'content depth',
             'mobile': 'mobile UX',
@@ -4046,7 +4052,7 @@ def build_role_summaries(url: str, basic: Dict[str, Any], impact: BusinessImpact
     # Ensure at least 2 priorities exist (fallback for edge cases)
     if len(priority_items) < 2:
         if language == 'fi':
-            priority_items.extend(['tekninen SEO', 'sisällön optimointi'])
+            priority_items.extend(['tekninen SEO', 'sisallon optimointi'])
         else:
             priority_items.extend(['technical SEO', 'content optimization'])
     
@@ -4062,39 +4068,42 @@ def build_role_summaries(url: str, basic: Dict[str, Any], impact: BusinessImpact
         # CEO: Strategic overview
         ceo_summary = (
             f"Olemme {s}/100 ({state_fi}). "
-            f"Tärkeimmät prioriteetit: {priority_items[0]}, {priority_items[1]}. "
-            f"Jos toteutamme nämä korjaukset, voimme avata {impact.revenue_uplift_range} "
+            f"Tarkeimmat prioriteetit: {priority_items[0]}, {priority_items[1]}. "
+            f"Jos toteutamme nama korjaukset, voimme avata {impact.revenue_uplift_range} "
             f"ja {impact.lead_gain_estimate}. Fokus: yksi muutos viikossa."
         )
         
         # CMO: Growth levers
         cmo_focus = []
         if 'seo' in top_gaps or 'content' in top_gaps:
-            cmo_focus.append(f"SEO + sisältö → {impact.lead_gain_estimate}")
+            cmo_focus.append(f"SEO + sisalto -> {impact.lead_gain_estimate}")
         if 'mobile' in top_gaps:
-            cmo_focus.append(f"mobiilikäyttökokemus → parempi konversio")
+            cmo_focus.append(f"mobiilikayttokokemus -> parempi konversio")
         if not cmo_focus:
-            cmo_focus.append(f"Konversion optimointi → {impact.revenue_uplift_range}")
+            cmo_focus.append(f"Konversion optimointi -> {impact.revenue_uplift_range}")
         
         cmo_summary = (
             f"Kasvun vipuvarret: {' + '.join(cmo_focus)}. "
             f"Tavoite: {impact.revenue_uplift_range}. Seuraa viikoittain liidien laatua."
         )
         
-        # CTO: Technical priorities
+        # CTO: Technical priorities - be specific about security
         cto_priorities = []
         if 'security' in top_gaps:
-            cto_priorities.append("SSL + turvallisuusotsikot")
+            if not has_ssl:
+                cto_priorities.append("SSL-sertifikaatti")
+            if not has_security_headers:
+                cto_priorities.append("turvallisuusotsikot (CSP, X-Frame-Options)")
         if 'mobile' in top_gaps:
             cto_priorities.append("Core Web Vitals (LCP, CLS)")
         if 'technical' in top_gaps:
             cto_priorities.append("analytiikka + tekninen SEO")
         
         if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
-            cto_priorities.insert(0, "SSR/esirenderöinti SPA:lle")
+            cto_priorities.insert(0, "SSR/esirenderinti SPA:lle")
         
         if not cto_priorities:
-            cto_priorities = ["viivästä ei-kriittinen JS", "optimoi kuvat"]
+            cto_priorities = ["viivasta ei-kriittinen JS", "optimoi kuvat"]
         
         cto_summary = (
             f"Priorisoi: {', '.join(cto_priorities[:3])}. "
@@ -4111,20 +4120,24 @@ def build_role_summaries(url: str, basic: Dict[str, Any], impact: BusinessImpact
         
         cmo_focus = []
         if 'seo' in top_gaps or 'content' in top_gaps:
-            cmo_focus.append(f"SEO + content → {impact.lead_gain_estimate}")
+            cmo_focus.append(f"SEO + content -> {impact.lead_gain_estimate}")
         if 'mobile' in top_gaps:
-            cmo_focus.append(f"mobile UX → better conversion")
+            cmo_focus.append(f"mobile UX -> better conversion")
         if not cmo_focus:
-            cmo_focus.append(f"Conversion optimization → {impact.revenue_uplift_range}")
+            cmo_focus.append(f"Conversion optimization -> {impact.revenue_uplift_range}")
         
         cmo_summary = (
             f"Growth levers: {' + '.join(cmo_focus)}. "
             f"Target: {impact.revenue_uplift_range}. Track weekly progress on lead quality."
         )
         
+        # CTO: Technical priorities - be specific about security
         cto_priorities = []
         if 'security' in top_gaps:
-            cto_priorities.append("SSL + security headers")
+            if not has_ssl:
+                cto_priorities.append("SSL certificate")
+            if not has_security_headers:
+                cto_priorities.append("security headers (CSP, X-Frame-Options)")
         if 'mobile' in top_gaps:
             cto_priorities.append("Core Web Vitals (LCP, CLS)")
         if 'technical' in top_gaps:
