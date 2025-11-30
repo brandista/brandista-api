@@ -1,7 +1,15 @@
+# -*- coding: utf-8 -*-
 """
 Growth Engine 2.0 - Planner Agent V2
 📋 "The Project Manager" - 90-päivän roadmap ja ROI
 ENHANCED: Rich action items with steps, owners, success metrics
+
+2025 PRIORITY ORDER:
+1. Conversion & UX (get more from existing traffic)
+2. AI/GEO Visibility (ChatGPT, Perplexity readiness)
+3. Content & Authority (E-E-A-T)
+4. Technical Foundation (speed, mobile)
+5. SEO comes naturally from above
 """
 
 import logging
@@ -602,7 +610,215 @@ ACTION_LIBRARY = {
             ],
             'owner': 'Kaikki',
             'time_estimate': '4-6 tuntia',
-            'success_metric': 'Täydellinen 90 päivän raportti, Q2-suunnitelma valmis',
+            'success_metric': 'Taydellinen 90 paivan raportti, Q2-suunnitelma valmis',
+            'priority': 'Korkea',
+            'category': 'planning'
+        }
+    },
+    
+    # ========================================
+    # AI/GEO OPTIMIZATION (2025+)
+    # ========================================
+    'ai_optimization': {
+        'en': {
+            'title': '🤖 AI Search Optimization (ChatGPT, Perplexity)',
+            'description': 'Optimize your content to be found and recommended by AI search engines.',
+            'steps': [
+                'Write clear, factual content that AI can quote',
+                'Add FAQ sections with direct answers',
+                'Use structured data (Schema.org)',
+                'Build topical authority clusters',
+                'Create "best X for Y" style content',
+                'Ensure fast page load (AI crawlers are impatient)',
+                'Add author bios and credentials (E-E-A-T)',
+                'Test your content in ChatGPT/Perplexity'
+            ],
+            'owner': 'Content + SEO',
+            'time_estimate': '12-20 hours',
+            'success_metric': 'Brand mentioned in AI search results',
+            'priority': 'High',
+            'category': 'ai_visibility'
+        },
+        'fi': {
+            'title': '🤖 AI-hakuoptimointi (ChatGPT, Perplexity)',
+            'description': 'Optimoi sisaltosi loytymaan ja suositeltavaksi AI-hakukoneissa.',
+            'steps': [
+                'Kirjoita selkeaa, faktuaalista sisaltoa jota AI voi lainata',
+                'Lisaa UKK-osiot suorilla vastauksilla',
+                'Kayta strukturoitua dataa (Schema.org)',
+                'Rakenna aihe-auktoriteettiryppaat',
+                'Luo "paras X:lle Y" -tyyppista sisaltoa',
+                'Varmista nopea lataus (AI-crawlerit ovat karstamattomia)',
+                'Lisaa kirjoittajien biot ja patevyydet (E-E-A-T)',
+                'Testaa sisaltosi ChatGPT:ssa/Perplexityssa'
+            ],
+            'owner': 'Sisalto + SEO',
+            'time_estimate': '12-20 tuntia',
+            'success_metric': 'Brandi mainitaan AI-hakutuloksissa',
+            'priority': 'Korkea',
+            'category': 'ai_visibility'
+        }
+    },
+    
+    'authority_building': {
+        'en': {
+            'title': '🏆 Authority & E-E-A-T Building',
+            'description': 'Establish expertise, experience, authoritativeness, and trust.',
+            'steps': [
+                'Create detailed author pages with credentials',
+                'Add case studies and real results',
+                'Get mentions on industry sites',
+                'Publish original research or data',
+                'Add customer testimonials with photos',
+                'Display certifications and awards',
+                'Create a compelling About page',
+                'Build presence on LinkedIn/industry forums'
+            ],
+            'owner': 'Marketing',
+            'time_estimate': '15-25 hours',
+            'success_metric': 'Increased trust signals, more inbound links',
+            'priority': 'High',
+            'category': 'authority'
+        },
+        'fi': {
+            'title': '🏆 Auktoriteetin & E-E-A-T rakentaminen',
+            'description': 'Vahvista asiantuntemusta, kokemusta, auktoriteettia ja luotettavuutta.',
+            'steps': [
+                'Luo yksityiskohtaiset kirjoittajasivut patevyyksilla',
+                'Lisaa tapaustutkimuksia ja oikeita tuloksia',
+                'Hanki mainintoja alan sivustoilla',
+                'Julkaise alkuperaista tutkimusta tai dataa',
+                'Lisaa asiakasarvioita kuvilla',
+                'Nayta sertifikaatit ja palkinnot',
+                'Luo vakuuttava Tietoa meista -sivu',
+                'Rakenna lasnaoloo LinkedInissa/alan foorumeilla'
+            ],
+            'owner': 'Markkinointi',
+            'time_estimate': '15-25 tuntia',
+            'success_metric': 'Kasvaneet luottamussignaalit, enemman linkkeja',
+            'priority': 'Korkea',
+            'category': 'authority'
+        }
+    },
+    
+    'ux_improvements': {
+        'en': {
+            'title': '✨ UX & Conversion Improvements',
+            'description': 'Improve user experience to increase conversions and engagement.',
+            'steps': [
+                'Simplify navigation (max 7 items)',
+                'Add clear value proposition above fold',
+                'Reduce form fields to minimum',
+                'Add progress indicators for multi-step forms',
+                'Improve readability (font size, contrast)',
+                'Add sticky CTA buttons',
+                'Test with real users (5 is enough)',
+                'Implement feedback based on tests'
+            ],
+            'owner': 'Design + Dev',
+            'time_estimate': '10-15 hours',
+            'success_metric': 'Improved conversion rate, lower bounce rate',
+            'priority': 'High',
+            'category': 'ux'
+        },
+        'fi': {
+            'title': '✨ UX & konversioparannukset',
+            'description': 'Paranna kayttokokemusta lisataksesi konversioita ja sitoutumista.',
+            'steps': [
+                'Yksinkertaista navigaatio (max 7 kohdetta)',
+                'Lisaa selkea arvolupaus naitton ylaosaan',
+                'Vahenna lomakekenttiä minimiin',
+                'Lisaa edistymisilmaisimet monivaihelomakkeisiin',
+                'Paranna luettavuutta (fonttikoko, kontrasti)',
+                'Lisaa kiinnitetyt CTA-napit',
+                'Testaa oikeilla kayttajilla (5 riittaa)',
+                'Toteuta palaute testien perusteella'
+            ],
+            'owner': 'Design + Kehitys',
+            'time_estimate': '10-15 tuntia',
+            'success_metric': 'Parantunut konversioprosentti, matalampi poistumisprosentti',
+            'priority': 'Korkea',
+            'category': 'ux'
+        }
+    },
+    
+    'trust_building': {
+        'en': {
+            'title': '⭐ Social Proof & Trust Signals',
+            'description': 'Add elements that build trust and credibility with visitors.',
+            'steps': [
+                'Collect and display customer reviews',
+                'Add client logos (with permission)',
+                'Display trust badges (SSL, payment, certifications)',
+                'Add real team photos',
+                'Show social media follower counts',
+                'Display awards and press mentions',
+                'Add live chat or chatbot',
+                'Create video testimonials'
+            ],
+            'owner': 'Marketing',
+            'time_estimate': '8-12 hours',
+            'success_metric': 'Increased trust metrics, more conversions',
+            'priority': 'High',
+            'category': 'trust'
+        },
+        'fi': {
+            'title': '⭐ Sosiaalinen todiste & luottamussignaalit',
+            'description': 'Lisaa elementteja jotka rakentavat luottamusta kavijoissa.',
+            'steps': [
+                'Keraa ja nayta asiakasarviot',
+                'Lisaa asiakaslogot (luvalla)',
+                'Nayta luottamussymbolit (SSL, maksu, sertifikaatit)',
+                'Lisaa oikeat tiimikuvat',
+                'Nayta sosiaalisen median seuraajamarat',
+                'Nayta palkinnot ja medianakyyvyys',
+                'Lisaa live-chat tai chatbot',
+                'Luo videosuosituksia'
+            ],
+            'owner': 'Markkinointi',
+            'time_estimate': '8-12 tuntia',
+            'success_metric': 'Kasvaneet luottamusmittarit, enemman konversioita',
+            'priority': 'Korkea',
+            'category': 'trust'
+        }
+    },
+    
+    'quarterly_review': {
+        'en': {
+            'title': '📊 90-Day Review & Next Quarter Planning',
+            'description': 'Review results, celebrate wins, plan the next 90 days.',
+            'steps': [
+                'Compare metrics: before vs after',
+                'Calculate ROI for each initiative',
+                'Document biggest wins',
+                'Identify what did not work',
+                'Gather team feedback',
+                'Prioritize next quarter actions',
+                'Set new KPIs',
+                'Celebrate progress!'
+            ],
+            'owner': 'All',
+            'time_estimate': '4-6 hours',
+            'success_metric': 'Clear Q2 roadmap, documented learnings',
+            'priority': 'High',
+            'category': 'planning'
+        },
+        'fi': {
+            'title': '📊 90 paivan katsaus & seuraava kvartaali',
+            'description': 'Arvioi tulokset, juhli voittoja, suunnittele seuraavat 90 paivaa.',
+            'steps': [
+                'Vertaa mittareita: ennen vs jalkeen',
+                'Laske ROI jokaiselle aloitteelle',
+                'Dokumentoi suurimmat voitot',
+                'Tunnista mika ei toiminut',
+                'Keraa tiimin palaute',
+                'Priorisoi seuraavan kvartaalin toimet',
+                'Aseta uudet KPI:t',
+                'Juhli edistymista!'
+            ],
+            'owner': 'Kaikki',
+            'time_estimate': '4-6 tuntia',
+            'success_metric': 'Selkea Q2-suunnitelma, dokumentoidut opit',
             'priority': 'Korkea',
             'category': 'planning'
         }
@@ -823,101 +1039,147 @@ class PlannerAgent(BaseAgent):
         guardian_results: Dict[str, Any],
         prospector_results: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
-        """Build phases with rich action items from library"""
+        """
+        Build phases with rich action items from library
+        
+        2025 PRIORITY ORDER (modern approach):
+        1. Conversion & UX (leads, user experience)
+        2. AI/GEO Readiness (ChatGPT, Perplexity visibility)
+        3. Content Strategy (E-E-A-T, expertise)
+        4. Technical Foundation (speed, mobile, security)
+        5. SEO comes naturally from above
+        """
         
         phases = []
         used_keys = set()
         
         # ========================================
-        # PHASE 1: Critical fixes and quick wins
+        # PHASE 1: Conversion & Quick Wins
+        # Focus: Get more value from existing traffic
         # ========================================
         phase1_tasks = []
         
-        # Add critical fixes based on detected issues
-        critical_issues = ['ssl_missing', 'analytics_missing']
-        for issue in critical_issues:
-            if issue in issues:
-                action_key = TASK_MAPPING.get(issue)
-                if action_key and action_key not in used_keys:
-                    action = self._get_action(action_key)
-                    if action:
-                        phase1_tasks.append(action)
-                        used_keys.add(action_key)
-        
-        # Add high-priority quick wins
-        quick_win_issues = ['meta_weak', 'h1_missing', 'cta_missing']
-        for issue in quick_win_issues:
-            if issue in issues:
-                action_key = TASK_MAPPING.get(issue)
-                if action_key and action_key not in used_keys:
-                    action = self._get_action(action_key)
-                    if action:
-                        phase1_tasks.append(action)
-                        used_keys.add(action_key)
-        
-        # Add SEO foundation if score is low
-        if overall_score < 60 and 'seo_foundation' not in used_keys:
-            action = self._get_action('seo_foundation')
+        # 1. CRITICAL: Analytics first (can't improve what you can't measure)
+        if 'analytics_missing' in issues and 'analytics_setup' not in used_keys:
+            action = self._get_action('analytics_setup')
             if action:
                 phase1_tasks.append(action)
-                used_keys.add('seo_foundation')
+                used_keys.add('analytics_setup')
         
-        # Add from strategist priorities (convert to rich format)
-        for priority in priorities[:3]:
-            if len(phase1_tasks) >= 5:
-                break
-            title = priority.get('title', '')
-            # Map priority to action key
-            action_key = self._map_priority_to_action(title)
-            if action_key and action_key not in used_keys:
+        # 2. Conversion & UX (highest ROI)
+        conversion_actions = ['cta_setup', 'conversion_funnel', 'ux_improvements']
+        for action_key in conversion_actions:
+            if action_key not in used_keys and len(phase1_tasks) < 3:
+                if action_key == 'cta_setup' and 'cta_missing' not in issues:
+                    continue
                 action = self._get_action(action_key)
                 if action:
                     phase1_tasks.append(action)
                     used_keys.add(action_key)
         
+        # 3. Mobile (55%+ of traffic is mobile)
+        if 'mobile_weak' in issues and 'mobile_optimization' not in used_keys:
+            action = self._get_action('mobile_optimization')
+            if action:
+                phase1_tasks.append(action)
+                used_keys.add('mobile_optimization')
+        
+        # 4. Security only if missing (SSL)
+        if 'ssl_missing' in issues and 'ssl_setup' not in used_keys:
+            action = self._get_action('ssl_setup')
+            if action:
+                phase1_tasks.append(action)
+                used_keys.add('ssl_setup')
+        
         if phase1_tasks:
             phases.append({
                 'phase': 1,
-                'name': 'Phase 1: Foundation' if self._language == 'en' else 'Vaihe 1: Perusta',
-                'duration': 'Days 1-30' if self._language == 'en' else 'Päivät 1-30',
-                'goal': 'Fix critical issues and quick wins' if self._language == 'en' else 'Korjaa kriittiset puutteet ja nopeat voitot',
-                'tasks': phase1_tasks[:5]
+                'name': 'Phase 1: Conversion & UX' if self._language == 'en' else 'Vaihe 1: Konversio & UX',
+                'duration': 'Weeks 1-4' if self._language == 'en' else 'Viikot 1-4',
+                'goal': 'Get more leads from existing traffic' if self._language == 'en' else 'Saa enemman liideja nykyisesta liikenteesta',
+                'tasks': phase1_tasks[:4]
             })
         
         # ========================================
-        # PHASE 2: Growth and optimization
+        # PHASE 2: Content & AI Visibility
+        # Focus: Be found by AI search (ChatGPT, Perplexity)
         # ========================================
         phase2_tasks = []
         
-        # Add growth-focused actions
-        growth_actions = ['content_strategy', 'competitive_content_gap', 'conversion_funnel', 'email_automation']
-        for action_key in growth_actions:
+        # 1. AI/GEO Readiness (future of search)
+        if 'ai_optimization' not in used_keys:
+            action = self._get_action('ai_optimization')
+            if action:
+                phase2_tasks.append(action)
+                used_keys.add('ai_optimization')
+        
+        # 2. Content Strategy (E-E-A-T)
+        content_actions = ['content_strategy', 'authority_building', 'competitive_content_gap']
+        for action_key in content_actions:
             if action_key not in used_keys and len(phase2_tasks) < 4:
                 action = self._get_action(action_key)
                 if action:
                     phase2_tasks.append(action)
                     used_keys.add(action_key)
         
-        # Add mobile/performance if needed
-        if 'mobile_weak' in issues or 'speed_slow' in issues:
-            for issue in ['mobile_weak', 'speed_slow']:
-                action_key = TASK_MAPPING.get(issue)
-                if action_key and action_key not in used_keys and len(phase2_tasks) < 5:
-                    action = self._get_action(action_key)
-                    if action:
-                        phase2_tasks.append(action)
-                        used_keys.add(action_key)
+        # 3. Structured data (helps AI understand your content)
+        if 'schema_missing' in issues and 'structured_data' not in used_keys:
+            action = self._get_action('structured_data')
+            if action:
+                phase2_tasks.append(action)
+                used_keys.add('structured_data')
         
         if phase2_tasks:
             phases.append({
                 'phase': 2,
-                'name': 'Phase 2: Growth' if self._language == 'en' else 'Vaihe 2: Kasvu',
-                'duration': 'Days 31-60' if self._language == 'en' else 'Päivät 31-60',
-                'goal': 'Build competitive advantage' if self._language == 'en' else 'Rakenna kilpailuetua',
-                'tasks': phase2_tasks[:5]
+                'name': 'Phase 2: Content & AI Visibility' if self._language == 'en' else 'Vaihe 2: Sisalto & AI-nakyvyys',
+                'duration': 'Weeks 5-8' if self._language == 'en' else 'Viikot 5-8',
+                'goal': 'Be found by AI search engines' if self._language == 'en' else 'Loydy AI-hakukoneista',
+                'tasks': phase2_tasks[:4]
             })
         
         # ========================================
+        # PHASE 3: Scale & Automation
+        # Focus: Systematize growth
+        # ========================================
+        phase3_tasks = []
+        
+        # 1. Email automation (owned channel)
+        if 'email_automation' not in used_keys:
+            action = self._get_action('email_automation')
+            if action:
+                phase3_tasks.append(action)
+                used_keys.add('email_automation')
+        
+        # 2. Social proof & trust
+        if 'trust_building' not in used_keys:
+            action = self._get_action('trust_building')
+            if action:
+                phase3_tasks.append(action)
+                used_keys.add('trust_building')
+        
+        # 3. Performance optimization
+        if 'speed_slow' in issues and 'performance_optimization' not in used_keys:
+            action = self._get_action('performance_optimization')
+            if action:
+                phase3_tasks.append(action)
+                used_keys.add('performance_optimization')
+        
+        # 4. Review and next quarter
+        if 'quarterly_review' not in used_keys:
+            action = self._get_action('quarterly_review')
+            if action:
+                phase3_tasks.append(action)
+                used_keys.add('quarterly_review')
+        
+        if phase3_tasks:
+            phases.append({
+                'phase': 3,
+                'name': 'Phase 3: Scale & Automate' if self._language == 'en' else 'Vaihe 3: Skaalaa & Automatisoi',
+                'duration': 'Weeks 9-12' if self._language == 'en' else 'Viikot 9-12',
+                'goal': 'Build systematic growth engine' if self._language == 'en' else 'Rakenna systemaattinen kasvumoottori',
+                'tasks': phase3_tasks[:3]
+            })
         # PHASE 3: Scale and optimize
         # ========================================
         phase3_tasks = []
