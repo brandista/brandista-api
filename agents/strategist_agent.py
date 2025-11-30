@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# Version: 2025-11-30-0940
+# Changes: ai_visibility in weights, 2025 priority weights
 """
 Growth Engine 2.0 - Strategist Agent
 "The Strategic Advisor" - Synthesis and prioritization

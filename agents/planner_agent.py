@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# Version: 2025-11-30-0940
+# Changes: 2025 phases, structured_data action, schema_missing detection
 """
 Growth Engine 2.0 - Planner Agent V2
 📋 "The Project Manager" - 90-päivän roadmap ja ROI

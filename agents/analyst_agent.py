@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# Version: 2025-11-30-0940
+# Changes: score_breakdown direct use, ai_visibility category, competitors_enriched passthrough
 """
 Growth Engine 2.0 - Analyst Agent
 "The Data Scientist" - Syvallinen analyysi ja benchmark-vertailu
@@ -211,12 +213,16 @@ class AnalystAgent(BaseAgent):
         
         category_comparison = self._compare_categories(your_analysis, competitor_analyses)
         
+        # Pass through competitors_enriched from Scout for Guardian
+        competitors_enriched = scout_results.get('competitors_enriched', []) if scout_results else []
+        
         return {
             'your_analysis': your_analysis,
             'competitor_analyses': competitor_analyses,
             'benchmark': benchmark,
             'category_comparison': category_comparison,
-            'your_score': your_analysis.get('final_score', 0)
+            'your_score': your_analysis.get('final_score', 0),
+            'competitors_enriched': competitors_enriched  # Company intel data for Guardian
         }
     
     async def _analyze_competitor(self, url: str, language: str) -> Optional[Dict[str, Any]]:

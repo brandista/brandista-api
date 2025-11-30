@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# Version: 2025-11-30-0940
+# Changes: Company intel integration, ai_visibility threat, real revenue/employees in threat calc
 """
 Growth Engine 2.0 - Guardian Agent
 The Risk Manager - RASM, threat analysis and Competitor Threat Assessment
@@ -118,6 +120,11 @@ class GuardianAgent(BaseAgent):
         category_comparison = analyst_results.get('category_comparison', {})
         competitor_analyses = analyst_results.get('competitor_analyses', [])
         your_score = analyst_results.get('your_score', 0)
+        
+        # Get enriched company intel - try analyst first (passed through), then scout
+        competitors_enriched = analyst_results.get('competitors_enriched', [])
+        if not competitors_enriched and scout_results:
+            competitors_enriched = scout_results.get('competitors_enriched', [])
         
         self._update_progress(15, self._task("building_risk_register"))
         
@@ -331,7 +338,8 @@ class GuardianAgent(BaseAgent):
         competitor_threat_assessment = await self._assess_competitor_threats(
             competitor_analyses=competitor_analyses,
             your_score=your_score,
-            scout_data=scout_results
+            scout_data=scout_results,
+            competitors_enriched=competitors_enriched  # Real company intel
         )
         
         self._update_progress(75, self._task("prioritizing_actions"))
@@ -573,13 +581,16 @@ class GuardianAgent(BaseAgent):
         self,
         competitor_analyses: List[Dict[str, Any]],
         your_score: int,
-        scout_data: Optional[Dict[str, Any]] = None
+        scout_data: Optional[Dict[str, Any]] = None,
+        competitors_enriched: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """
         Arvioi kilpailijoiden todellinen uhkataso.
         
         Ei riita, etta kilpailijan digitaalinen pistemaara on korkea.
         Pitaa myos arvioida: onko tama vakavasti otettava toimija?
+        
+        Uses real company intel (revenue, employees) when available.
         """
         if not competitor_analyses:
             return {
@@ -587,14 +598,32 @@ class GuardianAgent(BaseAgent):
                 'summary': {'high': 0, 'medium': 0, 'low': 0}
             }
         
+        # Build lookup for enriched data by URL/domain
+        enriched_lookup = {}
+        if competitors_enriched:
+            for enriched in competitors_enriched:
+                # Match by URL or domain
+                url = enriched.get('url', '')
+                domain = enriched.get('domain', '')
+                if url:
+                    enriched_lookup[url] = enriched
+                if domain:
+                    enriched_lookup[domain] = enriched
+        
         assessments = []
         
         for comp in competitor_analyses:
             try:
+                # Find matching enriched data
+                comp_url = comp.get('url', '')
+                comp_domain = comp.get('domain', '')
+                enriched_data = enriched_lookup.get(comp_url) or enriched_lookup.get(comp_domain) or {}
+                
                 assessment = await self._assess_single_competitor(
                     competitor=comp,
                     your_score=your_score,
-                    scout_data=scout_data
+                    scout_data=scout_data,
+                    enriched_data=enriched_data  # Pass real company intel
                 )
                 assessments.append(assessment)
             except Exception as e:
@@ -637,25 +666,47 @@ class GuardianAgent(BaseAgent):
         self,
         competitor: Dict[str, Any],
         your_score: int,
-        scout_data: Optional[Dict[str, Any]] = None
+        scout_data: Optional[Dict[str, Any]] = None,
+        enriched_data: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Arvioi yksittaisen kilpailijan uhkataso"""
+        """
+        Arvioi yksittaisen kilpailijan uhkataso.
+        
+        Uses real company intel (revenue, employees) when available from enriched_data.
+        Falls back to HTML-based estimation when real data not available.
+        """
         
         url = competitor.get('url', '')
         name = competitor.get('name', '') or self._extract_domain_name(url)
         digital_score = competitor.get('final_score', 0) or competitor.get('score', 0)
+        
+        # Get real company data if available
+        real_revenue = None
+        real_employees = None
+        company_name = name
+        
+        if enriched_data:
+            real_revenue = enriched_data.get('revenue')
+            real_employees = enriched_data.get('employees')
+            if enriched_data.get('name'):
+                company_name = enriched_data.get('name')
+            logger.info(f"[Guardian] Using real company intel for {company_name}: revenue={real_revenue}, employees={real_employees}")
         
         # Keraa signaalit
         signals = {
             'digital_score': digital_score,
             'score_diff': digital_score - your_score,  # Positive = they're ahead
             'domain_age': await self._check_domain_age(url),
-            'company_size': self._estimate_company_size(competitor),
+            'company_size': self._get_company_size(competitor, enriched_data),  # Uses real data when available
             'growth_signals': self._detect_growth_signals(competitor),
             'trust_signals': self._detect_trust_signals(competitor),
+            # Real company intel
+            'real_revenue': real_revenue,
+            'real_employees': real_employees,
+            'has_real_data': bool(real_revenue or real_employees),
         }
         
-        # Laske uhkataso
+        # Laske uhkataso (now uses real company intel)
         threat_score, reasoning = self._calculate_threat_level(signals)
         
         # Maarita threat level
@@ -668,14 +719,20 @@ class GuardianAgent(BaseAgent):
         
         return {
             'url': url,
-            'name': name,
+            'name': company_name,
             'digital_score': digital_score,
             'score_diff': signals['score_diff'],
             'threat_score': threat_score,
             'threat_level': threat_level,
             'threat_label': THREAT_LEVEL_LABELS[threat_level][self._language],
             'signals': signals,
-            'reasoning': reasoning
+            'reasoning': reasoning,
+            # Include real company data in output
+            'company_intel': {
+                'revenue': real_revenue,
+                'employees': real_employees,
+                'source': 'registry' if enriched_data else 'estimated'
+            }
         }
     
     async def _check_domain_age(self, url: str) -> Dict[str, Any]:
@@ -712,6 +769,66 @@ class GuardianAgent(BaseAgent):
             'is_established': None,
             'is_new': None
         }
+    
+    def _get_company_size(
+        self, 
+        competitor: Dict[str, Any], 
+        enriched_data: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Get company size - uses real registry data when available,
+        falls back to HTML-based estimation.
+        """
+        
+        # If we have real data, use it
+        if enriched_data:
+            real_employees = enriched_data.get('employees')
+            real_revenue = enriched_data.get('revenue')
+            
+            if real_employees or real_revenue:
+                # Categorize by real data
+                if real_employees:
+                    if real_employees >= 50:
+                        size_category = 'large'
+                        estimated = '50+'
+                    elif real_employees >= 20:
+                        size_category = 'medium'
+                        estimated = '20-50'
+                    elif real_employees >= 5:
+                        size_category = 'small'
+                        estimated = '5-20'
+                    else:
+                        size_category = 'micro'
+                        estimated = '1-5'
+                elif real_revenue:
+                    # Estimate from revenue (rough: €100k/employee)
+                    if real_revenue >= 5_000_000:
+                        size_category = 'large'
+                        estimated = '50+'
+                    elif real_revenue >= 2_000_000:
+                        size_category = 'medium'
+                        estimated = '20-50'
+                    elif real_revenue >= 500_000:
+                        size_category = 'small'
+                        estimated = '5-20'
+                    else:
+                        size_category = 'micro'
+                        estimated = '1-5'
+                
+                return {
+                    'source': 'registry',
+                    'real_employees': real_employees,
+                    'real_revenue': real_revenue,
+                    'size_category': size_category,
+                    'estimated_employees': estimated,
+                    'confidence': 'high'
+                }
+        
+        # Fall back to HTML estimation
+        estimated = self._estimate_company_size(competitor)
+        estimated['source'] = 'estimated'
+        estimated['confidence'] = 'low'
+        return estimated
     
     def _estimate_company_size(self, competitor: Dict[str, Any]) -> Dict[str, Any]:
         """Arvioi yrityksen koko meta-signaaleista"""
@@ -843,8 +960,10 @@ class GuardianAgent(BaseAgent):
         """
         Laske kilpailijan uhkataso 1-10.
         
-        Korkea uhka = vahva digitaalinen lasnaolo + vakiintunut yritys + kasvusignaalit
+        Korkea uhka = vahva digitaalinen lasnaolo + vakiintunut yritys + kasvusignaalit + resurssit
         Matala uhka = heikko lasnaolo TAI uusi startup ilman resursseja
+        
+        Uses real company intel (revenue, employees) when available for more accurate assessment.
         """
         score = 5  # Baseline
         reasons = []
@@ -873,14 +992,43 @@ class GuardianAgent(BaseAgent):
             score -= 1.5
             reasons.append("new player" if self._language == 'en' else "uusi toimija")
         
-        # 3. Yrityksen koko
+        # 3. Yrityksen koko - PREFER REAL DATA
         company_size = signals.get('company_size', {})
-        employees = company_size.get('estimated_employees', 'unknown')
-        if employees == '20+':
-            score += 1.5
-            reasons.append(f"~{employees} employees" if self._language == 'en' else f"~{employees} tyontekijaa")
-        elif employees == '1-5':
-            score -= 1
+        real_revenue = signals.get('real_revenue')
+        real_employees = signals.get('real_employees')
+        
+        if real_revenue or real_employees:
+            # Use real data - more accurate threat assessment
+            if real_revenue:
+                if real_revenue >= 5_000_000:
+                    score += 2.5
+                    reasons.append(f"€{real_revenue/1_000_000:.1f}M revenue" if self._language == 'en' else f"€{real_revenue/1_000_000:.1f}M liikevaihto")
+                elif real_revenue >= 1_000_000:
+                    score += 1.5
+                    reasons.append(f"€{real_revenue/1_000_000:.1f}M revenue" if self._language == 'en' else f"€{real_revenue/1_000_000:.1f}M liikevaihto")
+                elif real_revenue >= 500_000:
+                    score += 0.5
+                elif real_revenue < 200_000:
+                    score -= 1
+                    reasons.append("small revenue" if self._language == 'en' else "pieni liikevaihto")
+            
+            if real_employees:
+                if real_employees >= 50:
+                    score += 1.5
+                    reasons.append(f"{real_employees} employees" if self._language == 'en' else f"{real_employees} tyontekijaa")
+                elif real_employees >= 20:
+                    score += 1
+                    reasons.append(f"{real_employees} employees" if self._language == 'en' else f"{real_employees} tyontekijaa")
+                elif real_employees <= 3:
+                    score -= 0.5
+        else:
+            # Fallback to estimated data
+            employees = company_size.get('estimated_employees', 'unknown')
+            if employees == '20+' or employees == '50+':
+                score += 1.5
+                reasons.append(f"~{employees} employees" if self._language == 'en' else f"~{employees} tyontekijaa")
+            elif employees == '1-5':
+                score -= 1
         
         # 4. Kasvusignaalit
         growth = signals.get('growth_signals', {})

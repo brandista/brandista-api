@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# Version: 2025-11-30-0940
+# Changes: TOL-code industry detection, skip_domains expanded, company_intel first
 """
 Growth Engine 2.0 - Scout Agent
 "The Market Explorer" - Finds competitors and maps the market
