@@ -1,6 +1,18 @@
+# -*- coding: utf-8 -*-
 """
 Growth Engine 2.0 - Prospector Agent
-💎 "The Growth Hacker" - Markkinaaukot ja kasvumahdollisuudet
+"The Growth Hacker" - Market gaps and growth opportunities
+
+Responsibilities:
+1. Find market gaps (where you're ahead or competitors are weak)
+2. Identify quick wins (low-effort, high-impact improvements)
+3. Discover competitive advantages
+4. Generate SWOT analysis
+5. Compile growth opportunities
+
+Data flow:
+- Input: AnalysisContext + Scout results + Analyst results
+- Output: market_gaps, quick_wins, competitive_advantages, growth_opportunities, swot
 """
 
 import logging
@@ -259,9 +271,8 @@ class ProspectorAgent(BaseAgent):
                 'timeframe': '1 week'
             })
         
-        # Security quick wins - only if SSL is explicitly False
-        has_ssl = tech.get('has_ssl', True) if tech else True
-        if has_ssl is False:
+        # Security quick wins
+        if not tech.get('has_ssl'):
             quick_wins.append({
                 'category': 'security',
                 'title': {'fi': 'Ota SSL käyttöön', 'en': 'Enable SSL'}.get(self._language),
@@ -274,7 +285,37 @@ class ProspectorAgent(BaseAgent):
         if not basic.get('has_clear_cta'):
             quick_wins.append({
                 'category': 'ux',
-                'title': {'fi': 'Lisää selkeä CTA', 'en': 'Add clear CTA'}.get(self._language),
+                'title': {'fi': 'Lisaa selkea CTA', 'en': 'Add clear CTA'}.get(self._language),
+                'impact': 'high',
+                'effort': 'low',
+                'timeframe': '1 day'
+            })
+        
+        # Analytics quick wins
+        if not tech.get('has_analytics') and not basic.get('has_analytics'):
+            quick_wins.append({
+                'category': 'analytics',
+                'title': {'fi': 'Asenna Google Analytics 4', 'en': 'Install Google Analytics 4'}.get(self._language),
+                'impact': 'high',
+                'effort': 'low',
+                'timeframe': '1 day'
+            })
+        
+        # Structured data quick wins
+        if not basic.get('has_schema') and not tech.get('has_structured_data'):
+            quick_wins.append({
+                'category': 'seo',
+                'title': {'fi': 'Lisaa strukturoitu data (Schema.org)', 'en': 'Add structured data (Schema.org)'}.get(self._language),
+                'impact': 'medium',
+                'effort': 'medium',
+                'timeframe': '1 week'
+            })
+        
+        # Mobile viewport quick wins
+        if not basic.get('has_mobile_viewport') and not basic.get('has_viewport'):
+            quick_wins.append({
+                'category': 'mobile',
+                'title': {'fi': 'Lisaa mobiili viewport', 'en': 'Add mobile viewport'}.get(self._language),
                 'impact': 'high',
                 'effort': 'low',
                 'timeframe': '1 day'

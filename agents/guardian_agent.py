@@ -1,6 +1,19 @@
+# -*- coding: utf-8 -*-
 """
 Growth Engine 2.0 - Guardian Agent
 The Risk Manager - RASM, threat analysis and Competitor Threat Assessment
+
+Responsibilities:
+1. Build risk register from analysis data
+2. Calculate realistic revenue impact (revenue_impact_model.py)
+3. Identify threats (SEO, mobile, SSL, performance, competitive, content)
+4. Assess competitor threat levels
+5. Prioritize actions by ROI
+6. Calculate RASM score (Revenue Attack Surface Mapping)
+
+Data flow:
+- Input: AnalysisContext + Scout results + Analyst results
+- Output: threats, risk_register, revenue_impact, priority_actions, rasm_score, competitor_threat_assessment
 """
 
 import logging
@@ -36,6 +49,7 @@ THREAT_TITLES = {
     "performance": {"fi": "Hidas sivusto", "en": "Slow website"},
     "competitive": {"fi": "Jaat kilpailijoista jalkeen", "en": "Falling behind competitors"},
     "content": {"fi": "Heikko sisallon laatu", "en": "Poor content quality"},
+    "ai_visibility": {"fi": "Heikko AI-hakunakyvyys", "en": "Poor AI search visibility"},
 }
 
 THREAT_LEVEL_LABELS = {
@@ -448,11 +462,62 @@ class GuardianAgent(BaseAgent):
                 'effort': 'medium'
             })
         
+        # AI Visibility threats (2025 priority)
+        ai_score = self._calculate_ai_visibility_score(basic, tech, content)
+        if ai_score < 40:
+            threats.append({
+                'category': 'ai_visibility',
+                'title': self._threat_title('ai_visibility'),
+                'severity': 'high' if ai_score < 25 else 'medium',
+                'score': ai_score,
+                'impact': 'high',  # Growing importance
+                'effort': 'medium'
+            })
+        
         # Sort by severity
         severity_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
         threats.sort(key=lambda x: severity_order.get(x.get('severity', 'low'), 3))
         
         return threats
+    
+    def _calculate_ai_visibility_score(
+        self, 
+        basic: Dict[str, Any], 
+        tech: Dict[str, Any], 
+        content: Dict[str, Any]
+    ) -> int:
+        """Calculate AI/GEO visibility score for threat detection."""
+        ai_score = 0
+        
+        # Structured data
+        if basic.get('has_schema') or tech.get('has_structured_data'):
+            ai_score += 25
+        
+        # Content depth
+        word_count = content.get('word_count', 0)
+        if word_count >= 1500:
+            ai_score += 20
+        elif word_count >= 800:
+            ai_score += 10
+        
+        # FAQ presence
+        html_content = basic.get('html_content', '').lower()
+        if 'faq' in html_content or 'frequently asked' in html_content:
+            ai_score += 15
+        
+        # Clear structure
+        if basic.get('h1_text'):
+            ai_score += 15
+        
+        # Authority signals
+        if 'author' in html_content or 'about us' in html_content:
+            ai_score += 15
+        
+        # SSL
+        if tech.get('has_ssl') or basic.get('has_ssl'):
+            ai_score += 10
+        
+        return min(ai_score, 100)
     
     def _prioritize_actions(
         self,
@@ -651,9 +716,10 @@ class GuardianAgent(BaseAgent):
     def _estimate_company_size(self, competitor: Dict[str, Any]) -> Dict[str, Any]:
         """Arvioi yrityksen koko meta-signaaleista"""
         
-        # Signaaleja sivuston analyysista
-        basic = competitor.get('basic', {})
-        content = competitor.get('content', {})
+        # Use correct keys from Analyst Agent output
+        basic = competitor.get('basic_analysis', competitor.get('basic', {}))
+        detailed = competitor.get('detailed_analysis', {})
+        content = detailed.get('content_analysis', competitor.get('content', {}))
         
         signals = {
             'has_careers_page': False,
@@ -679,7 +745,7 @@ class GuardianAgent(BaseAgent):
             signals['estimated_employees'] = '1-5'
         
         # Muita signaaleja HTML:sta (jos saatavilla)
-        html = competitor.get('html', '') or ''
+        html = basic.get('html_content', competitor.get('html', '')) or ''
         html_lower = html.lower()
         
         if any(term in html_lower for term in ['careers', 'jobs', 'tyopaikat', 'avoimet']):
@@ -705,9 +771,14 @@ class GuardianAgent(BaseAgent):
             'growth_indicators': []
         }
         
-        html = competitor.get('html', '') or ''
+        # Get HTML from basic_analysis or fallback
+        basic = competitor.get('basic_analysis', competitor.get('basic', {}))
+        html = basic.get('html_content', competitor.get('html', '')) or ''
         html_lower = html.lower()
-        content = competitor.get('content', {})
+        
+        # Get content from detailed_analysis
+        detailed = competitor.get('detailed_analysis', {})
+        content = detailed.get('content_analysis', competitor.get('content', {}))
         
         # Rekrytointi = kasvusignaali
         hiring_terms = ['hiring', 'we\'re hiring', 'join our team', 'rekrytoimme', 'tule meille', 'open positions']
@@ -739,12 +810,15 @@ class GuardianAgent(BaseAgent):
             'trust_score': 0
         }
         
-        technical = competitor.get('technical', {})
-        html = competitor.get('html', '') or ''
+        # Get data from correct keys
+        basic = competitor.get('basic_analysis', competitor.get('basic', {}))
+        detailed = competitor.get('detailed_analysis', {})
+        technical = detailed.get('technical_audit', competitor.get('technical', {}))
+        html = basic.get('html_content', competitor.get('html', '')) or ''
         html_lower = html.lower()
         
         # SSL
-        if technical.get('has_ssl'):
+        if technical.get('has_ssl') or basic.get('has_ssl'):
             signals['has_ssl'] = True
             signals['trust_score'] += 2
         

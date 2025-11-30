@@ -1,6 +1,18 @@
+# -*- coding: utf-8 -*-
 """
 Growth Engine 2.0 - Strategist Agent
-🎯 "The Strategic Advisor" - Synteesi ja priorisointi
+"The Strategic Advisor" - Synthesis and prioritization
+
+Responsibilities:
+1. Calculate composite scores from all agents
+2. Analyze competitive position
+3. Prioritize strategically (balance defense vs growth)
+4. Compile key insights from all sources
+5. Generate executive summary and recommendations
+
+Data flow:
+- Input: AnalysisContext + Scout + Analyst + Guardian + Prospector results
+- Output: executive_summary, overall_score, composite_scores, strategic_priorities, recommendations
 """
 
 import logging
@@ -191,7 +203,8 @@ class StrategistAgent(BaseAgent):
         
         if analyst_results:
             cat_comp = analyst_results.get('category_comparison', {})
-            for cat in ['seo', 'performance', 'security', 'content', 'ux']:
+            # Added ai_visibility for 2025
+            for cat in ['seo', 'performance', 'security', 'content', 'ux', 'ai_visibility']:
                 scores[cat] = cat_comp.get(cat, {}).get('your_score', 50)
         
         # Security posture from Guardian
@@ -212,13 +225,14 @@ class StrategistAgent(BaseAgent):
             edge = your_score - avg_comp
             scores['competitive_edge'] = max(0, min(100, 50 + edge))
         
-        # Calculate weighted overall
+        # Calculate weighted overall - 2025 priorities
         weights = {
-            'seo': 0.20,
-            'performance': 0.15,
-            'security': 0.15,
-            'content': 0.15,
-            'ux': 0.15,
+            'seo': 0.10,            # Reduced - less important in AI era
+            'performance': 0.10,
+            'security': 0.10,
+            'content': 0.20,        # E-E-A-T matters more
+            'ux': 0.15,             # Conversion focus
+            'ai_visibility': 0.15,  # NEW: AI search readiness
             'security_posture': 0.10,
             'competitive_edge': 0.10
         }

@@ -1,6 +1,18 @@
+# -*- coding: utf-8 -*-
 """
 Growth Engine 2.0 - Scout Agent
-🔍 "The Market Explorer" - Löytää kilpailijat ja kartoittaa markkinan
+"The Market Explorer" - Finds competitors and maps the market
+
+Responsibilities:
+1. Fetch target website content
+2. Detect industry (from HTML keywords + company intel TOL code)
+3. Find competitors (user-provided or auto-discovered)
+4. Score competitors by relevance
+5. Enrich with company data (YTJ, Bronnoysund, CVR, etc.)
+
+Data flow:
+- Input: AnalysisContext (url, industry_context, competitor_urls)
+- Output: company, industry, competitor_urls, competitors_enriched, your_company_intel
 """
 
 import logging
@@ -50,31 +62,26 @@ class ScoutAgent(BaseAgent):
             personality="Utelias ja perusteellinen tutkimusmatkailija"
         )
         self.dependencies = []
-        # DEBUG: Commented out - may crash during import before logger is configured
-        # logger.info(f"[Scout] *** ScoutAgent initialized, COMPANY_INTEL_AVAILABLE={COMPANY_INTEL_AVAILABLE} ***")
+        # DEBUG: Log when Scout is instantiated
+        logger.info(f"[Scout] *** ScoutAgent initialized, COMPANY_INTEL_AVAILABLE={COMPANY_INTEL_AVAILABLE} ***")
     
     def _task(self, key: str) -> str:
         """Get task text in current language"""
         return SCOUT_TASKS.get(key, {}).get(self._language, key)
     
     async def execute(self, context: AnalysisContext) -> Dict[str, Any]:
-        # DEBUG: Log BEFORE any imports to catch import errors
+        from main import (
+            get_website_content,
+            multi_provider_search,
+            generate_smart_search_terms,
+            clean_url,
+            get_domain_from_url
+        )
+        
+        # DEBUG: Log at very start of run
         logger.info(f"[Scout] ========== SCOUT AGENT STARTING ==========")
         logger.info(f"[Scout] URL: {context.url}")
         logger.info(f"[Scout] COMPANY_INTEL_AVAILABLE at start: {COMPANY_INTEL_AVAILABLE}")
-        
-        try:
-            from main import (
-                get_website_content,
-                multi_provider_search,
-                generate_smart_search_terms,
-                clean_url,
-                get_domain_from_url
-            )
-            logger.info(f"[Scout] ✅ Main imports successful")
-        except Exception as e:
-            logger.error(f"[Scout] ❌ IMPORT FAILED: {e}")
-            raise
         
         self._update_progress(15, self._task("analyzing_company"))
         
@@ -114,8 +121,23 @@ class ScoutAgent(BaseAgent):
         
         self._update_progress(30, self._task("detecting_industry"))
         
-        # 2. Tunnista toimiala
-        industry = await self._detect_industry(context.url, website_data, context.industry_context)
+        # 2. Get own company intel FIRST (needed for industry detection)
+        your_company_intel = None
+        if COMPANY_INTEL_AVAILABLE:
+            try:
+                your_company_intel = await self._get_own_company_intel(context.url)
+                if your_company_intel:
+                    logger.info(f"[Scout] Got company intel: {your_company_intel.get('name')}, TOL: {your_company_intel.get('industry_code')}")
+            except Exception as e:
+                logger.warning(f"[Scout] Company intel fetch failed: {e}")
+        
+        # 3. Detect industry (use company intel TOL code if available)
+        industry = await self._detect_industry(
+            context.url, 
+            website_data, 
+            context.industry_context,
+            your_company_intel  # Pass company intel for TOL-based detection
+        )
         
         self._emit_insight(
             self._t("scout.industry", industry=industry),
@@ -124,7 +146,7 @@ class ScoutAgent(BaseAgent):
             data={'industry': industry}
         )
         
-        # 3. Jos kilpailijat jo annettu, validoi ne
+        # 4. Jos kilpailijat jo annettu, validoi ne
         if context.competitor_urls and len(context.competitor_urls) > 0:
             self._update_progress(50, self._task("validating_competitors"))
             
@@ -146,8 +168,7 @@ class ScoutAgent(BaseAgent):
             self._update_progress(75, self._task("enriching_companies"))
             enriched_competitors = await self._enrich_with_company_intel(validated_competitors)
             
-            # Get your own company intel
-            your_company_intel = await self._get_own_company_intel(context.url)
+            # your_company_intel already fetched above
             
             return {
                 'company': company_name,
@@ -160,7 +181,7 @@ class ScoutAgent(BaseAgent):
                 'your_company_intel': your_company_intel
             }
         
-        # 4. Etsi kilpailijat automaattisesti
+        # 5. Etsi kilpailijat automaattisesti
         self._update_progress(40, self._task("searching_competitors"))
         
         self._emit_insight(
@@ -235,8 +256,7 @@ class ScoutAgent(BaseAgent):
             self._update_progress(85, self._task("enriching_companies"))
             enriched_competitors = await self._enrich_with_company_intel(competitor_urls)
             
-            # Get your own company intel
-            your_company_intel = await self._get_own_company_intel(context.url)
+            # your_company_intel already fetched above
             
             self._update_progress(95, self._task("finalizing"))
             
@@ -274,11 +294,62 @@ class ScoutAgent(BaseAgent):
         self, 
         url: str, 
         website_data: Dict[str, Any],
-        provided_industry: Optional[str] = None
+        provided_industry: Optional[str] = None,
+        company_intel: Optional[Dict[str, Any]] = None
     ) -> str:
+        """
+        Detect industry using multiple sources:
+        1. User-provided industry (highest priority)
+        2. Company intel TOL code (official registry)
+        3. HTML content keywords (fallback)
+        """
         if provided_industry:
             return provided_industry
         
+        # Try to use TOL code from company intel
+        if company_intel:
+            industry_code = company_intel.get('industry_code', '')
+            industry_name = company_intel.get('industry', '')
+            
+            # Map common TOL codes to our industry categories
+            tol_mapping = {
+                '47': 'ecommerce',      # Retail trade
+                '46': 'ecommerce',      # Wholesale trade
+                '62': 'saas',           # Computer programming
+                '63': 'technology',     # Information service
+                '70': 'consulting',     # Management consultancy
+                '73': 'marketing',      # Advertising
+                '64': 'finance',        # Financial services
+                '86': 'healthcare',     # Health services
+                '85': 'education',      # Education
+                '68': 'real_estate',    # Real estate
+                '10': 'manufacturing',  # Food manufacturing
+                '25': 'manufacturing',  # Metal products
+                '55': 'hospitality',    # Hotels
+                '56': 'hospitality',    # Restaurants
+                '45': 'automotive',     # Motor vehicles
+                '32': 'jewelry',        # Other manufacturing (includes jewelry)
+            }
+            
+            if industry_code:
+                # Get first 2 digits of TOL code
+                tol_prefix = str(industry_code)[:2]
+                if tol_prefix in tol_mapping:
+                    detected = tol_mapping[tol_prefix]
+                    logger.info(f"[Scout] Industry from TOL code {industry_code}: {detected}")
+                    return detected
+            
+            # Check industry name for keywords
+            if industry_name:
+                industry_lower = industry_name.lower()
+                if any(kw in industry_lower for kw in ['koru', 'jewelry', 'jewel', 'kulta', 'gold']):
+                    return 'jewelry'
+                if any(kw in industry_lower for kw in ['ohjelmisto', 'software', 'it-', 'tietojen']):
+                    return 'saas'
+                if any(kw in industry_lower for kw in ['konsult', 'consult', 'neuvon']):
+                    return 'consulting'
+        
+        # Fallback: analyze HTML content
         content = str(website_data).lower()
         
         industry_keywords = {
@@ -329,6 +400,15 @@ class ScoutAgent(BaseAgent):
         own_domain = get_domain_from_url(own_url)
         validated = []
         
+        # Use same comprehensive skip list
+        skip_domains = [
+            'google.', 'facebook.', 'linkedin.', 'twitter.', 'instagram.',
+            'youtube.', 'wikipedia.', 'amazon.', 'ebay.', 'reddit.',
+            'yelp.', 'tripadvisor.', 'trustpilot.', 'glassdoor.',
+            'fonecta.', 'finder.fi', 'kauppalehti.', 'hs.fi',
+            'github.', 'stackoverflow.'
+        ]
+        
         for url in competitor_urls:
             try:
                 cleaned = clean_url(url)
@@ -337,7 +417,6 @@ class ScoutAgent(BaseAgent):
                 if domain == own_domain:
                     continue
                 
-                skip_domains = ['google.', 'facebook.', 'linkedin.', 'twitter.', 'wikipedia.']
                 if any(skip in domain for skip in skip_domains):
                     continue
                 
@@ -359,94 +438,58 @@ class ScoutAgent(BaseAgent):
         own_domain = get_domain_from_url(own_url)
         scored = []
         
-        # Domains to always skip
+        # Comprehensive list of non-competitor domains
         skip_domains = [
-            'google.', 'facebook.', 'linkedin.', 'twitter.', 
-            'wikipedia.', 'youtube.', 'instagram.', 'tiktok.',
-            'amazon.', 'ebay.', 'reddit.', 'pinterest.',
-            'yelp.', 'tripadvisor.', 'trustpilot.', 'github.',
-            'medium.', 'wordpress.com', 'blogspot.', 'tumblr.'
+            # Social media
+            'facebook.', 'linkedin.', 'twitter.', 'instagram.', 
+            'tiktok.', 'pinterest.', 'snapchat.', 'threads.',
+            # Search & tech giants
+            'google.', 'bing.', 'yahoo.', 'baidu.',
+            'apple.', 'microsoft.', 'amazon.', 'ebay.',
+            # Content platforms
+            'youtube.', 'vimeo.', 'reddit.', 'medium.', 'substack.',
+            'wikipedia.', 'wikimedia.',
+            # Review & directory sites
+            'yelp.', 'tripadvisor.', 'trustpilot.', 'g2.', 'capterra.',
+            'glassdoor.', 'indeed.', 'crunchbase.', 'zoominfo.',
+            # Finnish directories
+            'fonecta.', 'finder.fi', 'yritystele.', 'kauppalehti.',
+            'hs.fi', 'is.fi', 'iltalehti.', 'mtv.fi', 'yle.fi',
+            # News & media
+            'bbc.', 'cnn.', 'nytimes.', 'theguardian.', 'forbes.',
+            # Government
+            'gov.', '.gov', 'europa.eu', 'prh.fi', 'vero.fi',
+            # Developer/tech
+            'github.', 'gitlab.', 'stackoverflow.', 'npmjs.',
         ]
-        
-        # Industry-specific keywords for better matching
-        industry_keywords = {
-            'jewelry': ['koru', 'korut', 'jewelry', 'jewellery', 'kulta', 'gold', 'hopea', 'silver', 'timantit', 'diamond', 'kello', 'watch', 'sormus', 'ring', 'kaulakoru', 'necklace'],
-            'fashion': ['vaate', 'muoti', 'fashion', 'clothing', 'pukeutuminen', 'style'],
-            'ecommerce': ['verkkokauppa', 'shop', 'store', 'kauppa', 'myynti'],
-            'technology': ['tech', 'software', 'ohjelmisto', 'saas', 'app'],
-            'real_estate': ['kiinteistö', 'asunto', 'real estate', 'housing'],
-        }
-        
-        keywords = industry_keywords.get(industry.lower(), [industry.lower()])
         
         for comp in competitors:
             url = comp.get('url', '')
             domain = get_domain_from_url(url)
             
-            # Skip own domain
             if domain == own_domain:
                 continue
-            
-            # Skip known non-competitor domains
-            if any(skip in domain.lower() for skip in skip_domains):
+            if any(skip in domain for skip in skip_domains):
                 continue
             
-            # Skip personal blogs/portfolios (common patterns)
-            if any(pattern in domain.lower() for pattern in ['blog', 'portfolio', 'personal', '.blogspot.', '.wordpress.']):
-                continue
+            score = 50
             
-            score = 50  # Base score
-            
-            # Same TLD bonus (e.g., both .fi)
             if own_domain.split('.')[-1] == domain.split('.')[-1]:
                 score += 10
             
-            # Industry keyword matching in snippet
             snippet = comp.get('snippet', '').lower()
-            keyword_matches = sum(1 for kw in keywords if kw in snippet)
-            score += min(keyword_matches * 10, 30)  # Max 30 points from keywords
-            
-            # Industry keyword in title
-            title = comp.get('title', '').lower()
-            title_keyword_matches = sum(1 for kw in keywords if kw in title)
-            score += min(title_keyword_matches * 8, 24)  # Max 24 points
-            
-            # Industry keyword in domain name
-            domain_lower = domain.lower()
-            if any(kw in domain_lower for kw in keywords):
+            if industry.lower() in snippet:
                 score += 15
             
-            # Commercial indicators
-            if any(term in title or term in snippet for term in ['oy', 'ab', 'ltd', 'inc', 'gmbh', 'yritys', 'company']):
-                score += 10
-            
-            # E-commerce indicators (good for retail competitors)
-            if any(term in snippet for term in ['verkkokauppa', 'osta', 'buy', 'shop', 'tilaa', 'order', 'hinta', 'price']):
-                score += 8
-            
-            # Penalize if looks like a personal site
-            if any(term in domain_lower for term in ['hanna', 'matti', 'personal', 'portfolio', 'blog']):
-                score -= 20
-            
-            # Penalize very generic domains
-            if len(domain.split('.')[0]) < 4:
-                score -= 10
-            
-            # Alternative/competitor mention bonus
-            if any(term in title for term in ['vs', 'alternative', 'competitor', 'vaihtoehto', 'kilpailija']):
+            title = comp.get('title', '').lower()
+            if any(term in title for term in ['vs', 'alternative', 'competitor', 'vaihtoehto']):
                 score += 20
             
-            # Only include if score is decent
-            if score >= 40:
-                comp['relevance_score'] = min(score, 100)
-                comp['name'] = comp.get('title', domain).split(' - ')[0].split(' | ')[0][:50]
-                scored.append(comp)
-            else:
-                logger.debug(f"[Scout] Filtered out low-relevance competitor: {domain} (score: {score})")
+            comp['relevance_score'] = min(score, 100)
+            comp['name'] = comp.get('title', domain).split(' - ')[0].split(' | ')[0][:50]
+            scored.append(comp)
         
         scored.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
-        
-        logger.info(f"[Scout] Scored {len(scored)} relevant competitors from {len(competitors)} candidates")
         
         return scored
     
@@ -535,10 +578,6 @@ class ScoutAgent(BaseAgent):
         - founded_year
         - industry (TOL)
         - size_category
-        
-        Filters out:
-        - Dissolved/bankrupt companies (status check)
-        - Companies with endDate in YTJ data
         """
         
         if not COMPANY_INTEL_AVAILABLE:
@@ -569,19 +608,6 @@ class ScoutAgent(BaseAgent):
                     profile = await intel.get_company_from_domain(domain)
                     
                     if profile:
-                        # Check if company is still active (not dissolved/bankrupt)
-                        status = profile.get('status', '').lower()
-                        end_date = profile.get('end_date') or profile.get('endDate')
-                        
-                        # Skip dissolved/inactive companies
-                        if status in ['dissolved', 'bankrupt', 'liquidation', 'purettu', 'konkurssi']:
-                            logger.info(f"[Scout] Skipping dissolved company: {profile.get('name')} (status: {status})")
-                            continue
-                        
-                        if end_date:
-                            logger.info(f"[Scout] Skipping ended company: {profile.get('name')} (endDate: {end_date})")
-                            continue
-                        
                         competitor['company_name'] = profile.get('name')
                         competitor['business_id'] = profile.get('business_id')
                         competitor['revenue'] = profile.get('revenue')

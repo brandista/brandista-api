@@ -822,6 +822,45 @@ ACTION_LIBRARY = {
             'priority': 'Korkea',
             'category': 'planning'
         }
+    },
+    
+    'structured_data': {
+        'en': {
+            'title': '📋 Structured Data (Schema.org)',
+            'description': 'Add structured data to help search engines and AI understand your content.',
+            'steps': [
+                'Identify relevant schema types (Organization, Product, FAQ, etc.)',
+                'Implement JSON-LD markup on key pages',
+                'Add Organization schema to homepage',
+                'Add Product/Service schemas if applicable',
+                'Add FAQ schema for common questions',
+                'Test with Google Rich Results Test',
+                'Monitor in Google Search Console'
+            ],
+            'owner': 'Developer',
+            'time_estimate': '4-8 hours',
+            'success_metric': 'Rich snippets appearing in search, no schema errors',
+            'priority': 'Medium',
+            'category': 'seo'
+        },
+        'fi': {
+            'title': '📋 Strukturoitu data (Schema.org)',
+            'description': 'Lisaa strukturoitu data auttamaan hakukoneita ja tekoalya ymmartamaan sisaltosi.',
+            'steps': [
+                'Tunnista relevantit schema-tyypit (Organization, Product, FAQ, jne.)',
+                'Toteuta JSON-LD-merkinta keskeisilla sivuilla',
+                'Lisaa Organization-schema etusivulle',
+                'Lisaa Product/Service-schemat tarvittaessa',
+                'Lisaa FAQ-schema yleisiin kysymyksiin',
+                'Testaa Google Rich Results Test -tyokalulla',
+                'Seuraa Google Search Consolessa'
+            ],
+            'owner': 'Kehittaja',
+            'time_estimate': '4-8 tuntia',
+            'success_metric': 'Rich snippetit nakyvat haussa, ei schema-virheita',
+            'priority': 'Keskitaso',
+            'category': 'seo'
+        }
     }
 }
 
@@ -1029,6 +1068,11 @@ class PlannerAgent(BaseAgent):
         if seo_score < 12:
             issues.append('seo_weak')
         
+        # Check structured data / schema
+        basic = your_analysis.get('basic_analysis', {})
+        if not basic.get('has_schema') and not technical.get('has_structured_data'):
+            issues.append('schema_missing')
+        
         return issues
     
     def _build_rich_phases(
@@ -1067,10 +1111,10 @@ class PlannerAgent(BaseAgent):
                 used_keys.add('analytics_setup')
         
         # 2. Conversion & UX (highest ROI)
-        conversion_actions = ['cta_setup', 'conversion_funnel', 'ux_improvements']
+        conversion_actions = ['cta_optimization', 'conversion_funnel', 'ux_improvements']
         for action_key in conversion_actions:
             if action_key not in used_keys and len(phase1_tasks) < 3:
-                if action_key == 'cta_setup' and 'cta_missing' not in issues:
+                if action_key == 'cta_optimization' and 'cta_missing' not in issues:
                     continue
                 action = self._get_action(action_key)
                 if action:

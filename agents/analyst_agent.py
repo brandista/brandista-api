@@ -272,7 +272,8 @@ class AnalystAgent(BaseAgent):
         your_analysis: Dict[str, Any],
         competitor_analyses: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
-        categories = ['seo', 'performance', 'security', 'content', 'ux']
+        # Added ai_visibility for 2025 - AI search readiness
+        categories = ['seo', 'performance', 'security', 'content', 'ux', 'ai_visibility']
         comparison = {}
         
         for cat in categories:
@@ -299,9 +300,57 @@ class AnalystAgent(BaseAgent):
         return comparison
     
     def _extract_category_score(self, analysis: Dict[str, Any], category: str) -> int:
-        # Support both 'basic' and 'basic_analysis' keys
-        basic = analysis.get('basic_analysis', analysis.get('basic', {}))
+        """
+        Extract category score from analysis data.
         
+        Uses main.py score_breakdown directly when available, with fallback calculations.
+        
+        main.py score_breakdown categories (max points):
+        - security: 15
+        - seo_basics: 20
+        - content: 20
+        - technical: 15
+        - mobile: 15
+        - social: 10
+        - performance: 5
+        
+        These are normalized to 0-100 scale for comparison.
+        """
+        basic = analysis.get('basic_analysis', analysis.get('basic', {}))
+        breakdown = basic.get('score_breakdown', {})
+        
+        # Map our category names to score_breakdown keys
+        category_map = {
+            'seo': 'seo_basics',
+            'security': 'security',
+            'content': 'content',
+            'performance': 'performance',
+            'mobile': 'mobile',
+            'technical': 'technical',
+            'ux': 'mobile',  # UX maps to mobile (closest proxy)
+        }
+        
+        # Max points per category in main.py
+        max_points = {
+            'seo_basics': 20,
+            'security': 15,
+            'content': 20,
+            'technical': 15,
+            'mobile': 15,
+            'social': 10,
+            'performance': 5,
+        }
+        
+        breakdown_key = category_map.get(category, category)
+        
+        if breakdown_key in breakdown:
+            # Normalize to 0-100 scale
+            raw_score = breakdown.get(breakdown_key, 0)
+            max_score = max_points.get(breakdown_key, 20)
+            normalized = int((raw_score / max_score) * 100) if max_score > 0 else 0
+            return min(100, max(0, normalized))
+        
+        # Fallback: calculate manually if score_breakdown not available
         if category == 'seo':
             seo_score = 0
             if basic.get('title'):
@@ -333,12 +382,51 @@ class AnalystAgent(BaseAgent):
             content = analysis.get('detailed_analysis', {}).get('content_analysis', analysis.get('content', {}))
             return content.get('quality_score', content.get('content_quality_score', 50))
             
-        elif category == 'ux':
+        elif category == 'ux' or category == 'mobile':
             ux_score = 50
             if basic.get('mobile_ready') in ['Kyllä', 'Yes', True]:
                 ux_score += 25
             if basic.get('has_clear_cta'):
                 ux_score += 25
             return min(ux_score, 100)
+        
+        elif category == 'ai_visibility':
+            # AI/GEO Visibility Score - readiness for ChatGPT, Perplexity, etc.
+            # Based on factors that help AI systems understand and cite content
+            ai_score = 0
+            content = analysis.get('detailed_analysis', {}).get('content_analysis', analysis.get('content', {}))
+            tech = analysis.get('detailed_analysis', {}).get('technical_audit', analysis.get('technical', {}))
+            
+            # Structured data (Schema.org) - critical for AI understanding
+            if basic.get('has_schema') or tech.get('has_structured_data'):
+                ai_score += 25
+            
+            # Clear, factual content structure
+            word_count = content.get('word_count', 0)
+            if word_count >= 1500:
+                ai_score += 20
+            elif word_count >= 800:
+                ai_score += 10
+            
+            # FAQ sections (direct answers AI can cite)
+            html_content = basic.get('html_content', '').lower()
+            if 'faq' in html_content or 'frequently asked' in html_content or 'usein kysyt' in html_content:
+                ai_score += 15
+            
+            # Clear headings structure (H1, H2, H3)
+            if basic.get('h1_text'):
+                ai_score += 10
+            if basic.get('has_proper_heading_hierarchy', True):
+                ai_score += 10
+            
+            # Author/expertise signals (E-E-A-T)
+            if 'author' in html_content or 'kirjoittaja' in html_content or 'about us' in html_content:
+                ai_score += 10
+            
+            # SSL (trust signal)
+            if tech.get('has_ssl') or basic.get('has_ssl'):
+                ai_score += 10
+            
+            return min(ai_score, 100)
         
         return 50
