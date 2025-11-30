@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-# Version: 2025-11-30-1020
-# Changes: TOL-code industry detection, skip_domains expanded, company_intel first, company_name from registry
+# Version: 2025-11-30-1055
+# Changes: TOL-code industry detection, skip_domains expanded, company_intel first, company_name from registry, url in return
 """
 Growth Engine 2.0 - Scout Agent
 "The Market Explorer" - Finds competitors and maps the market
@@ -178,6 +178,7 @@ class ScoutAgent(BaseAgent):
             
             return {
                 'company': company_name,
+                'url': context.url,  # Return the analyzed URL
                 'industry': industry,
                 'competitor_urls': validated_competitors,
                 'competitor_count': len(validated_competitors),
@@ -268,6 +269,7 @@ class ScoutAgent(BaseAgent):
             
             return {
                 'company': company_name,
+                'url': context.url,  # Return the analyzed URL
                 'industry': industry,
                 'competitor_urls': competitor_urls,
                 'competitor_count': len(competitor_urls),
@@ -288,6 +290,7 @@ class ScoutAgent(BaseAgent):
             
             return {
                 'company': company_name,
+                'url': context.url,  # Return the analyzed URL
                 'industry': industry,
                 'competitor_urls': [],
                 'competitor_count': 0,

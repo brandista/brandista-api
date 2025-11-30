@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-# Version: 2025-11-30-0940
-# Changes: Extended quick wins (analytics, schema, viewport)
+# Version: 2025-11-30-1050
+# Changes: Extended quick wins (analytics, schema, viewport), SWOT with absolute weaknesses
 """
 Growth Engine 2.0 - Prospector Agent
 "The Growth Hacker" - Market gaps and growth opportunities
@@ -376,20 +376,80 @@ class ProspectorAgent(BaseAgent):
         opportunities = []
         threats = []
         
+        # Get basic analysis data for absolute weaknesses
+        basic = analysis.get('basic_analysis', analysis.get('basic', {}))
+        detailed = analysis.get('detailed_analysis', {})
+        tech = detailed.get('technical_audit', {})
+        content = detailed.get('content_analysis', {})
+        score_breakdown = basic.get('score_breakdown', {})
+        
+        cat_names = {
+            'seo': 'SEO', 'performance': 'Performance', 'security': 'Security', 
+            'content': 'Content', 'ux': 'UX', 'ai_visibility': 'AI Visibility'
+        }
+        
+        # 1. Relative weaknesses (vs competitors)
         for cat, data in category_comparison.items():
-            cat_names = {'seo': 'SEO', 'performance': 'Performance', 'security': 'Security', 
-                        'content': 'Content', 'ux': 'UX'}
-            
             if data.get('status') == 'ahead':
-                strengths.append(f"{cat_names.get(cat, cat)}: +{data.get('difference', 0)} points")
+                strengths.append(f"{cat_names.get(cat, cat)}: +{data.get('difference', 0)} points vs competitors")
             elif data.get('status') == 'behind':
-                weaknesses.append(f"{cat_names.get(cat, cat)}: {data.get('difference', 0)} points")
+                weaknesses.append(f"{cat_names.get(cat, cat)}: {data.get('difference', 0)} points vs competitors")
+        
+        # 2. ABSOLUTE weaknesses (regardless of competitors)
+        # These are things that are objectively bad
+        
+        # Security issues
+        if not tech.get('has_ssl') and not basic.get('has_ssl'):
+            weaknesses.append("Missing SSL certificate (critical for trust & SEO)")
+        if not basic.get('has_security_headers') and not tech.get('has_security_headers'):
+            weaknesses.append("Missing security headers (CSP, X-Frame-Options)")
+        
+        # SEO issues
+        if not basic.get('meta_description'):
+            weaknesses.append("Missing meta description (affects CTR)")
+        if not basic.get('h1_text'):
+            weaknesses.append("Missing H1 heading (affects SEO)")
+        if not tech.get('has_sitemap') and not basic.get('has_sitemap'):
+            weaknesses.append("Missing XML sitemap")
+        
+        # Technical issues
+        if not tech.get('has_analytics') and not basic.get('has_analytics'):
+            weaknesses.append("No analytics tracking (can't measure performance)")
+        
+        # Mobile issues
+        if basic.get('mobile_ready') not in ['Kyllä', 'Yes', True]:
+            weaknesses.append("Poor mobile optimization (55%+ traffic is mobile)")
+        
+        # Content issues
+        word_count = content.get('word_count', 0)
+        if word_count < 300:
+            weaknesses.append(f"Thin content ({word_count} words - aim for 1000+)")
+        
+        # Performance issues
+        speed_score = tech.get('page_speed_score', 100)
+        if speed_score < 50:
+            weaknesses.append(f"Slow page speed (score: {speed_score}/100)")
+        
+        # 3. Opportunities based on weaknesses
+        if weaknesses:
+            opportunities.append("Fix critical issues to improve competitive position")
+        if 'SEO' in str(weaknesses):
+            opportunities.append("SEO improvements could increase organic traffic 20-50%")
+        if 'mobile' in str(weaknesses).lower():
+            opportunities.append("Mobile optimization could improve conversion rate")
+        
+        # 4. Threats
+        behind_count = len([c for c in category_comparison.values() if c.get('status') == 'behind'])
+        if behind_count >= 2:
+            threats.append(f"Behind competitors in {behind_count} categories")
+        if not tech.get('has_ssl'):
+            threats.append("Google penalizes non-HTTPS sites in rankings")
         
         return {
-            'strengths': strengths,
-            'weaknesses': weaknesses,
-            'opportunities': opportunities,
-            'threats': threats
+            'strengths': strengths[:5],  # Limit to top 5
+            'weaknesses': weaknesses[:5],
+            'opportunities': opportunities[:5],
+            'threats': threats[:5]
         }
     
     def _compile_growth_opportunities(
