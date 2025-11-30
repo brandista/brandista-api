@@ -4003,16 +4003,21 @@ def compute_business_impact(
         customer_trust_effect=detailed.customer_trust_effect
     )
 
-def build_role_summaries(url: str, basic: Dict[str, Any], impact: BusinessImpact, language: str = 'en') -> RoleSummaries:
+def build_role_summaries(url: str, basic: Dict[str, Any], impact: BusinessImpact, language: str = 'en', company_name: str = None) -> RoleSummaries:
     """Generate role-specific summaries based on actual analysis findings"""
     s = basic.get('digital_maturity_score', 0)
     breakdown = basic.get('score_breakdown', {})
+    
+    # Get company name from basic or use domain
+    if not company_name:
+        company_name = basic.get('company_name') or get_domain_from_url(url).capitalize()
     
     state = ("leader" if s >= 75 else "strong" if s >= 60 else "baseline" if s >= 45 else "early")
     
     # Check specific security issues
     has_ssl = basic.get('has_ssl', True)  # Default true if not specified
     has_security_headers = basic.get('has_security_headers', False)
+    has_analytics = basic.get('has_analytics', False)
     
     # Identify top priorities dynamically by calculating completion percentage
     weights = SCORING_CONFIG.weights
@@ -4029,22 +4034,22 @@ def build_role_summaries(url: str, basic: Dict[str, Any], impact: BusinessImpact
     top_gaps = [gap[0] for gap in sorted_gaps[:3]]
     
     # Map categories to actionable business language (language-aware)
-    # Be specific about security issues - don't mention SSL if it's fine
+    # Be SPECIFIC about what's missing
     if language == 'fi':
         action_map = {
-            'security': 'turvallisuusotsikot' if has_ssl else 'SSL + turvallisuusotsikot',
-            'seo': 'SEO-perusteet',
-            'content': 'sisallon syvyys',
-            'mobile': 'mobiilikayttokokemus',
-            'technical': 'tekninen SEO + analytiikka',
+            'security': 'SSL-sertifikaatti' if not has_ssl else 'turvallisuusotsikot (CSP, X-Frame-Options)',
+            'seo': 'meta-kuvaukset ja otsikkorakenne',
+            'content': 'sisallon syvyys ja asiantuntijuus',
+            'mobile': 'mobiiliresponsiivisuus ja kosketuselementit',
+            'technical': 'Google Analytics' if not has_analytics else 'tekninen SEO (sivukartta, canonical)',
         }
     else:
         action_map = {
-            'security': 'security headers' if has_ssl else 'SSL + security headers',
-            'seo': 'SEO fundamentals',
-            'content': 'content depth',
-            'mobile': 'mobile UX',
-            'technical': 'technical SEO + analytics',
+            'security': 'SSL certificate' if not has_ssl else 'security headers (CSP, X-Frame-Options)',
+            'seo': 'meta descriptions and heading structure',
+            'content': 'content depth and expertise',
+            'mobile': 'mobile responsiveness and touch targets',
+            'technical': 'Google Analytics' if not has_analytics else 'technical SEO (sitemap, canonical)',
         }
     
     priority_items = [action_map.get(gap, gap) for gap in top_gaps]
@@ -4065,93 +4070,99 @@ def build_role_summaries(url: str, basic: Dict[str, Any], impact: BusinessImpact
             'early': 'alkuvaihe'
         }[state]
         
-        # CEO: Strategic overview
+        # CEO: Strategic overview - PERSONALIZED
         ceo_summary = (
-            f"Olemme {s}/100 ({state_fi}). "
-            f"Tarkeimmat prioriteetit: {priority_items[0]}, {priority_items[1]}. "
-            f"Jos toteutamme nama korjaukset, voimme avata {impact.revenue_uplift_range} "
-            f"ja {impact.lead_gain_estimate}. Fokus: yksi muutos viikossa."
+            f"{company_name} on {s}/100 ({state_fi}). "
+            f"Kriittisimmät kehityskohteet: {priority_items[0]}. "
+            f"Seuraavaksi: {priority_items[1]}. "
+            f"Arvioitu tuottopotentiaali: {impact.revenue_uplift_range} "
+            f"ja {impact.lead_gain_estimate}. Suositus: yksi kehitysaskel viikossa."
         )
         
-        # CMO: Growth levers
+        # CMO: Growth levers - PERSONALIZED
         cmo_focus = []
         if 'seo' in top_gaps or 'content' in top_gaps:
-            cmo_focus.append(f"SEO + sisalto -> {impact.lead_gain_estimate}")
+            cmo_focus.append(f"hakukonenakyvyys + sisaltomarkkinointi -> {impact.lead_gain_estimate}")
         if 'mobile' in top_gaps:
             cmo_focus.append(f"mobiilikayttokokemus -> parempi konversio")
         if not cmo_focus:
-            cmo_focus.append(f"Konversion optimointi -> {impact.revenue_uplift_range}")
+            cmo_focus.append(f"konversio-optimointi -> {impact.revenue_uplift_range}")
         
         cmo_summary = (
-            f"Kasvun vipuvarret: {' + '.join(cmo_focus)}. "
-            f"Tavoite: {impact.revenue_uplift_range}. Seuraa viikoittain liidien laatua."
+            f"{company_name}: kasvun avaimet ovat {' ja '.join(cmo_focus)}. "
+            f"Tavoite: {impact.revenue_uplift_range}. Mittaa viikoittain: liidien maara ja laatu."
         )
         
-        # CTO: Technical priorities - be specific about security
+        # CTO: Technical priorities - SPECIFIC
         cto_priorities = []
         if 'security' in top_gaps:
             if not has_ssl:
-                cto_priorities.append("SSL-sertifikaatti")
+                cto_priorities.append("SSL-sertifikaatti (Let's Encrypt)")
             if not has_security_headers:
-                cto_priorities.append("turvallisuusotsikot (CSP, X-Frame-Options)")
+                cto_priorities.append("turvallisuusotsikot: CSP, X-Frame-Options, HSTS")
+        if not has_analytics:
+            cto_priorities.append("Google Analytics 4 + GTM")
         if 'mobile' in top_gaps:
-            cto_priorities.append("Core Web Vitals (LCP, CLS)")
+            cto_priorities.append("Core Web Vitals: LCP < 2.5s, CLS < 0.1")
         if 'technical' in top_gaps:
-            cto_priorities.append("analytiikka + tekninen SEO")
+            cto_priorities.append("XML-sivukartta + robots.txt")
         
         if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
-            cto_priorities.insert(0, "SSR/esirenderinti SPA:lle")
+            cto_priorities.insert(0, "SSR tai esirenderinti SPA:lle (Googlebot ei suorita JS:aa)")
         
         if not cto_priorities:
-            cto_priorities = ["viivasta ei-kriittinen JS", "optimoi kuvat"]
+            cto_priorities = ["kuvien optimointi (WebP)", "JS:n viivastaminen"]
         
         cto_summary = (
-            f"Priorisoi: {', '.join(cto_priorities[:3])}. "
-            f"Toimita yksi tekninen voitto per sprintti."
+            f"{company_name} tekninen priorisointi: {', '.join(cto_priorities[:3])}. "
+            f"Toimita yksi tekninen parannus per sprintti."
         )
     else:
-        # English (original)
+        # English - PERSONALIZED
         ceo_summary = (
-            f"We are at {s}/100 ({state}). "
-            f"Top priorities: {priority_items[0]}, {priority_items[1]}. "
-            f"If we ship these fixes, we can unlock {impact.revenue_uplift_range} "
-            f"and {impact.lead_gain_estimate}. Focus: one change per week."
+            f"{company_name} scores {s}/100 ({state}). "
+            f"Critical improvements: {priority_items[0]}. "
+            f"Next: {priority_items[1]}. "
+            f"Estimated potential: {impact.revenue_uplift_range} "
+            f"and {impact.lead_gain_estimate}. Recommendation: one improvement per week."
         )
         
         cmo_focus = []
         if 'seo' in top_gaps or 'content' in top_gaps:
-            cmo_focus.append(f"SEO + content -> {impact.lead_gain_estimate}")
+            cmo_focus.append(f"SEO + content marketing -> {impact.lead_gain_estimate}")
         if 'mobile' in top_gaps:
             cmo_focus.append(f"mobile UX -> better conversion")
         if not cmo_focus:
-            cmo_focus.append(f"Conversion optimization -> {impact.revenue_uplift_range}")
+            cmo_focus.append(f"conversion optimization -> {impact.revenue_uplift_range}")
         
         cmo_summary = (
-            f"Growth levers: {' + '.join(cmo_focus)}. "
-            f"Target: {impact.revenue_uplift_range}. Track weekly progress on lead quality."
+            f"{company_name}: growth drivers are {' and '.join(cmo_focus)}. "
+            f"Target: {impact.revenue_uplift_range}. Measure weekly: lead volume and quality."
         )
         
-        # CTO: Technical priorities - be specific about security
+        # CTO: Technical priorities - SPECIFIC
         cto_priorities = []
         if 'security' in top_gaps:
             if not has_ssl:
-                cto_priorities.append("SSL certificate")
+                cto_priorities.append("SSL certificate (Let's Encrypt)")
             if not has_security_headers:
-                cto_priorities.append("security headers (CSP, X-Frame-Options)")
+                cto_priorities.append("security headers: CSP, X-Frame-Options, HSTS")
+        if not has_analytics:
+            cto_priorities.append("Google Analytics 4 + GTM")
         if 'mobile' in top_gaps:
-            cto_priorities.append("Core Web Vitals (LCP, CLS)")
+            cto_priorities.append("Core Web Vitals: LCP < 2.5s, CLS < 0.1")
         if 'technical' in top_gaps:
-            cto_priorities.append("analytics + technical SEO")
+            cto_priorities.append("XML sitemap + robots.txt")
         
         if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
-            cto_priorities.insert(0, "SSR/prerender for SPA")
+            cto_priorities.insert(0, "SSR or prerendering for SPA (Googlebot doesn't execute JS)")
         
         if not cto_priorities:
-            cto_priorities = ["defer non-critical JS", "optimize images"]
+            cto_priorities = ["image optimization (WebP)", "defer non-critical JS"]
         
         cto_summary = (
-            f"Prioritize: {', '.join(cto_priorities[:3])}. "
-            f"Ship one technical win per sprint."
+            f"{company_name} technical priorities: {', '.join(cto_priorities[:3])}. "
+            f"Ship one technical improvement per sprint."
         )
     
     return RoleSummaries(
