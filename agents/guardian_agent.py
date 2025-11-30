@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-# Version: 2025-11-30-0940
-# Changes: Company intel integration, ai_visibility threat, real revenue/employees in threat calc
+# Version: 2025-11-30-1015
+# Changes: Company intel integration, ai_visibility threat, real revenue/employees in threat calc, revenue_data transparency
 """
 Growth Engine 2.0 - Guardian Agent
 The Risk Manager - RASM, threat analysis and Competitor Threat Assessment
@@ -172,6 +172,7 @@ class GuardianAgent(BaseAgent):
         annual_revenue = 500000  # Default EUR500k fallback
         revenue_source = "default"
         company_name = "Company"
+        revenue_warning = None
         
         try:
             your_company_intel = scout_results.get('your_company_intel', {}) if scout_results else {}
@@ -180,16 +181,24 @@ class GuardianAgent(BaseAgent):
                 annual_revenue = int(your_company_intel.get('revenue', 500000))
                 revenue_source = "company_intel"
                 company_name = your_company_intel.get('name', 'Company')
-                logger.info(f"[Guardian] Using real revenue from Company Intel: EUR{annual_revenue:,}")
+                logger.info(f"[Guardian] ✅ Using REAL revenue from Company Intel: EUR{annual_revenue:,} ({company_name})")
+            elif your_company_intel and your_company_intel.get('name'):
+                # Company found but no revenue data
+                company_name = your_company_intel.get('name', 'Company')
+                revenue_warning = f"Company '{company_name}' found but revenue data not available - using estimate"
+                logger.warning(f"[Guardian] ⚠️ {revenue_warning}")
             elif context.revenue_input:
                 annual_revenue = int(context.revenue_input.get('annual_revenue', 500000))
                 revenue_source = "user_input"
+                logger.info(f"[Guardian] Using user-provided revenue: EUR{annual_revenue:,}")
             else:
-                logger.info(f"[Guardian] Using default revenue estimate: EUR{annual_revenue:,}")
+                revenue_warning = "No company data found - using EUR500k default estimate"
+                logger.warning(f"[Guardian] ⚠️ {revenue_warning}")
                 
         except Exception as e:
             logger.warning(f"[Guardian] Revenue fetch failed, using default: {e}")
             annual_revenue = 500000
+            revenue_warning = f"Revenue fetch failed: {e}"
         
         # Kayta uutta mallia jos saatavilla
         if USE_NEW_REVENUE_MODEL:
@@ -378,7 +387,14 @@ class GuardianAgent(BaseAgent):
             'revenue_impact': business_impact,
             'priority_actions': priority_actions,
             'rasm_score': rasm_score,
-            'competitor_threat_assessment': competitor_threat_assessment
+            'competitor_threat_assessment': competitor_threat_assessment,
+            # Revenue data transparency
+            'revenue_data': {
+                'annual_revenue': annual_revenue,
+                'source': revenue_source,
+                'warning': revenue_warning,
+                'company_name': company_name
+            }
         }
     
     def _identify_threats(

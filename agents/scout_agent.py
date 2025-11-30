@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-# Version: 2025-11-30-0940
-# Changes: TOL-code industry detection, skip_domains expanded, company_intel first
+# Version: 2025-11-30-1020
+# Changes: TOL-code industry detection, skip_domains expanded, company_intel first, company_name from registry
 """
 Growth Engine 2.0 - Scout Agent
 "The Market Explorer" - Finds competitors and maps the market
@@ -130,6 +130,10 @@ class ScoutAgent(BaseAgent):
                 your_company_intel = await self._get_own_company_intel(context.url)
                 if your_company_intel:
                     logger.info(f"[Scout] Got company intel: {your_company_intel.get('name')}, TOL: {your_company_intel.get('industry_code')}")
+                    # UPDATE company_name with real name from registry!
+                    if your_company_intel.get('name'):
+                        company_name = your_company_intel.get('name')
+                        logger.info(f"[Scout] Updated company_name to: {company_name}")
             except Exception as e:
                 logger.warning(f"[Scout] Company intel fetch failed: {e}")
         
@@ -289,6 +293,7 @@ class ScoutAgent(BaseAgent):
                 'competitor_count': 0,
                 'discovery_method': 'failed',
                 'website_data': website_data,
+                'your_company_intel': your_company_intel,  # Keep company intel even on error
                 'error': str(e)
             }
     
