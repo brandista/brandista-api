@@ -83,6 +83,127 @@ INDUSTRY_PROFILES = {
 
 
 # =============================================================================
+# BUSINESS PRESENCE TYPE - Online-only vs Kivijalka
+# =============================================================================
+
+PRESENCE_MULTIPLIERS = {
+    'online_only': {
+        'name': {'fi': 'Vain verkossa', 'en': 'Online only'},
+        'digital_share_multiplier': 1.8,
+        'description': 'No physical stores, all revenue from online'
+    },
+    'omnichannel': {
+        'name': {'fi': 'Monikanavainen', 'en': 'Omnichannel'},
+        'digital_share_multiplier': 1.0,
+        'description': 'Online + physical stores, integrated experience'
+    },
+    'brick_and_mortar': {
+        'name': {'fi': 'Kivijalka', 'en': 'Brick & mortar'},
+        'digital_share_multiplier': 0.5,
+        'description': 'Primarily physical stores, website for info only'
+    },
+    'hybrid': {
+        'name': {'fi': 'Hybridi', 'en': 'Hybrid'},
+        'digital_share_multiplier': 0.75,
+        'description': 'Physical stores with some online sales'
+    }
+}
+
+
+import re
+
+def detect_business_presence(html_content: str, basic_analysis: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+    """
+    Tunnistaa onko yritys online-only, kivijalka vai omnichannel.
+    """
+    html_lower = html_content.lower() if html_content else ''
+    signals = {
+        'has_opening_hours': False,
+        'has_store_locator': False,
+        'has_physical_address': False,
+        'has_local_business_schema': False,
+        'has_checkout': False,
+        'has_cart': False,
+        'store_count': 0
+    }
+    
+    # 1. Aukioloajat
+    opening_patterns = [
+        'aukioloaj', 'opening hour', 'openingstime',
+        'ma-pe', 'mon-fri', 'arkisin', 'avoinna', 'suljettu'
+    ]
+    for pattern in opening_patterns:
+        if pattern in html_lower:
+            signals['has_opening_hours'] = True
+            break
+    
+    # 2. Myymalasijainnit
+    store_patterns = [
+        'myymala', 'myymalat', 'liike', 'liikkeet',
+        'store locat', 'find store', 'our stores',
+        'toimipist', 'store finder', 'etsi myymala'
+    ]
+    for pattern in store_patterns:
+        if pattern in html_lower:
+            signals['has_store_locator'] = True
+            break
+    
+    # 3. Fyysinen osoite
+    address_patterns = [
+        r'\b[A-Za-z]+katu\s*\d{1,4}',
+        r'\b[A-Za-z]+tie\s*\d{1,4}',
+        r'\d{1,4}\s+\w+\s+(street|road|avenue)\b'
+    ]
+    for pattern in address_patterns:
+        if re.search(pattern, html_lower):
+            signals['has_physical_address'] = True
+            break
+    
+    # 4. Postinumerot
+    postal_matches = re.findall(r'\b\d{5}\b', html_lower)
+    if len(postal_matches) >= 2:
+        signals['has_physical_address'] = True
+        signals['store_count'] = len(set(postal_matches))
+    
+    # 5. Schema.org LocalBusiness
+    local_schemas = ['localbusiness', 'store', 'retailer', 'jewelrystore']
+    for schema in local_schemas:
+        if f'"@type":"{schema}"' in html_lower or f'"@type": "{schema}"' in html_lower:
+            signals['has_local_business_schema'] = True
+            break
+    
+    # 6. Verkkokauppa signaalit
+    if any(p in html_lower for p in ['checkout', 'kassa', 'tilaus', 'maksu']):
+        signals['has_checkout'] = True
+    if any(p in html_lower for p in ['cart', 'ostoskori', 'add to cart', 'lisaa koriin']):
+        signals['has_cart'] = True
+    
+    # 7. Maarita presence type
+    physical = sum([
+        signals['has_opening_hours'],
+        signals['has_store_locator'],
+        signals['has_physical_address'],
+        signals['has_local_business_schema']
+    ])
+    online = sum([signals['has_checkout'], signals['has_cart']])
+    
+    if physical == 0 and online >= 1:
+        presence_type = 'online_only'
+    elif physical >= 3 and online >= 1:
+        presence_type = 'omnichannel'
+    elif physical >= 3:
+        presence_type = 'brick_and_mortar'
+    elif physical >= 1 and online >= 1:
+        presence_type = 'hybrid'
+    elif physical >= 1:
+        presence_type = 'brick_and_mortar'
+    else:
+        presence_type = 'hybrid'
+    
+    return presence_type, signals
+
+
+# =============================================================================
 # RISK FACTORS - Tutkimukseen perustuvat vaikutuskertoimet
 # =============================================================================
 
@@ -542,24 +663,45 @@ def calculate_revenue_impact(
     detected_risks: List[str],
     industry: str = 'default',
     company_name: str = 'Company',
-    language: str = 'en'
+    language: str = 'en',
+    business_presence: str = 'hybrid',
+    html_content: str = ''
 ) -> RevenueImpactAnalysis:
     """
     Laske realistinen revenue impact
     
     Logiikka:
     1. Ota digitaalinen osuus liikevaihdosta (toimialan mukaan)
-    2. Laske jokaisen riskin vaikutus erikseen
-    3. Huomioi paallekkaisyydet (riskit eivat summaudu 100%)
-    4. Anna range (low-high) ja expected arvo
+    2. Saada business presence (online-only vs kivijalka)
+    3. Laske jokaisen riskin vaikutus erikseen
+    4. Huomioi paallekkaisyydet (riskit eivat summaudu 100%)
+    5. Anna range (low-high) ja expected arvo
     """
     
     profile = INDUSTRY_PROFILES.get(industry, INDUSTRY_PROFILES['default'])
     
-    # Lasketaan digitaalinen liikevaihto
-    digital_revenue = int(annual_revenue * profile['digital_revenue_share'])
+    # Tunnista business presence jos HTML annettu
+    presence_signals = {}
+    if html_content and business_presence == 'hybrid':
+        business_presence, presence_signals = detect_business_presence(html_content, {})
+        logger.info(f"[RevenueImpact] Detected business presence: {business_presence}")
+        logger.info(f"[RevenueImpact] Presence signals: {presence_signals}")
+    
+    # Hae presence multiplier
+    presence_config = PRESENCE_MULTIPLIERS.get(business_presence, PRESENCE_MULTIPLIERS['hybrid'])
+    presence_multiplier = presence_config['digital_share_multiplier']
+    
+    # Lasketaan digitaalinen liikevaihto (huomioi presence)
+    base_digital_share = profile['digital_revenue_share']
+    adjusted_digital_share = min(base_digital_share * presence_multiplier, 0.95)  # Max 95%
+    
+    digital_revenue = int(annual_revenue * adjusted_digital_share)
     organic_revenue = int(digital_revenue * profile['organic_traffic_share'])
     mobile_revenue = int(digital_revenue * profile['mobile_traffic_share'])
+    
+    logger.info(f"[RevenueImpact] Industry: {industry}, Presence: {business_presence}")
+    logger.info(f"[RevenueImpact] Digital share: {base_digital_share} x {presence_multiplier} = {adjusted_digital_share:.2f}")
+    logger.info(f"[RevenueImpact] Digital revenue: EUR{digital_revenue:,} of EUR{annual_revenue:,}")
     
     risk_items = []
     total_fix_cost_low = 0
