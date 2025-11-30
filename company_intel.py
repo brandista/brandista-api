@@ -1,18 +1,19 @@
+# -*- coding: utf-8 -*-
 """
-Growth Engine 2.0 - Company Intelligence Module
+Growth Engine 2.0 - Company Intelligence Module 🌍
 Due Diligence data from official European sources
 
 Supported Countries:
-- FI: YTJ (PRH/Vero) - Official Finnish company registry
-- NO: Bronnoysund Register (data.brreg.no) - Norwegian company registry
-- DK: CVR (datacvr.virk.dk) - Danish company registry  
-- EE: e-Business Register (ariregister.rik.ee) - Estonian company registry
-- Other: Domain-based estimation with industry analysis
+- 🇫🇮 FI: YTJ (PRH/Vero) - Official Finnish company registry
+- 🇳🇴 NO: Brønnøysund Register (data.brreg.no) - Norwegian company registry
+- 🇩🇰 DK: CVR (datacvr.virk.dk) - Danish company registry  
+- 🇪🇪 EE: e-Business Register (ariregister.rik.ee) - Estonian company registry
+- 🌐 Other: Domain-based estimation with industry analysis
 
 Sources:
 - YTJ (PRH/Vero) - Official company registry, free API
 - Kauppalehti - Financial data (revenue, employees, profit)
-- Bronnoysund - Norwegian companies, free API
+- Brønnøysund - Norwegian companies, free API
 - CVR - Danish companies, free API
 - Estonian e-Business Register - Estonian companies
 
@@ -22,10 +23,10 @@ Usage:
     intel = CompanyIntel()
     
     # Search by name (auto-detects country from TLD)
-    profile = await intel.get_company_from_domain("valio.fi")      # Finland
-    profile = await intel.get_company_from_domain("telenor.no")    # Norway
-    profile = await intel.get_company_from_domain("novo.dk")       # Denmark
-    profile = await intel.get_company_from_domain("bolt.ee")       # Estonia
+    profile = await intel.get_company_from_domain("valio.fi")      # 🇫🇮 Finland
+    profile = await intel.get_company_from_domain("telenor.no")    # 🇳🇴 Norway
+    profile = await intel.get_company_from_domain("novo.dk")       # 🇩🇰 Denmark
+    profile = await intel.get_company_from_domain("bolt.ee")       # 🇪🇪 Estonia
 """
 
 import logging
