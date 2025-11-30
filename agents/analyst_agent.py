@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-# Version: 2025-11-30-0940
-# Changes: score_breakdown direct use, ai_visibility category, competitors_enriched passthrough
+# Version: 2025-11-30-1000
+# Changes: score_breakdown direct use, ai_visibility category, competitors_enriched passthrough, score_interpretation, top_findings
 """
 Growth Engine 2.0 - Analyst Agent
 "The Data Scientist" - Syvallinen analyysi ja benchmark-vertailu
@@ -216,13 +216,27 @@ class AnalystAgent(BaseAgent):
         # Pass through competitors_enriched from Scout for Guardian
         competitors_enriched = scout_results.get('competitors_enriched', []) if scout_results else []
         
+        # 5. NEW: Score interpretation (avoid false precision)
+        your_score = your_analysis.get('final_score', 0)
+        score_interpretation = self._interpret_score(your_score)
+        
+        # 6. NEW: Top 3 findings for Strategist & Planner
+        top_findings = self._extract_top_findings(
+            your_analysis, 
+            category_comparison, 
+            benchmark
+        )
+        
         return {
             'your_analysis': your_analysis,
             'competitor_analyses': competitor_analyses,
             'benchmark': benchmark,
             'category_comparison': category_comparison,
-            'your_score': your_analysis.get('final_score', 0),
-            'competitors_enriched': competitors_enriched  # Company intel data for Guardian
+            'your_score': your_score,
+            'competitors_enriched': competitors_enriched,
+            # NEW: Interpretations to avoid false precision
+            'score_interpretation': score_interpretation,
+            'top_findings': top_findings
         }
     
     async def _analyze_competitor(self, url: str, language: str) -> Optional[Dict[str, Any]]:
@@ -436,3 +450,143 @@ class AnalystAgent(BaseAgent):
             return min(ai_score, 100)
         
         return 50
+    
+    def _interpret_score(self, score: int) -> Dict[str, Any]:
+        """
+        Interpret score to avoid false precision.
+        Returns level (Low/Medium/High) + description.
+        
+        Scale:
+        - 0-39: Low (Critical issues)
+        - 40-59: Medium (Needs improvement)  
+        - 60-74: Good (Solid foundation)
+        - 75-89: High (Strong position)
+        - 90-100: Excellent (Industry leader)
+        """
+        if score >= 90:
+            level = 'excellent'
+            level_label = {'fi': 'Erinomainen', 'en': 'Excellent'}.get(self._language)
+            description = {'fi': 'Toimialan kärkitasoa', 'en': 'Industry leading'}.get(self._language)
+        elif score >= 75:
+            level = 'high'
+            level_label = {'fi': 'Korkea', 'en': 'High'}.get(self._language)
+            description = {'fi': 'Vahva asema', 'en': 'Strong position'}.get(self._language)
+        elif score >= 60:
+            level = 'good'
+            level_label = {'fi': 'Hyvä', 'en': 'Good'}.get(self._language)
+            description = {'fi': 'Hyvä pohja, parannettavaa', 'en': 'Solid foundation, room to improve'}.get(self._language)
+        elif score >= 40:
+            level = 'medium'
+            level_label = {'fi': 'Keskitaso', 'en': 'Medium'}.get(self._language)
+            description = {'fi': 'Vaatii parannuksia', 'en': 'Needs improvement'}.get(self._language)
+        else:
+            level = 'low'
+            level_label = {'fi': 'Matala', 'en': 'Low'}.get(self._language)
+            description = {'fi': 'Kriittisiä puutteita', 'en': 'Critical issues'}.get(self._language)
+        
+        return {
+            'score': score,
+            'level': level,
+            'level_label': level_label,
+            'description': description,
+            'scale': {
+                'min': 0,
+                'max': 100,
+                'good_threshold': 60,
+                'high_threshold': 75
+            }
+        }
+    
+    def _extract_top_findings(
+        self,
+        your_analysis: Dict[str, Any],
+        category_comparison: Dict[str, Any],
+        benchmark: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """
+        Extract top 3 most important findings for Strategist & Planner.
+        Prioritizes: critical issues > competitive gaps > opportunities
+        """
+        findings = []
+        
+        basic = your_analysis.get('basic_analysis', {})
+        detailed = your_analysis.get('detailed_analysis', {})
+        tech = detailed.get('technical_audit', {})
+        
+        # 1. CRITICAL ISSUES (highest priority)
+        
+        # SSL missing = critical
+        if tech.get('has_ssl') is False:
+            findings.append({
+                'type': 'critical',
+                'category': 'security',
+                'title': {'fi': 'SSL-sertifikaatti puuttuu', 'en': 'SSL certificate missing'}.get(self._language),
+                'impact': 'high',
+                'priority': 1
+            })
+        
+        # No analytics = blind
+        if not tech.get('has_analytics') and not basic.get('has_analytics'):
+            findings.append({
+                'type': 'critical',
+                'category': 'analytics',
+                'title': {'fi': 'Analytiikka puuttuu', 'en': 'Analytics missing'}.get(self._language),
+                'impact': 'high',
+                'priority': 2
+            })
+        
+        # Mobile issues
+        if basic.get('mobile_ready') not in ['Kyllä', 'Yes', True]:
+            findings.append({
+                'type': 'critical',
+                'category': 'mobile',
+                'title': {'fi': 'Mobiilioptimointi puuttuu', 'en': 'Mobile optimization missing'}.get(self._language),
+                'impact': 'high',
+                'priority': 3
+            })
+        
+        # 2. COMPETITIVE GAPS (where you're behind)
+        for cat, data in category_comparison.items():
+            if data.get('status') == 'behind' and data.get('difference', 0) < -10:
+                cat_names = {
+                    'seo': {'fi': 'SEO', 'en': 'SEO'},
+                    'performance': {'fi': 'Suorituskyky', 'en': 'Performance'},
+                    'security': {'fi': 'Tietoturva', 'en': 'Security'},
+                    'content': {'fi': 'Sisältö', 'en': 'Content'},
+                    'ux': {'fi': 'Käyttökokemus', 'en': 'UX'},
+                    'ai_visibility': {'fi': 'AI-näkyvyys', 'en': 'AI Visibility'},
+                }
+                findings.append({
+                    'type': 'gap',
+                    'category': cat,
+                    'title': {
+                        'fi': f'{cat_names.get(cat, {}).get("fi", cat)}: {data["difference"]} pistettä jäljessä',
+                        'en': f'{cat_names.get(cat, {}).get("en", cat)}: {data["difference"]} points behind'
+                    }.get(self._language),
+                    'impact': 'medium',
+                    'priority': 5,
+                    'gap': data.get('difference', 0)
+                })
+        
+        # 3. OPPORTUNITIES (where you're ahead)
+        for cat, data in category_comparison.items():
+            if data.get('status') == 'ahead' and data.get('difference', 0) > 15:
+                cat_names = {
+                    'seo': {'fi': 'SEO', 'en': 'SEO'},
+                    'performance': {'fi': 'Suorituskyky', 'en': 'Performance'},
+                    'content': {'fi': 'Sisältö', 'en': 'Content'},
+                }
+                findings.append({
+                    'type': 'strength',
+                    'category': cat,
+                    'title': {
+                        'fi': f'Vahvuus: {cat_names.get(cat, {}).get("fi", cat)} +{data["difference"]} pistettä',
+                        'en': f'Strength: {cat_names.get(cat, {}).get("en", cat)} +{data["difference"]} points'
+                    }.get(self._language),
+                    'impact': 'positive',
+                    'priority': 10
+                })
+        
+        # Sort by priority and return top 3
+        findings.sort(key=lambda x: x.get('priority', 99))
+        return findings[:3]
