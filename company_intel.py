@@ -1,24 +1,31 @@
 """
 Growth Engine 2.0 - Company Intelligence Module
-Due Diligence data from official Finnish sources
+Due Diligence data from official European sources
+
+Supported Countries:
+- FI: YTJ (PRH/Vero) - Official Finnish company registry
+- NO: Bronnoysund Register (data.brreg.no) - Norwegian company registry
+- DK: CVR (datacvr.virk.dk) - Danish company registry  
+- EE: e-Business Register (ariregister.rik.ee) - Estonian company registry
+- Other: Domain-based estimation with industry analysis
 
 Sources:
 - YTJ (PRH/Vero) - Official company registry, free API
 - Kauppalehti - Financial data (revenue, employees, profit)
+- Bronnoysund - Norwegian companies, free API
+- CVR - Danish companies, free API
+- Estonian e-Business Register - Estonian companies
 
 Usage:
     from company_intel import CompanyIntel
     
     intel = CompanyIntel()
     
-    # Search by name
-    companies = await intel.search_company("Valio")
-    
-    # Get full profile by Y-tunnus
-    profile = await intel.get_company_profile("0116754-4")
-    
-    # Get from domain (extracts company name, searches)
-    profile = await intel.get_company_from_domain("valio.fi")
+    # Search by name (auto-detects country from TLD)
+    profile = await intel.get_company_from_domain("valio.fi")      # Finland
+    profile = await intel.get_company_from_domain("telenor.no")    # Norway
+    profile = await intel.get_company_from_domain("novo.dk")       # Denmark
+    profile = await intel.get_company_from_domain("bolt.ee")       # Estonia
 """
 
 import logging
@@ -34,17 +41,55 @@ from bs4 import BeautifulSoup
 logger = logging.getLogger(__name__)
 
 
+# =============================================================================
+# COUNTRY DETECTION
+# =============================================================================
+
+COUNTRY_TLD_MAP = {
+    'fi': 'FI',
+    'no': 'NO', 
+    'dk': 'DK',
+    'ee': 'EE',
+    'se': 'SE',
+    'de': 'DE',
+    'uk': 'UK',
+    'com': None,  # Needs further detection
+    'eu': None,
+    'io': None,
+    'net': None,
+    'org': None,
+}
+
+
+def detect_country_from_domain(domain: str) -> str:
+    """Detect country from domain TLD"""
+    domain = domain.lower().strip()
+    domain = re.sub(r'^https?://', '', domain)
+    domain = re.sub(r'^www\.', '', domain)
+    
+    tld = domain.split('.')[-1]
+    return COUNTRY_TLD_MAP.get(tld, None)
+
+
 class CompanyIntel:
     """
-    Finnish Company Intelligence
-    Combines YTJ (official registry) + Kauppalehti (financial data)
+    European Company Intelligence
+    Supports FI, NO, DK, EE with fallback for other countries
     """
     
-    # PRH/YTJ Open Data API - V3 (updated August 2024)
-    YTJ_API_BASE = "https://avoindata.prh.fi/opendata-ytj-api/v3/companies"
-    
-    # Kauppalehti company pages
+    # Finland - PRH/YTJ Open Data API
+    YTJ_API_BASE = "https://avoindata.prh.fi/bis/v1"
+    YTJ_V3_API_BASE = "https://avoindata.prh.fi/opendata-ytj-api/v3"
     KAUPPALEHTI_BASE = "https://www.kauppalehti.fi/yritykset/yritys"
+    
+    # Norway - Bronnoysund Register Centre
+    BRREG_API_BASE = "https://data.brreg.no/enhetsregisteret/api"
+    
+    # Denmark - CVR (Central Business Register)
+    CVR_API_BASE = "https://cvrapi.dk/api"
+    
+    # Estonia - e-Business Register
+    ARIREGISTER_BASE = "https://ariregister.rik.ee/est/api"
     
     def __init__(self):
         self.client = httpx.AsyncClient(
@@ -108,80 +153,24 @@ class CompanyIntel:
             # Merge data
             profile = self._merge_company_data(ytj_data, kl_data, business_id)
             
-            logger.info(f"[CompanyIntel] ✅ Profile fetched: {profile.get('name', business_id)}")
+            logger.info(f"[CompanyIntel] [OK] Profile fetched: {profile.get('name', business_id)}")
             return profile
             
         except Exception as e:
             logger.error(f"[CompanyIntel] Profile fetch failed for {business_id}: {e}")
             return None
     
-    def _find_best_company_match(self, results: List[Dict], search_term: str) -> Optional[Dict]:
-        """
-        Find the best company match from search results.
-        Filters out housing cooperatives and prioritizes domain name matches.
-        
-        Args:
-            results: List of company results from YTJ search
-            search_term: The domain/company name being searched for
-            
-        Returns:
-            Best matching company dict or None
-        """
-        if not results:
-            return None
-        
-        search_lower = search_term.lower()
-        
-        # Housing cooperative patterns to skip
-        skip_patterns = [
-            'asunto oy', 'asunto-oy', 'as oy', 'as. oy', 
-            'bostads', 'kiinteistö oy', 'kiinteistö ab',
-            'asunto-osake', 'housing'
-        ]
-        
-        # First pass: find companies with search term in name (excluding housing)
-        priority_matches = []
-        regular_matches = []
-        
-        for company in results:
-            company_name = (company.get('name') or '').lower()
-            
-            # Skip housing cooperatives
-            if any(skip in company_name for skip in skip_patterns):
-                logger.info(f"[CompanyIntel] Skipping housing cooperative: {company.get('name')}")
-                continue
-            
-            # Check if search term appears in company name
-            if search_lower in company_name:
-                # Higher priority if it's at the start of the name
-                if company_name.startswith(search_lower):
-                    priority_matches.insert(0, company)
-                else:
-                    priority_matches.append(company)
-            else:
-                regular_matches.append(company)
-        
-        # Return best priority match if found
-        if priority_matches:
-            best = priority_matches[0]
-            logger.info(f"[CompanyIntel] Best match found: {best.get('name')}")
-            return best
-        
-        # Return first regular match if no priority matches
-        if regular_matches:
-            best = regular_matches[0]
-            logger.info(f"[CompanyIntel] Fallback match: {best.get('name')}")
-            return best
-        
-        return None
-    
     async def get_company_from_domain(self, domain: str) -> Optional[Dict[str, Any]]:
         """
         Try to find company info from a domain name.
+        Auto-detects country from TLD and uses appropriate registry.
         
-        1. Extracts likely company name from domain
-        2. Searches YTJ
-        3. Returns best match with full profile (prioritizes real companies over housing cooperatives)
+        Supported:
+        - .fi -> YTJ (Finland)
+        - .no -> Bronnoysund (Norway)
+        - .dk -> CVR (Denmark)
+        - .ee -> e-Business Register (Estonia)
+        - Other -> Domain-based estimation
         """
         logger.info(f"[CompanyIntel] Looking up company for domain: {domain}")
         
@@ -191,54 +180,254 @@ class CompanyIntel:
         domain = re.sub(r'^www\.', '', domain)
         domain = domain.split('/')[0]  # Remove path
         
-        # Extract company name from domain
-        # valio.fi -> Valio
-        # verkkokauppa.com -> Verkkokauppa
-        name_part = domain.split('.')[0]
+        # Detect country
+        country = detect_country_from_domain(domain)
+        logger.info(f"[CompanyIntel] Detected country: {country} for domain {domain}")
         
+        # Extract company name from domain
+        name_part = domain.split('.')[0]
         logger.info(f"[CompanyIntel] Extracted name from domain: '{name_part}'")
         
-        # Try search with Oy suffix first (more likely to find the real company)
-        results = await self.search_company(f"{name_part} oy", max_results=10)
+        # Route to appropriate registry
+        if country == 'FI':
+            return await self._get_finnish_company(name_part, domain)
+        elif country == 'NO':
+            return await self._get_norwegian_company(name_part, domain)
+        elif country == 'DK':
+            return await self._get_danish_company(name_part, domain)
+        elif country == 'EE':
+            return await self._get_estonian_company(name_part, domain)
+        else:
+            # Fallback: domain-based estimation
+            return await self._estimate_company_from_domain(name_part, domain)
+    
+    async def _get_finnish_company(self, name_part: str, domain: str) -> Optional[Dict[str, Any]]:
+        """Get company from Finnish YTJ registry"""
+        # Try search
+        results = await self.search_company(name_part, max_results=3)
         
-        # If Oy search returned results, filter and check for good match
-        best_match = self._find_best_company_match(results, name_part) if results else None
-        
-        # If no good match with Oy, try industry-specific suffixes
-        if not best_match:
-            for suffix in [' koru', ' design', ' group', ' ab']:
-                suffix_results = await self.search_company(f"{name_part}{suffix}", max_results=5)
-                if suffix_results:
-                    best_match = self._find_best_company_match(suffix_results, name_part)
-                    if best_match:
-                        logger.info(f"[CompanyIntel] Found with suffix '{suffix}': {best_match.get('name')}")
-                        break
-        
-        # If still no match, try plain name search but filter aggressively
-        if not best_match:
-            results = await self.search_company(name_part, max_results=20)
-            best_match = self._find_best_company_match(results, name_part) if results else None
-        
-        # Try removing common domain suffixes
-        if not best_match:
+        if not results:
+            # Try without common suffixes
             for suffix in ['oy', 'ab', 'group', 'finland', 'fi']:
                 if name_part.endswith(suffix):
                     clean_name = name_part[:-len(suffix)]
-                    results = await self.search_company(clean_name, max_results=10)
-                    best_match = self._find_best_company_match(results, clean_name) if results else None
-                    if best_match:
+                    results = await self.search_company(clean_name, max_results=3)
+                    if results:
                         break
         
-        if not best_match:
-            logger.info(f"[CompanyIntel] No suitable company found for domain: {domain}")
+        if not results:
+            # Try with common suffixes added
+            for suffix in [' oy', ' ab', ' koru']:
+                results = await self.search_company(f"{name_part}{suffix}", max_results=3)
+                if results:
+                    logger.info(f"[CompanyIntel] Found with suffix '{suffix}'")
+                    break
+        
+        if not results:
+            logger.info(f"[CompanyIntel] No Finnish company found for domain: {domain}")
             return None
         
+        # Get full profile of best match
+        best_match = results[0]
         business_id = best_match.get('business_id')
         
         if business_id:
             return await self.get_company_profile(business_id)
         
         return best_match
+    
+    async def _get_norwegian_company(self, name_part: str, domain: str) -> Optional[Dict[str, Any]]:
+        """Get company from Norwegian Bronnoysund registry"""
+        try:
+            # Search by name
+            search_url = f"{self.BRREG_API_BASE}/enheter"
+            params = {'navn': name_part, 'size': 5}
+            
+            response = await self.client.get(search_url, params=params)
+            
+            if response.status_code != 200:
+                logger.warning(f"[CompanyIntel] Bronnoysund search failed: {response.status_code}")
+                return await self._estimate_company_from_domain(name_part, domain)
+            
+            data = response.json()
+            companies = data.get('_embedded', {}).get('enheter', [])
+            
+            if not companies:
+                logger.info(f"[CompanyIntel] No Norwegian company found for: {name_part}")
+                return await self._estimate_company_from_domain(name_part, domain)
+            
+            # Get best match
+            company = companies[0]
+            org_nr = company.get('organisasjonsnummer')
+            
+            # Get detailed info
+            if org_nr:
+                detail_url = f"{self.BRREG_API_BASE}/enheter/{org_nr}"
+                detail_resp = await self.client.get(detail_url)
+                if detail_resp.status_code == 200:
+                    company = detail_resp.json()
+            
+            # Map to standard format
+            profile = {
+                'name': company.get('navn'),
+                'business_id': org_nr,
+                'country': 'NO',
+                'city': company.get('forretningsadresse', {}).get('poststed', ''),
+                'postal_code': company.get('forretningsadresse', {}).get('postnummer', ''),
+                'street': ' '.join(company.get('forretningsadresse', {}).get('adresse', [])),
+                'industry': company.get('naeringskode1', {}).get('beskrivelse', ''),
+                'industry_code': company.get('naeringskode1', {}).get('kode', ''),
+                'company_form': company.get('organisasjonsform', {}).get('beskrivelse', ''),
+                'registration_date': company.get('stiftelsesdato'),
+                'employees': company.get('antallAnsatte'),
+                'status': 'active' if not company.get('slettedato') else 'dissolved',
+                'source': 'brreg.no',
+                'fetched_at': datetime.now().isoformat()
+            }
+            
+            logger.info(f"[CompanyIntel] Found Norwegian company: {profile['name']}")
+            return profile
+            
+        except Exception as e:
+            logger.error(f"[CompanyIntel] Norwegian lookup failed: {e}")
+            return await self._estimate_company_from_domain(name_part, domain)
+    
+    async def _get_danish_company(self, name_part: str, domain: str) -> Optional[Dict[str, Any]]:
+        """Get company from Danish CVR registry"""
+        try:
+            # CVR API requires country parameter
+            search_url = f"{self.CVR_API_BASE}"
+            params = {
+                'search': name_part,
+                'country': 'dk'
+            }
+            headers = {'User-Agent': 'GrowthEngine/2.0'}
+            
+            response = await self.client.get(search_url, params=params, headers=headers)
+            
+            if response.status_code != 200:
+                logger.warning(f"[CompanyIntel] CVR search failed: {response.status_code}")
+                return await self._estimate_company_from_domain(name_part, domain)
+            
+            data = response.json()
+            
+            if not data or 'name' not in data:
+                logger.info(f"[CompanyIntel] No Danish company found for: {name_part}")
+                return await self._estimate_company_from_domain(name_part, domain)
+            
+            # Map to standard format
+            profile = {
+                'name': data.get('name'),
+                'business_id': str(data.get('vat', '')),
+                'country': 'DK',
+                'city': data.get('city', ''),
+                'postal_code': str(data.get('zipcode', '')),
+                'street': data.get('address', ''),
+                'industry': data.get('industrydesc', ''),
+                'industry_code': str(data.get('industrycode', '')),
+                'company_form': data.get('companydesc', ''),
+                'registration_date': data.get('startdate'),
+                'employees': data.get('employees'),
+                'status': 'active',
+                'source': 'cvrapi.dk',
+                'fetched_at': datetime.now().isoformat()
+            }
+            
+            logger.info(f"[CompanyIntel] Found Danish company: {profile['name']}")
+            return profile
+            
+        except Exception as e:
+            logger.error(f"[CompanyIntel] Danish lookup failed: {e}")
+            return await self._estimate_company_from_domain(name_part, domain)
+    
+    async def _get_estonian_company(self, name_part: str, domain: str) -> Optional[Dict[str, Any]]:
+        """Get company from Estonian e-Business Register"""
+        try:
+            # Estonian API - search endpoint
+            search_url = "https://ariregister.rik.ee/est/api/autocomplete"
+            params = {'q': name_part}
+            
+            response = await self.client.get(search_url, params=params)
+            
+            if response.status_code != 200:
+                logger.warning(f"[CompanyIntel] Estonian register search failed: {response.status_code}")
+                return await self._estimate_company_from_domain(name_part, domain)
+            
+            data = response.json()
+            companies = data if isinstance(data, list) else data.get('results', [])
+            
+            if not companies:
+                logger.info(f"[CompanyIntel] No Estonian company found for: {name_part}")
+                return await self._estimate_company_from_domain(name_part, domain)
+            
+            # Get best match
+            company = companies[0]
+            reg_code = company.get('reg_code') or company.get('ariregistri_kood')
+            
+            # Map to standard format
+            profile = {
+                'name': company.get('name') or company.get('nimi'),
+                'business_id': str(reg_code) if reg_code else '',
+                'country': 'EE',
+                'city': company.get('city', ''),
+                'postal_code': '',
+                'street': company.get('address', ''),
+                'industry': '',
+                'industry_code': '',
+                'company_form': company.get('legal_form', ''),
+                'registration_date': None,
+                'employees': None,
+                'status': 'active',
+                'source': 'ariregister.rik.ee',
+                'fetched_at': datetime.now().isoformat()
+            }
+            
+            logger.info(f"[CompanyIntel] Found Estonian company: {profile['name']}")
+            return profile
+            
+        except Exception as e:
+            logger.error(f"[CompanyIntel] Estonian lookup failed: {e}")
+            return await self._estimate_company_from_domain(name_part, domain)
+    
+    async def _estimate_company_from_domain(self, name_part: str, domain: str) -> Optional[Dict[str, Any]]:
+        """
+        Fallback: Estimate company info from domain when no registry available.
+        Uses domain analysis and industry estimation.
+        """
+        logger.info(f"[CompanyIntel] Using domain-based estimation for: {domain}")
+        
+        # Capitalize name
+        company_name = name_part.replace('-', ' ').replace('_', ' ').title()
+        
+        # Detect TLD for country hint
+        tld = domain.split('.')[-1]
+        country_map = {
+            'se': 'SE', 'de': 'DE', 'uk': 'UK', 'fr': 'FR', 
+            'nl': 'NL', 'be': 'BE', 'at': 'AT', 'ch': 'CH',
+            'com': 'INT', 'eu': 'EU', 'io': 'INT', 'net': 'INT'
+        }
+        country = country_map.get(tld, 'INT')
+        
+        profile = {
+            'name': company_name,
+            'business_id': None,
+            'country': country,
+            'city': None,
+            'postal_code': None,
+            'street': None,
+            'industry': None,
+            'industry_code': None,
+            'company_form': None,
+            'registration_date': None,
+            'employees': None,
+            'revenue': None,
+            'status': 'unknown',
+            'source': 'domain_estimate',
+            'estimated': True,
+            'fetched_at': datetime.now().isoformat()
+        }
+        
+        return profile
     
     async def enrich_competitor(self, competitor: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -279,12 +468,14 @@ class CompanyIntel:
     # =========================================================================
     
     async def _ytj_search(self, name: str, max_results: int = 5) -> List[Dict[str, Any]]:
-        """Search YTJ by company name using V3 API"""
+        """Search YTJ by company name"""
         
-        logger.info(f"[CompanyIntel] Searching YTJ V3 for: '{name}'")
+        logger.info(f"[CompanyIntel] Searching YTJ for: '{name}'")
         
         url = f"{self.YTJ_API_BASE}"
         params = {
+            'totalResults': 'true',
+            'maxResults': max_results,
             'name': name
         }
         
@@ -292,44 +483,25 @@ class CompanyIntel:
         response.raise_for_status()
         
         data = response.json()
-        # V3 API returns 'companies' array instead of 'results'
-        results = data.get('companies', data.get('results', []))
+        results = data.get('results', [])
         
-        logger.info(f"[CompanyIntel] YTJ V3 returned {len(results)} results for '{name}'")
-        
-        # Debug: log first result structure
-        if results:
-            first = results[0]
-            logger.info(f"[CompanyIntel] V3 response keys: {list(first.keys())}")
-            logger.info(f"[CompanyIntel] V3 businessId: {first.get('businessId')}")
-            logger.info(f"[CompanyIntel] V3 names: {first.get('names', [])[:2]}")
+        logger.info(f"[CompanyIntel] YTJ returned {len(results)} results for '{name}'")
         
         companies = []
-        for item in results[:max_results]:
-            # Skip dissolved companies (have endDate at root level)
-            if item.get('endDate'):
-                logger.info(f"[CompanyIntel] Skipping dissolved company in search: {item.get('names', [{}])[0].get('name', 'Unknown')} (endDate: {item.get('endDate')})")
-                continue
-            
+        for item in results:
             company = self._parse_ytj_result(item)
             if company:
-                # Double-check status after parsing
-                if company.get('status') == 'dissolved':
-                    logger.info(f"[CompanyIntel] Skipping dissolved company: {company.get('name')}")
-                    continue
                 companies.append(company)
                 logger.info(f"[CompanyIntel] Found: {company.get('name')} ({company.get('business_id')})")
         
         return companies
     
     async def _ytj_get_company(self, business_id: str) -> Optional[Dict[str, Any]]:
-        """Get single company from YTJ V3 by business ID"""
+        """Get single company from YTJ by business ID"""
         
-        # V3 API uses businessId parameter instead of path
-        url = f"{self.YTJ_API_BASE}"
-        params = {'businessId': business_id}
+        url = f"{self.YTJ_API_BASE}/{business_id}"
         
-        response = await self.client.get(url, params=params)
+        response = await self.client.get(url)
         
         if response.status_code == 404:
             return None
@@ -337,8 +509,7 @@ class CompanyIntel:
         response.raise_for_status()
         
         data = response.json()
-        # V3 API returns 'companies' array
-        results = data.get('companies', data.get('results', []))
+        results = data.get('results', [])
         
         if not results:
             return None
@@ -346,29 +517,23 @@ class CompanyIntel:
         return self._parse_ytj_result(results[0])
     
     def _parse_ytj_result(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Parse YTJ V3 API result into clean format"""
+        """Parse YTJ API result into clean format"""
         
         try:
-            # Basic info - V3 'businessId' is a dict with 'value' key, not a string!
-            business_id_raw = item.get('businessId', '')
-            if isinstance(business_id_raw, dict):
-                business_id = business_id_raw.get('value', '')
-            else:
-                business_id = business_id_raw
+            # Basic info
+            business_id = item.get('businessId', '')
             
-            # Get names - V3 uses 'names' array with 'name' and 'type' fields
+            # Get names (prefer Finnish)
             names = item.get('names', [])
             name = ''
             for n in names:
-                # V3: type is string like "0" for current name
-                n_type = n.get('type', '')
-                if n_type == '0' or not n.get('endDate'):  # Current/active name
+                if n.get('language') == 'FI' and n.get('registrationDate'):
                     name = n.get('name', '')
                     break
             if not name and names:
                 name = names[0].get('name', '')
             
-            # Registration date - V3 uses 'registrationDate' in root
+            # Registration date
             reg_date = item.get('registrationDate', '')
             founded_year = None
             if reg_date:
@@ -377,76 +542,47 @@ class CompanyIntel:
                 except:
                     pass
             
-            # Address - V3 uses 'addresses' array
+            # Address
             addresses = item.get('addresses', [])
             address = None
             city = None
             postal_code = None
             for addr in addresses:
-                # V3: type is string, "1" = street address, "2" = postal
-                addr_type = str(addr.get('type', ''))
-                if addr_type == '1' or not address:  # Street address preferred
+                if addr.get('type') == 1:  # Street address
                     address = addr.get('street', '')
                     city = addr.get('city', '')
                     postal_code = addr.get('postCode', '')
-                    if addr_type == '1':
-                        break
+                    break
             
-            # Business line (TOL code) - V3 uses 'businessLines'
+            # Business line (TOL code)
             business_lines = item.get('businessLines', [])
             industry = None
             industry_code = None
             for bl in business_lines:
-                # Get descriptions for industry name
-                descriptions = bl.get('descriptions', [])
-                for desc in descriptions:
-                    if desc.get('language') == 'FI':
-                        industry = desc.get('description', '')
-                        break
-                if not industry and descriptions:
-                    industry = descriptions[0].get('description', '')
-                industry_code = bl.get('code', '')
-                if not bl.get('endDate'):  # Current business line
+                if bl.get('registrationDate'):
+                    industry = bl.get('name', '')
+                    industry_code = bl.get('code', '')
                     break
             
-            # Company form - V3 uses 'companyForms'
+            # Company form
             company_forms = item.get('companyForms', [])
             company_form = None
             for cf in company_forms:
-                # V3: name is in 'descriptions' array
-                descriptions = cf.get('descriptions', [])
-                for desc in descriptions:
-                    if desc.get('language') == 'FI':
-                        company_form = desc.get('description', '')
-                        break
-                if not company_form and descriptions:
-                    company_form = descriptions[0].get('description', '')
-                if company_form:
+                if cf.get('registrationDate'):
+                    company_form = cf.get('name', '')
                     break
             
-            # Status - V3 uses 'companySituations' for liquidation etc.
+            # Status
             status = 'active'
-            situations = item.get('companySituations', [])
-            if situations:
+            liquidations = item.get('liquidations', [])
+            if liquidations:
                 status = 'liquidation'
-            
-            # Trade register status - V3 has 'tradeRegisterStatus'
-            tr_status = item.get('tradeRegisterStatus', '')
-            if tr_status and 'Poistettu' in tr_status:
-                status = 'dissolved'
-            
-            # Check for company end date (dissolved companies)
-            end_date = item.get('endDate')
-            if end_date:
-                status = 'dissolved'
-                logger.info(f"[CompanyIntel] Company {name} has endDate: {end_date}")
             
             return {
                 'business_id': business_id,
                 'name': name,
                 'founded_year': founded_year,
                 'registration_date': reg_date,
-                'end_date': end_date,
                 'address': address,
                 'city': city,
                 'postal_code': postal_code,
@@ -462,16 +598,14 @@ class CompanyIntel:
             return None
     
     # =========================================================================
-    # KAUPPALEHTI (Web Scraping with Playwright for JS content)
+    # KAUPPALEHTI (Web Scraping)
     # =========================================================================
     
     async def _kauppalehti_get_company(self, business_id: str) -> Optional[Dict[str, Any]]:
         """
         Scrape company financial data from Kauppalehti.
-        Uses Playwright for JavaScript-rendered content.
         
-        Note: Kauppalehti loads financial data via JavaScript, so we need
-        a headless browser to get the actual numbers.
+        Note: This is scraping, may break if they change their HTML.
         """
         
         # Format: https://www.kauppalehti.fi/yritykset/yritys/01167544
@@ -479,16 +613,6 @@ class CompanyIntel:
         clean_id = business_id.replace('-', '')
         url = f"{self.KAUPPALEHTI_BASE}/{clean_id}"
         
-        # Try Playwright first (for JS-rendered content)
-        try:
-            result = await self._kauppalehti_playwright(url, business_id)
-            if result and (result.get('revenue') or result.get('employees')):
-                logger.info(f"[CompanyIntel] ✅ Kauppalehti Playwright success: revenue={result.get('revenue')}, employees={result.get('employees')}")
-                return result
-        except Exception as e:
-            logger.warning(f"[CompanyIntel] Playwright failed for Kauppalehti: {e}")
-        
-        # Fallback to simple HTTP (may not get financial data)
         try:
             response = await self.client.get(url)
             
@@ -505,161 +629,6 @@ class CompanyIntel:
                 return None
             raise
     
-    async def _kauppalehti_playwright(self, url: str, business_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Use Playwright to scrape Kauppalehti with full JavaScript rendering.
-        This is needed because financial data is loaded dynamically.
-        """
-        try:
-            from playwright.async_api import async_playwright
-        except ImportError:
-            logger.warning("[CompanyIntel] Playwright not available, skipping JS rendering")
-            return None
-        
-        data = {
-            'business_id': business_id,
-            'source': 'kauppalehti'
-        }
-        
-        try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
-                context = await browser.new_context(
-                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                )
-                page = await context.new_page()
-                
-                # Navigate and wait for content to load
-                await page.goto(url, wait_until='networkidle', timeout=30000)
-                
-                # Wait a bit for any lazy-loaded content
-                await page.wait_for_timeout(2000)
-                
-                # Try to find company name
-                try:
-                    h1 = await page.query_selector('h1')
-                    if h1:
-                        data['name'] = await h1.inner_text()
-                except:
-                    pass
-                
-                # Try to find Liikevaihto (Revenue) using JavaScript
-                # Kauppalehti shows data like "10 692 000 EUR" or "10,69 milj. €"
-                try:
-                    revenue_data = await page.evaluate('''() => {
-                        const allText = document.body.innerText;
-                        
-                        // Look for pattern: "X XXX XXX EUR liikevaihtoa" or "X,X milj. € liikevaihtoa"
-                        // The number comes BEFORE "liikevaihtoa"
-                        let match = allText.match(/([\\d\\s,\\.]+)\\s*(EUR|€|milj\\.?\\s*€?)\\s*liikevaihtoa/i);
-                        if (match) {
-                            return {
-                                text: match[0],
-                                number: match[1].trim(),
-                                unit: match[2].trim()
-                            };
-                        }
-                        
-                        // Alternative: look for "Liikevaihto" followed by number
-                        match = allText.match(/Liikevaihto[:\\s]*([\\d\\s,\\.]+)\\s*(EUR|€|milj|M€|t€)?/i);
-                        if (match) {
-                            return {
-                                text: match[0],
-                                number: match[1].trim(),
-                                unit: match[2] ? match[2].trim() : 'EUR'
-                            };
-                        }
-                        
-                        return null;
-                    }''')
-                    
-                    if revenue_data:
-                        logger.info(f"[CompanyIntel] Kauppalehti JS found revenue: {revenue_data}")
-                        number_str = revenue_data.get('number', '')
-                        unit = revenue_data.get('unit', '').upper()
-                        
-                        # Parse the number - handle non-breaking spaces (\xa0) and regular spaces
-                        clean_num = number_str.replace('\xa0', '').replace(' ', '').replace(',', '.')
-                        
-                        try:
-                            value = float(clean_num)
-                            
-                            # Apply multiplier based on unit
-                            if 'MILJ' in unit or 'M€' in unit:
-                                value = value * 1_000_000
-                            elif 'T€' in unit:
-                                value = value * 1_000
-                            
-                            data['revenue'] = int(value)
-                            data['revenue_text'] = revenue_data.get('text', '')
-                            logger.info(f"[CompanyIntel] Parsed revenue: {data['revenue']}")
-                        except ValueError as e:
-                            logger.warning(f"[CompanyIntel] Could not parse revenue number: {number_str}")
-                except Exception as e:
-                    logger.debug(f"[CompanyIntel] Revenue extraction failed: {e}")
-                
-                # Try to find Henkilöstö (Employees) - should be a simple integer
-                try:
-                    employees_data = await page.evaluate('''() => {
-                        const allText = document.body.innerText;
-                        
-                        // Look for "Henkilöstömäärä" or "Henkilöstö" followed by a number
-                        // Take ONLY the first number (current year), not historical data
-                        const match = allText.match(/Henkilöstö(?:määrä)?[\\*\\s:\\n\\t]*([\\d]+)/i);
-                        if (match) {
-                            return {
-                                text: 'Henkilöstö: ' + match[1],
-                                number: match[1]
-                            };
-                        }
-                        return null;
-                    }''')
-                    
-                    if employees_data:
-                        logger.info(f"[CompanyIntel] Kauppalehti JS found employees: {employees_data}")
-                        try:
-                            emp_count = int(employees_data.get('number', '0'))
-                            # Sanity check - employees should be reasonable (1-100,000)
-                            if 1 <= emp_count <= 100_000:
-                                data['employees'] = emp_count
-                                data['employees_text'] = employees_data.get('text', '')
-                                logger.info(f"[CompanyIntel] Parsed employees: {emp_count}")
-                            else:
-                                logger.warning(f"[CompanyIntel] Employees count seems wrong: {emp_count}")
-                        except ValueError:
-                            logger.warning(f"[CompanyIntel] Could not parse employees: {employees_data}")
-                except Exception as e:
-                    logger.debug(f"[CompanyIntel] Employees extraction failed: {e}")
-                
-                # Try to find Tulos (Profit)
-                try:
-                    profit_text = await page.evaluate('''() => {
-                        const allText = document.body.innerText;
-                        const match = allText.match(/Tulos[\\s\\S]*?(-?[\\d\\s,\\.]+)\\s*(€|EUR|milj|M€|t€)/i);
-                        if (match) return match[0];
-                        return null;
-                    }''')
-                    
-                    if profit_text:
-                        parsed = self._parse_financial_value(profit_text)
-                        if parsed.get('value'):
-                            data['profit'] = parsed['value']
-                            data['profit_text'] = profit_text
-                except Exception as e:
-                    logger.debug(f"[CompanyIntel] Profit extraction failed: {e}")
-                
-                await browser.close()
-                
-                # If we got any financial data, return it
-                if data.get('revenue') or data.get('employees') or data.get('name'):
-                    return data
-                
-                return None
-                
-        except Exception as e:
-            logger.warning(f"[CompanyIntel] Playwright Kauppalehti error: {e}")
-            return None
-    
     def _parse_kauppalehti_html(self, html: str, business_id: str) -> Optional[Dict[str, Any]]:
         """Parse Kauppalehti company page HTML"""
         
@@ -675,13 +644,12 @@ class CompanyIntel:
             h1 = soup.find('h1')
             if h1:
                 data['name'] = h1.get_text(strip=True)
-                logger.info(f"[CompanyIntel] Kauppalehti found company: {data['name']}")
             
             # Look for key metrics in the page
             # Kauppalehti uses various div structures, try common patterns
             
             # Method 1: Look for labeled values
-            for label_text in ['Liikevaihto', 'Henkilöstö', 'Tulos', 'Henkilöstömäärä']:
+            for label_text in ['Liikevaihto', 'Henkilosto', 'Tulos', 'Henkilostomaara']:
                 label = soup.find(string=re.compile(label_text, re.IGNORECASE))
                 if label:
                     parent = label.find_parent(['div', 'td', 'tr', 'li'])
@@ -695,11 +663,9 @@ class CompanyIntel:
                             if 'Liikevaihto' in label_text:
                                 data['revenue'] = parsed.get('value')
                                 data['revenue_text'] = value_text
-                                logger.info(f"[CompanyIntel] Kauppalehti revenue: {value_text} -> {parsed.get('value')}")
-                            elif 'Henkilöstö' in label_text:
+                            elif 'Henkilosto' in label_text:
                                 data['employees'] = parsed.get('value')
                                 data['employees_text'] = value_text
-                                logger.info(f"[CompanyIntel] Kauppalehti employees: {value_text} -> {parsed.get('value')}")
                             elif 'Tulos' in label_text:
                                 data['profit'] = parsed.get('value')
                                 data['profit_text'] = value_text
@@ -764,10 +730,10 @@ class CompanyIntel:
         Parse Finnish financial value text.
         
         Examples:
-        - "12 500 000 €" -> {'value': 12500000, 'unit': 'EUR'}
-        - "12,5 M€" -> {'value': 12500000, 'unit': 'EUR'}
+        - "12 500 000 EUR" -> {'value': 12500000, 'unit': 'EUR'}
+        - "12,5 MEUR" -> {'value': 12500000, 'unit': 'EUR'}
         - "1 234" -> {'value': 1234}
-        - "15 hlö" -> {'value': 15}
+        - "15 hlo" -> {'value': 15}
         """
         
         result = {'raw': text}
@@ -778,14 +744,14 @@ class CompanyIntel:
         text = text.strip().upper()
         
         # Remove currency symbols
-        text = text.replace('€', '').replace('EUR', '')
+        text = text.replace('EUR', '').replace('EUR', '')
         
         # Handle millions/thousands abbreviations
         multiplier = 1
         if 'M' in text or 'MILJ' in text:
             multiplier = 1_000_000
             text = re.sub(r'M(ILJ)?\.?', '', text)
-        elif 'K' in text or 'T€' in text:
+        elif 'K' in text or 'TEUR' in text:
             multiplier = 1_000
             text = text.replace('K', '').replace('T', '')
         
@@ -877,7 +843,6 @@ class CompanyIntel:
         # Enrich with Kauppalehti data (financial)
         if kl_data:
             profile['sources'].append('kauppalehti')
-            logger.info(f"[CompanyIntel] Kauppalehti data for {business_id}: revenue={kl_data.get('revenue')}, employees={kl_data.get('employees')}")
             
             # Only override name if YTJ didn't have it
             if not profile.get('name') and kl_data.get('name'):
@@ -898,8 +863,6 @@ class CompanyIntel:
             
             if kl_data.get('financial_history'):
                 profile['financial_history'] = kl_data['financial_history']
-        else:
-            logger.warning(f"[CompanyIntel] No Kauppalehti data for {business_id}")
         
         # Calculate company age
         if profile.get('founded_year'):
@@ -976,14 +939,14 @@ if __name__ == "__main__":
     async def test():
         intel = CompanyIntel()
         
-        print("🔍 Testing YTJ search...")
+        print("[SEARCH] Testing YTJ search...")
         results = await intel.search_company("Valio")
         print(f"Found {len(results)} results")
         for r in results[:3]:
             print(f"  - {r['name']} ({r['business_id']})")
         
         if results:
-            print("\n📊 Testing full profile...")
+            print("\n[DATA] Testing full profile...")
             profile = await intel.get_company_profile(results[0]['business_id'])
             if profile:
                 print(f"  Name: {profile.get('name')}")
@@ -993,7 +956,7 @@ if __name__ == "__main__":
                 print(f"  Employees: {profile.get('employees')}")
                 print(f"  Sources: {profile.get('sources')}")
         
-        print("\n🌐 Testing domain lookup...")
+        print("\n[WEB] Testing domain lookup...")
         profile = await intel.get_company_from_domain("valio.fi")
         if profile:
             print(f"  Found: {profile.get('name')} ({profile.get('business_id')})")
