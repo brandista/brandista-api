@@ -182,13 +182,27 @@ class GuardianAgent(BaseAgent):
             )
             logger.info(f"[Guardian] Detected risks: {detected_risks}")
             
+            # Hae HTML sisalto presence-tunnistusta varten
+            html_content = your_analysis.get('basic', {}).get('html_content', '')
+            if not html_content:
+                # Yritetaan hakea URL:sta
+                try:
+                    import httpx
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        resp = await client.get(context.url)
+                        html_content = resp.text[:50000]  # Max 50KB
+                except Exception as e:
+                    logger.warning(f"[Guardian] Could not fetch HTML for presence detection: {e}")
+                    html_content = ''
+            
             # Laske realistinen revenue impact
             revenue_impact_analysis = calculate_revenue_impact(
                 annual_revenue=annual_revenue,
                 detected_risks=detected_risks,
                 industry=industry,
                 company_name=company_name,
-                language=context.language
+                language=context.language,
+                html_content=html_content
             )
             
             # Muunna dictiksi
