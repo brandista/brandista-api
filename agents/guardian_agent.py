@@ -113,12 +113,18 @@ class GuardianAgent(BaseAgent):
             insight_type=InsightType.FINDING
         )
         
+        # Get data from correct keys
+        basic_data = your_analysis.get('basic_analysis', your_analysis.get('basic', {}))
+        detailed = your_analysis.get('detailed_analysis', {})
+        technical_data = detailed.get('technical_audit', your_analysis.get('technical', {}))
+        content_data = detailed.get('content_analysis', your_analysis.get('content', {}))
+        
         # 1. Rakenna riskiregisteri (vanha tapa, sailytetaan yhteensopivuus)
         try:
             risk_register = build_risk_register(
-                your_analysis.get('basic', {}),
-                your_analysis.get('technical', {}),
-                your_analysis.get('content', {}),
+                basic_data,
+                technical_data,
+                content_data,
                 context.language
             )
         except Exception as e:
@@ -166,24 +172,24 @@ class GuardianAgent(BaseAgent):
         
         # Kayta uutta mallia jos saatavilla
         if USE_NEW_REVENUE_MODEL:
-            # Tunnista toimiala
+            # Tunnista toimiala (basic_data, technical_data, content_data defined above)
             industry = detect_industry(
                 context.url,
-                your_analysis.get('basic', {}),
+                basic_data,
                 scout_results.get('your_company_intel', {}) if scout_results else None
             )
             logger.info(f"[Guardian] Detected industry: {industry}")
             
             # Tunnista riskit analyysidatasta
             detected_risks = detect_risks_from_analysis(
-                your_analysis.get('basic', {}),
-                your_analysis.get('technical', {}),
-                your_analysis.get('content', {})
+                basic_data,
+                technical_data,
+                content_data
             )
             logger.info(f"[Guardian] Detected risks: {detected_risks}")
             
             # Hae HTML sisalto presence-tunnistusta varten
-            html_content = your_analysis.get('basic', {}).get('html_content', '')
+            html_content = basic_data.get('html_content', '')
             if not html_content:
                 # Yritetaan hakea URL:sta
                 try:
