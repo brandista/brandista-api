@@ -221,6 +221,23 @@ except Exception as e:
     agent_router = None
 
 # ============================================================================
+# GROWTH ENGINE 2.0 - ENHANCED AGENT CHAT V2
+# ============================================================================
+try:
+    from agent_chat_v2 import (
+        router as agent_chat_router,
+        init_chat_tables,
+        AGENT_PERSONALITIES
+    )
+    AGENT_CHAT_V2_AVAILABLE = True
+    logger.info("✅ Enhanced Agent Chat V2 imported successfully")
+except ImportError as e:
+    logger.warning(f"⚠️ Agent Chat V2 not available: {e}")
+    AGENT_CHAT_V2_AVAILABLE = False
+    agent_chat_router = None
+    init_chat_tables = None
+
+# ============================================================================
 # COMPANY INTELLIGENCE - DUE DILIGENCE (YTJ + Kauppalehti)
 # ============================================================================
 try:
@@ -248,7 +265,7 @@ except Exception as e:
 # ============================================================================
 # CONSTANTS AND VERSION INFO
 # ============================================================================
-APP_VERSION = "6.3.1"
+APP_VERSION = "6.5.0"
 APP_NAME = "Brandista Competitive Intelligence API"
 APP_DESCRIPTION = """Production-ready website analysis with configurable scoring system and comprehensive SPA support."""
 # ============================================================================
@@ -1630,6 +1647,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"🗃️ Database: {'connected' if DATABASE_ENABLED else 'not connected'}")
     logger.info(f"📜 Analysis History: {'enabled' if history_db else 'disabled'}")
     logger.info(f"🤖 Agent System: {'enabled (6 agents)' if AGENT_SYSTEM_AVAILABLE else 'disabled'}")
+    logger.info(f"💬 Agent Chat V2: {'enabled (full context + history)' if AGENT_CHAT_V2_AVAILABLE else 'disabled'}")
     
     # 6. Environment warnings
     
@@ -1716,6 +1734,19 @@ app.add_middleware(UTF8Middleware)
 if AGENT_SYSTEM_AVAILABLE and agent_router:
     app.include_router(agent_router)
     logger.info("✅ Growth Engine 2.0 Agent routes registered: /api/v1/agents/*")
+
+# ============================================================================
+# GROWTH ENGINE 2.0 - ENHANCED AGENT CHAT V2 ROUTES
+# ============================================================================
+if AGENT_CHAT_V2_AVAILABLE and agent_chat_router:
+    app.include_router(agent_chat_router, prefix="/api/v1/agents", tags=["Agent Chat V2"])
+    # Initialize chat database tables
+    try:
+        if init_chat_tables:
+            init_chat_tables()
+        logger.info("✅ Enhanced Agent Chat V2 routes registered: /api/v1/agents/chat/v2")
+    except Exception as e:
+        logger.warning(f"⚠️ Could not initialize chat tables: {e}")
 
 # ============================================================================
 # COMPANY INTELLIGENCE ROUTES
@@ -8255,9 +8286,10 @@ async def health_check():
             "playwright_enabled": PLAYWRIGHT_ENABLED,
             "stripe_available": STRIPE_AVAILABLE,
             "cache_size": len(analysis_cache),
-            "enhanced_features": 9,
+            "enhanced_features": 10,
             "complete_models": True,
-            "agent_system": AGENT_SYSTEM_AVAILABLE
+            "agent_system": AGENT_SYSTEM_AVAILABLE,
+            "agent_chat_v2": AGENT_CHAT_V2_AVAILABLE
         },
         "scoring": {"weights": SCORING_CONFIG.weights, "configurable": True}
     }
