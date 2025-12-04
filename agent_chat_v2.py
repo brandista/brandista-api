@@ -23,8 +23,8 @@ CREATE TABLE IF NOT EXISTS agent_chat_sessions (
     id SERIAL PRIMARY KEY,
     user_id VARCHAR(255) NOT NULL,
     agent_id VARCHAR(50) NOT NULL,
-    analysis_id INTEGER REFERENCES growth_analyses(id),
-    url VARCHAR(500),  -- Mihin analyysiin liittyy
+    analysis_id INTEGER,
+    url VARCHAR(500),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     is_active BOOLEAN DEFAULT TRUE
@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS agent_chat_sessions (
 CREATE TABLE IF NOT EXISTS agent_chat_messages (
     id SERIAL PRIMARY KEY,
     session_id INTEGER REFERENCES agent_chat_sessions(id) ON DELETE CASCADE,
-    role VARCHAR(20) NOT NULL,  -- 'user' | 'assistant'
+    role VARCHAR(20) NOT NULL,
     content TEXT NOT NULL,
     agent_id VARCHAR(50),
     metadata JSONB DEFAULT '{}',
@@ -48,11 +48,23 @@ CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON agent_chat_messages(sess
 """
 
 
+def _get_connection():
+    """Hae PostgreSQL-yhteys DATABASE_URL:sta"""
+    import psycopg2
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        return None
+    try:
+        return psycopg2.connect(database_url)
+    except Exception as e:
+        logger.error(f"[Chat] DB connection error: {e}")
+        return None
+
+
 def init_chat_tables():
     """Alusta chat-taulut"""
     try:
-        from database import get_db_connection
-        conn = get_db_connection()
+        conn = _get_connection()
         if conn:
             with conn.cursor() as cur:
                 cur.execute(CHAT_HISTORY_TABLE_SQL)
@@ -77,8 +89,7 @@ def get_or_create_session(
 ) -> Optional[int]:
     """Hae tai luo chat-sessio"""
     try:
-        from database import get_db_connection
-        conn = get_db_connection()
+        conn = _get_connection()
         if not conn:
             return None
         
@@ -136,8 +147,7 @@ def save_chat_message(
 ) -> Optional[int]:
     """Tallenna chat-viesti"""
     try:
-        from database import get_db_connection
-        conn = get_db_connection()
+        conn = _get_connection()
         if not conn:
             return None
         
@@ -164,8 +174,7 @@ def get_chat_history(
 ) -> List[Dict[str, Any]]:
     """Hae chat-historia"""
     try:
-        from database import get_db_connection
-        conn = get_db_connection()
+        conn = _get_connection()
         if not conn:
             return []
         
@@ -206,8 +215,7 @@ def get_user_chat_sessions(
 ) -> List[Dict[str, Any]]:
     """Hae käyttäjän chat-sessiot"""
     try:
-        from database import get_db_connection
-        conn = get_db_connection()
+        conn = _get_connection()
         if not conn:
             return []
         
