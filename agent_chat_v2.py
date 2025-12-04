@@ -51,7 +51,7 @@ CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON agent_chat_messages(sess
 def init_chat_tables():
     """Alusta chat-taulut"""
     try:
-        from db import get_db_connection
+        from database import get_db_connection
         conn = get_db_connection()
         if conn:
             with conn.cursor() as cur:
@@ -77,7 +77,7 @@ def get_or_create_session(
 ) -> Optional[int]:
     """Hae tai luo chat-sessio"""
     try:
-        from db import get_db_connection
+        from database import get_db_connection
         conn = get_db_connection()
         if not conn:
             return None
@@ -136,7 +136,7 @@ def save_chat_message(
 ) -> Optional[int]:
     """Tallenna chat-viesti"""
     try:
-        from db import get_db_connection
+        from database import get_db_connection
         conn = get_db_connection()
         if not conn:
             return None
@@ -164,7 +164,7 @@ def get_chat_history(
 ) -> List[Dict[str, Any]]:
     """Hae chat-historia"""
     try:
-        from db import get_db_connection
+        from database import get_db_connection
         conn = get_db_connection()
         if not conn:
             return []
@@ -206,7 +206,7 @@ def get_user_chat_sessions(
 ) -> List[Dict[str, Any]]:
     """Hae käyttäjän chat-sessiot"""
     try:
-        from db import get_db_connection
+        from database import get_db_connection
         conn = get_db_connection()
         if not conn:
             return []
