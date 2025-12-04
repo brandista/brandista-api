@@ -238,6 +238,18 @@ except ImportError as e:
     init_chat_tables = None
 
 # ============================================================================
+# GROWTH ENGINE 2.0 - AI REPORT GENERATOR
+# ============================================================================
+try:
+    from agent_reports import router as reports_router
+    AI_REPORTS_AVAILABLE = True
+    logger.info("✅ AI Report Generator imported successfully")
+except ImportError as e:
+    logger.warning(f"⚠️ AI Report Generator not available: {e}")
+    AI_REPORTS_AVAILABLE = False
+    reports_router = None
+
+# ============================================================================
 # COMPANY INTELLIGENCE - DUE DILIGENCE (YTJ + Kauppalehti)
 # ============================================================================
 try:
@@ -1648,6 +1660,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"📜 Analysis History: {'enabled' if history_db else 'disabled'}")
     logger.info(f"🤖 Agent System: {'enabled (6 agents)' if AGENT_SYSTEM_AVAILABLE else 'disabled'}")
     logger.info(f"💬 Agent Chat V2: {'enabled (full context + history)' if AGENT_CHAT_V2_AVAILABLE else 'disabled'}")
+    logger.info(f"📧 AI Reports: {'enabled (email reports)' if AI_REPORTS_AVAILABLE else 'disabled'}")
     
     # 6. Environment warnings
     
@@ -1748,6 +1761,13 @@ if AGENT_CHAT_V2_AVAILABLE and agent_chat_router:
         logger.info("✅ Enhanced Agent Chat V2 routes registered: /api/v1/agents/chat/v2")
     except Exception as e:
         logger.warning(f"⚠️ Could not initialize chat tables: {e}")
+
+# ============================================================================
+# GROWTH ENGINE 2.0 - AI REPORT GENERATOR ROUTES
+# ============================================================================
+if AI_REPORTS_AVAILABLE and reports_router:
+    app.include_router(reports_router, tags=["AI Reports"])
+    logger.info("✅ AI Report Generator routes registered: /api/v1/reports/*")
 
 # ============================================================================
 # COMPANY INTELLIGENCE ROUTES
