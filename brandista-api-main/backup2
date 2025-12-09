@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Brandista Competitive Intelligence API - Complete Unified Version
-Version: 6.4.4 - Production Ready
+Version: 6.3.1 - Production Ready
 Author: Brandista Team
 Date: 2025
 Description: Complete production-ready website analysis with configurable scoring system and comprehensive SPA support
@@ -12,7 +12,6 @@ Description: Complete production-ready website analysis with configurable scorin
 # STANDARD LIBRARY IMPORTS
 # ============================================================================
 import os
-import sys
 import re
 import hashlib
 import logging
@@ -106,25 +105,6 @@ except ImportError:
     logger.warning("AI content generator module not available")
 
 # ============================================================================
-# STRIPE PAYMENT MODULE
-# ============================================================================
-try:
-    from stripe_module import (
-        stripe_manager,
-        SubscriptionTier,
-        create_customer,
-        create_checkout_session,
-        handle_webhook
-    )
-    STRIPE_AVAILABLE = True
-    logger.info("Stripe payment module loaded successfully")
-except ImportError:
-    STRIPE_AVAILABLE = False
-    stripe_manager = None
-    SubscriptionTier = None
-    logger.warning("Stripe module not available - payment features disabled")
-
-# ============================================================================
 # OPTIONAL DEPENDENCIES
 # ============================================================================
 
@@ -193,103 +173,9 @@ except ImportError as e:
     def get_user_preferences_from_db(username): return None
 
 # ============================================================================
-# ANALYSIS HISTORY DATABASE
-# ============================================================================
-try:
-    from analysis_history_db import AnalysisHistoryDB, AnalysisRecord, UserUsage
-    HISTORY_DB_AVAILABLE = True
-    logger.info("✅ Analysis history module imported successfully")
-except ImportError as e:
-    logger.warning(f"⚠️ Analysis history module not available: {e}")
-    HISTORY_DB_AVAILABLE = False
-    AnalysisHistoryDB = None
-    AnalysisRecord = None
-    UserUsage = None
-
-# ============================================================================
-# GROWTH ENGINE 2.0 - AGENT SYSTEM
-# ============================================================================
-try:
-    from agent_api import router as agent_router
-    AGENT_SYSTEM_AVAILABLE = True
-    logger.info("✅ Growth Engine 2.0 Agent System imported successfully")
-except Exception as e:
-    import traceback
-    logger.warning(f"⚠️ Agent system not available: {e}")
-    logger.warning(f"⚠️ Full traceback:\n{traceback.format_exc()}")
-    AGENT_SYSTEM_AVAILABLE = False
-    agent_router = None
-
-# ============================================================================
-# GROWTH ENGINE 2.0 - NOTIFICATION WEBSOCKET
-# ============================================================================
-try:
-    from notification_ws import notification_router
-    NOTIFICATION_WS_AVAILABLE = True
-    logger.info("✅ Notification WebSocket imported successfully")
-except ImportError as e:
-    logger.warning(f"⚠️ Notification WebSocket not available: {e}")
-    NOTIFICATION_WS_AVAILABLE = False
-    notification_router = None
-
-# ============================================================================
-# GROWTH ENGINE 2.0 - ENHANCED AGENT CHAT V2
-# ============================================================================
-try:
-    from agent_chat_v2 import (
-        router as agent_chat_router,
-        init_chat_tables,
-        AGENT_PERSONALITIES
-    )
-    AGENT_CHAT_V2_AVAILABLE = True
-    logger.info("✅ Enhanced Agent Chat V2 imported successfully")
-except ImportError as e:
-    logger.warning(f"⚠️ Agent Chat V2 not available: {e}")
-    AGENT_CHAT_V2_AVAILABLE = False
-    agent_chat_router = None
-    init_chat_tables = None
-
-# ============================================================================
-# GROWTH ENGINE 2.0 - AI REPORT GENERATOR
-# ============================================================================
-try:
-    from agent_reports import router as reports_router
-    AI_REPORTS_AVAILABLE = True
-    logger.info("✅ AI Report Generator imported successfully")
-except ImportError as e:
-    logger.warning(f"⚠️ AI Report Generator not available: {e}")
-    AI_REPORTS_AVAILABLE = False
-    reports_router = None
-
-# ============================================================================
-# COMPANY INTELLIGENCE - DUE DILIGENCE (YTJ + Kauppalehti)
-# ============================================================================
-try:
-    from company_intel_api import router as company_router
-    COMPANY_INTEL_AVAILABLE = True
-    logger.info("✅ Company Intelligence module imported successfully")
-except Exception as e:
-    logger.warning(f"⚠️ Company Intelligence not available: {e}")
-    COMPANY_INTEL_AVAILABLE = False
-    company_router = None
-
-# ============================================================================
-# UNIFIED CONTEXT - CROSS-TAB INTELLIGENCE
-# ============================================================================
-try:
-    from context_api import router as context_router
-    from unified_context import init_unified_context_tables
-    UNIFIED_CONTEXT_AVAILABLE = True
-    logger.info("✅ Unified Context module imported successfully")
-except Exception as e:
-    logger.warning(f"⚠️ Unified Context not available: {e}")
-    UNIFIED_CONTEXT_AVAILABLE = False
-    context_router = None
-
-# ============================================================================
 # CONSTANTS AND VERSION INFO
 # ============================================================================
-APP_VERSION = "6.5.0"
+APP_VERSION = "6.3.1"
 APP_NAME = "Brandista Competitive Intelligence API"
 APP_DESCRIPTION = """Production-ready website analysis with configurable scoring system and comprehensive SPA support."""
 # ============================================================================
@@ -415,7 +301,7 @@ REDIS_URL = os.getenv("REDIS_URL")
 # INITIALIZE SERVICES
 # ============================================================================
 
-# Global variables (single source of truth)
+# Global variables
 analysis_cache: Dict[str, Dict[str, Any]] = {}
 user_search_counts: Dict[str, int] = {}
 magic_link_auth = None
@@ -423,7 +309,6 @@ oauth = None
 redis_client = None
 task_queue = None
 openai_client = None
-history_db = None  # Type hint added in imports if AnalysisHistoryDB available
 
 # Log initial configuration
 logger.info(f"Starting {APP_NAME} v{APP_VERSION}")
@@ -623,11 +508,62 @@ _FRAMEWORK_PATTERNS = {
 
 
 # ============================================================================
-# CONFIGURATION SYSTEM (already defined above at line ~186)
+# CONFIGURATION SYSTEM
 # ============================================================================
 
-# ScoringConfig and load_scoring_config already defined above
-# Global scoring configuration already loaded above
+@dataclass
+class ScoringConfig:
+    """Configurable scoring weights and thresholds"""
+    weights: Dict[str, int] = None
+    content_thresholds: Dict[str, int] = None
+    technical_thresholds: Dict[str, Any] = None
+    seo_thresholds: Dict[str, Any] = None
+    
+    def __post_init__(self):
+        if self.weights is None:
+            self.weights = {
+                'security': 15, 'seo_basics': 20, 'content': 20,
+                'technical': 15, 'mobile': 15, 'social': 10, 'performance': 5
+            }
+        
+        if self.content_thresholds is None:
+            self.content_thresholds = {
+                'excellent': 3000, 'good': 2000, 'fair': 1500, 'basic': 800, 'minimal': 300
+            }
+        
+        if self.technical_thresholds is None:
+            self.technical_thresholds = {
+                'ssl_score': 20, 'mobile_viewport_score': 15, 'mobile_responsive_score': 5,
+                'analytics_score': 10, 'meta_tags_max_score': 15, 'structured_data_multiplier': 2,
+                'security_headers': {'csp': 4, 'x_frame_options': 3, 'strict_transport': 3}
+            }
+        
+        if self.seo_thresholds is None:
+            self.seo_thresholds = {
+                'title_optimal_range': (30, 60), 'title_acceptable_range': (20, 70),
+                'meta_desc_optimal_range': (120, 160), 'meta_desc_acceptable_range': (80, 200),
+                'h1_optimal_count': 1,
+                'scores': {
+                    'title_optimal': 5, 'title_acceptable': 3, 'title_basic': 1,
+                    'meta_desc_optimal': 5, 'meta_desc_acceptable': 3, 'meta_desc_basic': 1,
+                    'canonical': 2, 'hreflang': 1, 'clean_urls': 2
+                }
+            }
+
+def load_scoring_config() -> ScoringConfig:
+    """Load scoring configuration from file or environment"""
+    config_file = Path('scoring_config.json')
+    if config_file.exists():
+        try:
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config_data = json.load(f)
+                return ScoringConfig(**config_data)
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"Failed to load scoring config: {e}")
+    return ScoringConfig()
+
+# Global scoring configuration
+SCORING_CONFIG = load_scoring_config()
 
 # ============================================================================
 # CONSTANTS
@@ -672,11 +608,19 @@ RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "false").lower() == "true"
 RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "20"))
 
 # ============================================================================
-# LOGGING (already configured at top of file)
+# LOGGING
 # ============================================================================
 
-# Logger already initialized at top - using existing logger
-# These log messages moved to startup sequence
+logging.basicConfig(
+    level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(), logging.FileHandler('brandista_api.log', encoding='utf-8')]
+)
+
+logger = logging.getLogger(__name__)
+logger.info(f"Starting {APP_NAME} v{APP_VERSION}")
+logger.info(f"Scoring weights: {SCORING_CONFIG.weights}")
+logger.info(f"Playwright support: {'enabled' if PLAYWRIGHT_AVAILABLE and PLAYWRIGHT_ENABLED else 'disabled'}")
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 GOOGLE_SEARCH_ENGINE_ID = os.getenv("GOOGLE_SEARCH_ENGINE_ID", "171a60959e6cb4d76")
@@ -804,15 +748,17 @@ except ImportError as e:
     def init_database(): pass
 
 # ============================================================================
-# GLOBAL VARIABLES - Already defined above at line 335+
+# GLOBAL VARIABLES
 # ============================================================================
-# NOTE: Global variables defined earlier to avoid duplicates
 
+analysis_cache: Dict[str, Dict[str, Any]] = {}
+user_search_counts: Dict[str, int] = {}
+magic_link_auth = None
 # ============================================================================
 # OPENAI SETUP
 # ============================================================================
 
-# Use global openai_client defined above
+openai_client = None
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 if OPENAI_AVAILABLE and os.getenv("OPENAI_API_KEY"):
@@ -871,11 +817,12 @@ async def detect_spa_framework(html_content: str) -> Dict[str, Any]:
     }
 
 # ============================================================================
-# REDIS TASK QUEUE SETUP
+# REDIS TASK QUEUE SETUP (MOVED HERE - OUTSIDE FUNCTION!)
 # ============================================================================
 
-# Use global redis_client and task_queue defined above
 REDIS_URL = os.getenv("REDIS_URL")
+redis_client = None
+task_queue = None
 
 if REDIS_URL:
     try:
@@ -1234,7 +1181,7 @@ def analyze_modern_web_features(html: str, spa_info: Dict[str, Any]) -> Dict[str
                 'aria_label_count': aria_labels,
                 'aria_role_count': aria_roles,
                 'images_total': len(images),
-                'images_with_alt': images_with_alt,  # FIX 8: Already an int, don't use len()
+                'images_with_alt': len(images_with_alt) if images else 0,
             },
             
             'missing_modern_features': missing_modern_features
@@ -1299,12 +1246,11 @@ def _detect_frameworks_advanced(html: str, script_content: str, soup: BeautifulS
                 # Create Wappalyzer instance
                 wappalyzer = Wappalyzer.latest()
                 
-                # ✅ FIX 9: Wappalyzer API requires headers parameter
-                # Create WebPage with proper parameters
+                # ✅ KORJAUS: Käytä WebPage() konstruktoria suoraan
+                # Wappalyzer 0.3.1 API vaatii vain html:n ja url:n
                 webpage = WebPage(
-                    url='https://example.com',  # Fake URL is sufficient
-                    html=html,
-                    headers={}  # Empty headers dict required by API
+                    url='https://example.com',  # Fake URL riittää
+                    html=html
                 )
                 
                 # Analyze
@@ -1526,14 +1472,16 @@ def detect_interactive_elements(soup: BeautifulSoup, html: str) -> Dict[str, Any
 # FASTAPI SETUP
 # ============================================================================
 
-# Add the startup event handler here using modern lifespan
-from contextlib import asynccontextmanager
+app = FastAPI(
+    title=APP_NAME, version=APP_VERSION, description=APP_DESCRIPTION,
+    docs_url="/docs", redoc_url="/redoc", openapi_url="/openapi.json"
+)
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Modern lifespan context manager (replaces deprecated @app.on_event)"""
-    # Startup
-    global magic_link_auth, redis_client, task_queue, oauth, history_db
+# Add the startup event handler here:
+@app.on_event("startup")
+async def startup_event():
+    """Initialize all services on application startup"""
+    global magic_link_auth, redis_client, task_queue, oauth
     
     # 1. Initialize database if enabled
     if DATABASE_ENABLED:
@@ -1565,21 +1513,6 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"❌ Database initialization failed: {e}")
             logger.info("⚠️ Continuing with hardcoded users only")
-    
-    # 1.5. Initialize Analysis History Database
-    if HISTORY_DB_AVAILABLE and os.getenv("DATABASE_URL"):
-        try:
-            history_db = AnalysisHistoryDB(os.getenv("DATABASE_URL"))
-            await history_db.connect()
-            logger.info("✅ Analysis history database initialized")
-        except Exception as e:
-            logger.error(f"❌ Analysis history DB initialization failed: {e}")
-            history_db = None
-    else:
-        if not HISTORY_DB_AVAILABLE:
-            logger.warning("⚠️ Analysis history module not available")
-        if not os.getenv("DATABASE_URL"):
-            logger.warning("⚠️ DATABASE_URL not set - history disabled")
     
     # 2. Initialize Redis and task queue (already done globally but verify)
     if REDIS_URL and not redis_client:
@@ -1640,6 +1573,7 @@ async def lifespan(app: FastAPI):
         magic_link_auth = None
     
     # 4. Initialize Google OAuth
+    global oauth
     try:
         oauth_config = StarletteConfig(environ={
             'GOOGLE_CLIENT_ID': os.getenv('GOOGLE_CLIENT_ID', ''),
@@ -1669,38 +1603,12 @@ async def lifespan(app: FastAPI):
     logger.info(f"📧 Magic Link: {'ready' if magic_link_auth else 'not available'}")
     logger.info(f"🗄️ Redis: {'connected' if redis_client else 'not connected'}")
     logger.info(f"🗃️ Database: {'connected' if DATABASE_ENABLED else 'not connected'}")
-    logger.info(f"📜 Analysis History: {'enabled' if history_db else 'disabled'}")
-    logger.info(f"🤖 Agent System: {'enabled (6 agents)' if AGENT_SYSTEM_AVAILABLE else 'disabled'}")
-    logger.info(f"💬 Agent Chat V2: {'enabled (full context + history)' if AGENT_CHAT_V2_AVAILABLE else 'disabled'}")
-    logger.info(f"📧 AI Reports: {'enabled (email reports)' if AI_REPORTS_AVAILABLE else 'disabled'}")
     
     # 6. Environment warnings
     
     
     if SECRET_KEY.startswith("brandista-key-"):
         logger.warning("⚠️ Using default SECRET_KEY - set custom SECRET_KEY in production!")
-    
-    yield
-    
-    # Shutdown (cleanup code here if needed)
-    if history_db:
-        try:
-            await history_db.disconnect()
-            logger.info("🗄️ Analysis history database closed")
-        except Exception as e:
-            logger.error(f"❌ Error closing history DB: {e}")
-    
-    logger.info("🛑 Shutting down application")
-
-# Now recreate app WITH lifespan
-app = FastAPI(
-    title=APP_NAME,
-    description="Brandista Competitive Intelligence API - Complete Production System",
-    version=APP_VERSION,
-    docs_url="/docs",
-    redoc_url="/redoc",
-    lifespan=lifespan  # Modern way to handle startup/shutdown
-)
 
 
 app.add_middleware(
@@ -1712,8 +1620,7 @@ app.add_middleware(
         "http://127.0.0.1:3000",
         "https://brandista.eu",
         "https://www.brandista.eu",
-        "https://api.brandista.eu",
-        "https://fastapi-production-51f9.up.railway.app",
+        "https://fastapi-production-51f9.up.railway.app"
         "https://3000-ip92lxeccquecaiidxzl0-6aa4782a.manusvm.computer"
     ],
     allow_credentials=True,
@@ -1753,59 +1660,6 @@ class UTF8Middleware(BaseHTTPMiddleware):
         return response
 
 app.add_middleware(UTF8Middleware)
-
-# ============================================================================
-# GROWTH ENGINE 2.0 - AGENT ROUTES
-# ============================================================================
-if AGENT_SYSTEM_AVAILABLE and agent_router:
-    app.include_router(agent_router)
-    logger.info("✅ Growth Engine 2.0 Agent routes registered: /api/v1/agents/*")
-
-# ============================================================================
-# GROWTH ENGINE 2.0 - NOTIFICATION WEBSOCKET ROUTES
-# ============================================================================
-if NOTIFICATION_WS_AVAILABLE and notification_router:
-    app.include_router(notification_router)
-    logger.info("✅ Notification WebSocket routes registered: /ws/growth-engine/{user_id}")
-
-# ============================================================================
-# GROWTH ENGINE 2.0 - ENHANCED AGENT CHAT V2 ROUTES
-# ============================================================================
-if AGENT_CHAT_V2_AVAILABLE and agent_chat_router:
-    app.include_router(agent_chat_router, prefix="/api/v1/agents", tags=["Agent Chat V2"])
-    # Initialize chat database tables
-    try:
-        if init_chat_tables:
-            init_chat_tables()
-        logger.info("✅ Enhanced Agent Chat V2 routes registered: /api/v1/agents/chat/v2")
-    except Exception as e:
-        logger.warning(f"⚠️ Could not initialize chat tables: {e}")
-
-# ============================================================================
-# GROWTH ENGINE 2.0 - AI REPORT GENERATOR ROUTES
-# ============================================================================
-if AI_REPORTS_AVAILABLE and reports_router:
-    app.include_router(reports_router, tags=["AI Reports"])
-    logger.info("✅ AI Report Generator routes registered: /api/v1/reports/*")
-
-# ============================================================================
-# COMPANY INTELLIGENCE ROUTES
-# ============================================================================
-if COMPANY_INTEL_AVAILABLE and company_router:
-    app.include_router(company_router, prefix="/api/v1/company", tags=["Company Intelligence"])
-    logger.info("✅ Company Intelligence routes registered: /api/v1/company/*")
-
-# ============================================================================
-# UNIFIED CONTEXT ROUTES
-# ============================================================================
-if UNIFIED_CONTEXT_AVAILABLE and context_router:
-    app.include_router(context_router)
-    # Initialize database tables
-    try:
-        init_unified_context_tables()
-        logger.info("✅ Unified Context routes registered: /api/v1/context/*")
-    except Exception as e:
-        logger.warning(f"⚠️ Could not initialize unified context tables: {e}")
 
 @app.options("/{full_path:path}")
 async def options_handler():
@@ -1881,9 +1735,11 @@ def init_users():
         }
     }
     
-    # Security: Do not log password hashes, even partial
-    logger.info("🔐 User authentication initialized")
-    logger.info(f"   Loaded {len(USERS_DB)} users")
+    logger.info("🔐 User passwords hashed:")
+    for email, user_data in USERS_DB.items():
+        username = user_data.get('username')
+        hash_preview = user_data.get('hashed_password')[:20]
+        logger.info(f"  {username}: {hash_preview}...")
     
     return USERS_DB
 
@@ -1926,11 +1782,6 @@ logger.info(f"📋 Users: {', '.join(USERS_DB.keys())}")
 # ✅ LOG FINAL USER COUNT
 logger.info(f"👥 Total users loaded: {len(USERS_DB)}")
 logger.info(f"📋 Users: {', '.join(USERS_DB.keys())}")
-
-# ============================================================================
-# TRANSLATION MODULE IMPORT
-# ============================================================================
-from translations_module import TRANSLATIONS, t
 
 # ============================================================================
 # COMPLETE PYDANTIC MODELS
@@ -2084,8 +1935,11 @@ class RoleSummaries(BaseModel):
     CMO: Optional[str] = None
     CTO: Optional[str] = None
 
-# Import Enhanced 90-day plan models and function
-from Enhanced_90day_plan import ActionItem, Plan90D, generate_enhanced_90day_plan
+class Plan90D(BaseModel):
+    wave_1: List[str] = []            # days 0–30
+    wave_2: List[str] = []            # days 31–60
+    wave_3: List[str] = []            # days 61–90
+    one_thing_this_week: Optional[str] = None
 
 class RiskItem(BaseModel):
     risk: str
@@ -2225,7 +2079,11 @@ class RoleSummaries(BaseModel):
     CMO: Optional[str] = None
     CTO: Optional[str] = None
 
-
+class Plan90D(BaseModel):
+    wave_1: List[str] = []            # days 0–30
+    wave_2: List[str] = []            # days 31–60
+    wave_3: List[str] = []            # days 61–90
+    one_thing_this_week: Optional[str] = None
 
 class RiskItem(BaseModel):
     risk: str
@@ -2500,19 +2358,12 @@ def create_score_breakdown_with_aliases(breakdown_raw: Dict[str, int]) -> Dict[s
     """Create score breakdown with both backend and frontend fields (aliases 0-100)."""
     weights = SCORING_CONFIG.weights
     result = dict(breakdown_raw or {})
-    
-    # Frontend aliases (0-100 scale)
     result['seo'] = int((result.get('seo_basics', 0) / weights['seo_basics']) * 100)
     result['user_experience'] = int((result.get('mobile', 0) / weights['mobile']) * 100)
-    
-    # FIX 7: Accessibility should be 0-15, not 0-100!
-    # It's weighted combination of mobile (60%) and technical (40%)
-    # Max: 15 * 0.6 + 15 * 0.4 = 9 + 6 = 15
-    result['accessibility'] = int(
-        (result.get('mobile', 0) * 0.6) + 
-        (result.get('technical', 0) * 0.4)
-    )
-    
+    result['accessibility'] = min(100, int((
+        (result.get('mobile', 0) / weights['mobile'] * 0.6) + 
+        (result.get('technical', 0) / weights['technical'] * 0.4)
+    ) * 100))
     return result
 
 async def cleanup_cache():
@@ -3116,7 +2967,6 @@ async def analyze_basic_metrics_enhanced(
 
         return {
             'digital_maturity_score': final_score,
-            'final_score': final_score,  # Alias for compatibility
             'score_breakdown': score_components,
             'detailed_findings': details,
             'word_count': word_count,
@@ -3141,7 +2991,6 @@ async def analyze_basic_metrics_enhanced(
         logger.error(f"Error in enhanced analysis for {url}: {e}")
         return {
             'digital_maturity_score': 0,
-            'final_score': 0,  # Alias for compatibility
             'score_breakdown': {category: 0 for category in SCORING_CONFIG.weights.keys()},
             'detailed_findings': {'error': str(e)},
             'word_count': 0,
@@ -3166,9 +3015,8 @@ async def analyze_technical_aspects(url: str, html: str, headers: Optional[httpx
     soup = BeautifulSoup(html, 'html.parser')
     tech_score = 0
     
-    # SSL Check - check if URL uses HTTPS (already normalized by clean_url)
-    # Since clean_url adds https:// by default, we check if site actually responded via HTTPS
-    has_ssl = url.startswith('https://')
+    # SSL Check
+    has_ssl = url.startswith('https')
     if has_ssl: tech_score += 20
 
     # Mobile optimization
@@ -3756,7 +3604,7 @@ async def analyze_ux_elements(html: str) -> Dict[str, Any]:
         if len(with_alt) < len(imgs):
             accessibility_issues.append(f'{len(imgs) - len(with_alt)} images missing alt text')
     else: 
-        a11y_score += 5
+        a11y_score += 25
     
     # ARIA labels check
     if 'aria-' in hl:
@@ -4074,21 +3922,12 @@ def compute_business_impact(
         customer_trust_effect=detailed.customer_trust_effect
     )
 
-def build_role_summaries(url: str, basic: Dict[str, Any], impact: BusinessImpact, language: str = 'en', company_name: str = None) -> RoleSummaries:
+def build_role_summaries(url: str, basic: Dict[str, Any], impact: BusinessImpact, language: str = 'en') -> RoleSummaries:
     """Generate role-specific summaries based on actual analysis findings"""
     s = basic.get('digital_maturity_score', 0)
     breakdown = basic.get('score_breakdown', {})
     
-    # Get company name from basic or use domain
-    if not company_name:
-        company_name = basic.get('company_name') or get_domain_from_url(url).capitalize()
-    
     state = ("leader" if s >= 75 else "strong" if s >= 60 else "baseline" if s >= 45 else "early")
-    
-    # Check specific security issues
-    has_ssl = basic.get('has_ssl', True)  # Default true if not specified
-    has_security_headers = basic.get('has_security_headers', False)
-    has_analytics = basic.get('has_analytics', False)
     
     # Identify top priorities dynamically by calculating completion percentage
     weights = SCORING_CONFIG.weights
@@ -4105,22 +3944,21 @@ def build_role_summaries(url: str, basic: Dict[str, Any], impact: BusinessImpact
     top_gaps = [gap[0] for gap in sorted_gaps[:3]]
     
     # Map categories to actionable business language (language-aware)
-    # Be SPECIFIC about what's missing
     if language == 'fi':
         action_map = {
-            'security': 'SSL-sertifikaatti' if not has_ssl else 'turvallisuusotsikot (CSP, X-Frame-Options)',
-            'seo': 'meta-kuvaukset ja otsikkorakenne',
-            'content': 'sisallon syvyys ja asiantuntijuus',
-            'mobile': 'mobiiliresponsiivisuus ja kosketuselementit',
-            'technical': 'Google Analytics' if not has_analytics else 'tekninen SEO (sivukartta, canonical)',
+            'security': 'SSL + turvallisuusotsikot',
+            'seo': 'SEO-perusteet',
+            'content': 'sisällön syvyys',
+            'mobile': 'mobiilikäyttökokemus',
+            'technical': 'tekninen SEO + analytiikka',
         }
     else:
         action_map = {
-            'security': 'SSL certificate' if not has_ssl else 'security headers (CSP, X-Frame-Options)',
-            'seo': 'meta descriptions and heading structure',
-            'content': 'content depth and expertise',
-            'mobile': 'mobile responsiveness and touch targets',
-            'technical': 'Google Analytics' if not has_analytics else 'technical SEO (sitemap, canonical)',
+            'security': 'SSL + security headers',
+            'seo': 'SEO fundamentals',
+            'content': 'content depth',
+            'mobile': 'mobile UX',
+            'technical': 'technical SEO + analytics',
         }
     
     priority_items = [action_map.get(gap, gap) for gap in top_gaps]
@@ -4128,7 +3966,7 @@ def build_role_summaries(url: str, basic: Dict[str, Any], impact: BusinessImpact
     # Ensure at least 2 priorities exist (fallback for edge cases)
     if len(priority_items) < 2:
         if language == 'fi':
-            priority_items.extend(['tekninen SEO', 'sisallon optimointi'])
+            priority_items.extend(['tekninen SEO', 'sisällön optimointi'])
         else:
             priority_items.extend(['technical SEO', 'content optimization'])
     
@@ -4141,99 +3979,86 @@ def build_role_summaries(url: str, basic: Dict[str, Any], impact: BusinessImpact
             'early': 'alkuvaihe'
         }[state]
         
-        # CEO: Strategic overview - PERSONALIZED
+        # CEO: Strategic overview
         ceo_summary = (
-            f"{company_name} on {s}/100 ({state_fi}). "
-            f"Kriittisimmät kehityskohteet: {priority_items[0]}. "
-            f"Seuraavaksi: {priority_items[1]}. "
-            f"Arvioitu tuottopotentiaali: {impact.revenue_uplift_range} "
-            f"ja {impact.lead_gain_estimate}. Suositus: yksi kehitysaskel viikossa."
+            f"Olemme {s}/100 ({state_fi}). "
+            f"Tärkeimmät prioriteetit: {priority_items[0]}, {priority_items[1]}. "
+            f"Jos toteutamme nämä korjaukset, voimme avata {impact.revenue_uplift_range} "
+            f"ja {impact.lead_gain_estimate}. Fokus: yksi muutos viikossa."
         )
         
-        # CMO: Growth levers - PERSONALIZED
+        # CMO: Growth levers
         cmo_focus = []
         if 'seo' in top_gaps or 'content' in top_gaps:
-            cmo_focus.append(f"hakukonenakyvyys + sisaltomarkkinointi -> {impact.lead_gain_estimate}")
+            cmo_focus.append(f"SEO + sisältö → {impact.lead_gain_estimate}")
         if 'mobile' in top_gaps:
-            cmo_focus.append(f"mobiilikayttokokemus -> parempi konversio")
+            cmo_focus.append(f"mobiilikäyttökokemus → parempi konversio")
         if not cmo_focus:
-            cmo_focus.append(f"konversio-optimointi -> {impact.revenue_uplift_range}")
+            cmo_focus.append(f"Konversion optimointi → {impact.revenue_uplift_range}")
         
         cmo_summary = (
-            f"{company_name}: kasvun avaimet ovat {' ja '.join(cmo_focus)}. "
-            f"Tavoite: {impact.revenue_uplift_range}. Mittaa viikoittain: liidien maara ja laatu."
+            f"Kasvun vipuvarret: {' + '.join(cmo_focus)}. "
+            f"Tavoite: {impact.revenue_uplift_range}. Seuraa viikoittain liidien laatua."
         )
         
-        # CTO: Technical priorities - SPECIFIC
+        # CTO: Technical priorities
         cto_priorities = []
         if 'security' in top_gaps:
-            if not has_ssl:
-                cto_priorities.append("SSL-sertifikaatti (Let's Encrypt)")
-            if not has_security_headers:
-                cto_priorities.append("turvallisuusotsikot: CSP, X-Frame-Options, HSTS")
-        if not has_analytics:
-            cto_priorities.append("Google Analytics 4 + GTM")
+            cto_priorities.append("SSL + turvallisuusotsikot")
         if 'mobile' in top_gaps:
-            cto_priorities.append("Core Web Vitals: LCP < 2.5s, CLS < 0.1")
+            cto_priorities.append("Core Web Vitals (LCP, CLS)")
         if 'technical' in top_gaps:
-            cto_priorities.append("XML-sivukartta + robots.txt")
+            cto_priorities.append("analytiikka + tekninen SEO")
         
         if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
-            cto_priorities.insert(0, "SSR tai esirenderinti SPA:lle (Googlebot ei suorita JS:aa)")
+            cto_priorities.insert(0, "SSR/esirenderöinti SPA:lle")
         
         if not cto_priorities:
-            cto_priorities = ["kuvien optimointi (WebP)", "JS:n viivastaminen"]
+            cto_priorities = ["viivästä ei-kriittinen JS", "optimoi kuvat"]
         
         cto_summary = (
-            f"{company_name} tekninen priorisointi: {', '.join(cto_priorities[:3])}. "
-            f"Toimita yksi tekninen parannus per sprintti."
+            f"Priorisoi: {', '.join(cto_priorities[:3])}. "
+            f"Toimita yksi tekninen voitto per sprintti."
         )
     else:
-        # English - PERSONALIZED
+        # English (original)
         ceo_summary = (
-            f"{company_name} scores {s}/100 ({state}). "
-            f"Critical improvements: {priority_items[0]}. "
-            f"Next: {priority_items[1]}. "
-            f"Estimated potential: {impact.revenue_uplift_range} "
-            f"and {impact.lead_gain_estimate}. Recommendation: one improvement per week."
+            f"We are at {s}/100 ({state}). "
+            f"Top priorities: {priority_items[0]}, {priority_items[1]}. "
+            f"If we ship these fixes, we can unlock {impact.revenue_uplift_range} "
+            f"and {impact.lead_gain_estimate}. Focus: one change per week."
         )
         
         cmo_focus = []
         if 'seo' in top_gaps or 'content' in top_gaps:
-            cmo_focus.append(f"SEO + content marketing -> {impact.lead_gain_estimate}")
+            cmo_focus.append(f"SEO + content → {impact.lead_gain_estimate}")
         if 'mobile' in top_gaps:
-            cmo_focus.append(f"mobile UX -> better conversion")
+            cmo_focus.append(f"mobile UX → better conversion")
         if not cmo_focus:
-            cmo_focus.append(f"conversion optimization -> {impact.revenue_uplift_range}")
+            cmo_focus.append(f"Conversion optimization → {impact.revenue_uplift_range}")
         
         cmo_summary = (
-            f"{company_name}: growth drivers are {' and '.join(cmo_focus)}. "
-            f"Target: {impact.revenue_uplift_range}. Measure weekly: lead volume and quality."
+            f"Growth levers: {' + '.join(cmo_focus)}. "
+            f"Target: {impact.revenue_uplift_range}. Track weekly progress on lead quality."
         )
         
-        # CTO: Technical priorities - SPECIFIC
         cto_priorities = []
         if 'security' in top_gaps:
-            if not has_ssl:
-                cto_priorities.append("SSL certificate (Let's Encrypt)")
-            if not has_security_headers:
-                cto_priorities.append("security headers: CSP, X-Frame-Options, HSTS")
-        if not has_analytics:
-            cto_priorities.append("Google Analytics 4 + GTM")
+            cto_priorities.append("SSL + security headers")
         if 'mobile' in top_gaps:
-            cto_priorities.append("Core Web Vitals: LCP < 2.5s, CLS < 0.1")
+            cto_priorities.append("Core Web Vitals (LCP, CLS)")
         if 'technical' in top_gaps:
-            cto_priorities.append("XML sitemap + robots.txt")
+            cto_priorities.append("analytics + technical SEO")
         
         if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
-            cto_priorities.insert(0, "SSR or prerendering for SPA (Googlebot doesn't execute JS)")
+            cto_priorities.insert(0, "SSR/prerender for SPA")
         
         if not cto_priorities:
-            cto_priorities = ["image optimization (WebP)", "defer non-critical JS"]
+            cto_priorities = ["defer non-critical JS", "optimize images"]
         
         cto_summary = (
-            f"{company_name} technical priorities: {', '.join(cto_priorities[:3])}. "
-            f"Ship one technical improvement per sprint."
+            f"Prioritize: {', '.join(cto_priorities[:3])}. "
+            f"Ship one technical win per sprint."
         )
     
     return RoleSummaries(
@@ -4242,8 +4067,184 @@ def build_role_summaries(url: str, basic: Dict[str, Any], impact: BusinessImpact
         CTO=cto_summary
     )
 
-
-def build_risk_register(basic: Dict[str, Any], technical: Dict[str, Any], content: Dict[str, Any], language: str = 'en') -> List[RiskItem]:
+def build_plan_90d(basic: Dict[str, Any], content: Dict[str, Any], technical: Dict[str, Any], language: str = 'en') -> Plan90D:
+    """Build a realistic week-by-week 90-day execution plan dynamically based on actual gaps"""
+    score = basic.get('digital_maturity_score', 0)
+    breakdown = basic.get('score_breakdown', {})
+    
+    # Translations dictionary - TÄYSI TOTEUTUS
+    translations = {
+        'en': {
+            'actions': {
+                'ssl_install': 'Week 1: Install SSL certificate + enable HTTPS redirect',
+                'security_headers': 'Week 2: Configure security headers (CSP, HSTS, X-Frame-Options)',
+                'ga4_install': 'Week 1: Install GA4 + define 3-5 key conversion events',
+                'seo_audit': 'Week {w}: Audit & fix titles/meta descriptions on top 10 pages',
+                'heading_fix': 'Week {w}: Add missing H1 tags + fix heading hierarchy',
+                'viewport_meta': 'Week {w}: Add viewport meta + test responsive breakpoints',
+                'compress_images': 'Week {w}: Compress images on top 10 pages + enable lazy loading',
+                'content_research': 'Week 5-6: Research & outline 6 pillar content topics (keyword analysis)',
+                'content_write': 'Week 7-8: Write & publish first 3 pillar articles (2000+ words each)',
+                'content_update': 'Week 5-6: Update existing content - refresh dates, add internal links',
+                'faq_schema': 'Week 7: Add FAQ schema markup to key pages',
+                'sitemap_submit': 'Week 8: Build XML sitemap + submit to Search Console',
+                'ssr_research': 'Week 7-8: Research SSR/prerendering options for SPA',
+                'content_publish': 'Week 9-10: Publish remaining 3 pillar articles + 6 cluster posts',
+                'internal_linking': 'Week 11: Build internal linking structure',
+                'ab_testing': 'Week 9-10: A/B test top 3 landing pages (headlines, CTAs)',
+                'ssr_implement': 'Week 10-11: Implement SSR/prerendering for critical routes',
+                'cwv_optimize': 'Week 10: Optimize Core Web Vitals (LCP < 2.5s, CLS < 0.1)',
+                'conversion_tracking': 'Week 11-12: Set up conversion tracking + GA4 dashboard',
+                'review_metrics': 'Week 12: Review metrics, document wins, plan Q2 priorities',
+            },
+            'one_thing': {
+                'ssl': 'Install SSL certificate (blocks everything else)',
+                'analytics': 'Install GA4 tracking (need data to make decisions)',
+                'seo': 'Fix titles & meta on your top 10 pages',
+                'content': 'Outline your first pillar article topic',
+                'default': 'Run Lighthouse audit on top 5 pages, note top 3 issues'
+            }
+        },
+        'fi': {
+            'actions': {
+                'ssl_install': 'Viikko 1: Asenna SSL-sertifikaatti + HTTPS-uudelleenohjaus',
+                'security_headers': 'Viikko 2: Määritä turvallisuusotsikot (CSP, HSTS, X-Frame-Options)',
+                'ga4_install': 'Viikko 1: Asenna GA4 + määrittele 3-5 konversiota',
+                'seo_audit': 'Viikko {w}: Tarkasta & korjaa otsikot/meta-kuvaukset 10 sivulla',
+                'heading_fix': 'Viikko {w}: Lisää H1-tagit + korjaa otsikkohierarkia',
+                'viewport_meta': 'Viikko {w}: Lisää viewport meta + testaa responsiivisuus',
+                'compress_images': 'Viikko {w}: Pakkaa kuvat + ota käyttöön lazy loading',
+                'content_research': 'Viikko 5-6: Tutki 6 pilari-sisältöaihetta (avainsanat)',
+                'content_write': 'Viikko 7-8: Kirjoita & julkaise 3 pilariartikkelia (2000+ sanaa)',
+                'content_update': 'Viikko 5-6: Päivitä sisältö - päivämäärät, sisäiset linkit',
+                'faq_schema': 'Viikko 7: Lisää FAQ schema-merkintä avainsivuille',
+                'sitemap_submit': 'Viikko 8: Rakenna XML-sivukartta + lähetä Search Consoleen',
+                'ssr_research': 'Viikko 7-8: Tutki SSR/esirenderöintivaihtoehdot SPA:lle',
+                'content_publish': 'Viikko 9-10: Julkaise loput 3 artikkelia + 6 klusteripostausta',
+                'internal_linking': 'Viikko 11: Rakenna sisäinen linkitysrakenne',
+                'ab_testing': 'Viikko 9-10: A/B-testaa 3 aloitussivua (otsikot, CTA:t)',
+                'ssr_implement': 'Viikko 10-11: Ota käyttöön SSR/esirenderöinti',
+                'cwv_optimize': 'Viikko 10: Optimoi Core Web Vitals (LCP < 2.5s, CLS < 0.1)',
+                'conversion_tracking': 'Viikko 11-12: Aseta konversiontaseuranta + GA4-dashboard',
+                'review_metrics': 'Viikko 12: Tarkista mittarit, dokumentoi voitot',
+            },
+            'one_thing': {
+                'ssl': 'Asenna SSL-sertifikaatti (estää kaiken muun)',
+                'analytics': 'Asenna GA4-seuranta (tarvitaan dataa päätöksiin)',
+                'seo': 'Korjaa otsikot & metat 10 sivullasi',
+                'content': 'Hahmottele ensimmäinen pilariartikkeli',
+                'default': 'Suorita Lighthouse-auditointi 5 sivulle'
+            }
+        }
+    }
+    
+    t = translations.get(language, translations['en'])
+    actions = t['actions']
+    one_thing_texts = t['one_thing']
+    
+    # DYNAAMINEN PRIORISOINTI
+    weights = SCORING_CONFIG.weights
+    completion = {
+        'security': (breakdown.get('security', 0) / weights['security']) * 100 if weights['security'] > 0 else 100,
+        'seo': (breakdown.get('seo_basics', 0) / weights['seo_basics']) * 100 if weights['seo_basics'] > 0 else 100,
+        'content': (breakdown.get('content', 0) / weights['content']) * 100 if weights['content'] > 0 else 100,
+        'mobile': (breakdown.get('mobile', 0) / weights['mobile']) * 100 if weights['mobile'] > 0 else 100,
+        'technical': (breakdown.get('technical', 0) / weights['technical']) * 100 if weights['technical'] > 0 else 100,
+    }
+    
+    sorted_priorities = sorted(completion.items(), key=lambda x: x[1])
+    top_priorities = [p[0] for p in sorted_priorities if p[1] < 70][:3]
+    
+    if not technical.get('has_analytics') and 'technical' not in top_priorities:
+        top_priorities.append('analytics')
+    
+    if not top_priorities:
+        top_priorities = ['content', 'mobile', 'technical']
+    
+    # === WAVE 1 (Weeks 1-4): FOUNDATION ===
+    wave_1 = []
+    week = 1
+    
+    if 'security' in top_priorities and completion.get('security', 100) < 30:
+        wave_1.extend([actions['ssl_install'], actions['security_headers']])
+        week = 3
+    
+    if 'analytics' in top_priorities or not technical.get('has_analytics'):
+        wave_1.append(actions['ga4_install'])
+        week = max(week, 2)
+    
+    if 'seo' in top_priorities:
+        wave_1.append(actions['seo_audit'].format(w=week))
+        wave_1.append(actions['heading_fix'].format(w=week+1))
+        week += 2
+    
+    if 'mobile' in top_priorities and completion.get('mobile', 100) < 50:
+        wave_1.append(actions['viewport_meta'].format(w=week))
+    
+    if len(wave_1) < 4:
+        wave_1.append(actions['compress_images'].format(w=4))
+    
+    # === WAVE 2 (Weeks 5-8): CONTENT & TECHNICAL SEO ===
+    wave_2 = []
+    
+    # Sisältöstrategia
+    if 'content' in top_priorities:
+        if content.get('word_count', 0) < 500:
+            wave_2.extend([actions['content_research'], actions['content_write']])
+        else:
+            wave_2.append(actions['content_update'])
+    
+    # Technical SEO - KORJATTU logiikka
+    if 'seo' in top_priorities or 'technical' in top_priorities:
+        # Lisää FAQ schema jos ei jo täynnä
+        if len(wave_2) < 3:
+            wave_2.append(actions['faq_schema'])
+        # Lisää sitemap jos ei jo täynnä
+        if len(wave_2) < 4:
+            wave_2.append(actions['sitemap_submit'])
+    
+    # SPA-ongelma
+    if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
+        if len(wave_2) < 4:
+            wave_2.append(actions['ssr_research'])
+    
+    # Varmista max 4
+    wave_2 = wave_2[:4]
+    
+    # === WAVE 3 (Weeks 9-12): SCALE ===
+    wave_3 = []
+    
+    if 'content' in top_priorities:
+        wave_3.extend([actions['content_publish'], actions['internal_linking']])
+    else:
+        wave_3.append(actions['ab_testing'])
+    
+    if basic.get('spa_detected'):
+        wave_3.append(actions['ssr_implement'])
+    else:
+        wave_3.append(actions['cwv_optimize'])
+    
+    wave_3.extend([actions['conversion_tracking'], actions['review_metrics']])
+    
+    # === ONE THING ===
+    if 'security' in top_priorities and completion.get('security', 100) < 30:
+        one_thing = one_thing_texts['ssl']
+    elif not technical.get('has_analytics'):
+        one_thing = one_thing_texts['analytics']
+    elif 'seo' in top_priorities:
+        one_thing = one_thing_texts['seo']
+    elif 'content' in top_priorities:
+        one_thing = one_thing_texts['content']
+    else:
+        one_thing = one_thing_texts['default']
+    
+    return Plan90D(
+        wave_1=wave_1[:5],
+        wave_2=wave_2[:4],
+        wave_3=wave_3[:5],
+        one_thing_this_week=one_thing
+    )
+def build_risk_register(basic: Dict[str, Any], technical: Dict[str, Any], content: Dict[str, Any]) -> List[RiskItem]:
     """Build risk register with likelihood, impact, mitigation"""
     risks = []
     breakdown = basic.get('score_breakdown', {})
@@ -4251,67 +4252,67 @@ def build_risk_register(basic: Dict[str, Any], technical: Dict[str, Any], conten
     # Content risk
     if content.get('content_quality_score', 0) < 50:
         risks.append(RiskItem(
-            risk=t('risk_register', 'thin_content', language),
+            risk="Thin content → weak rankings",
             likelihood=3,
             impact=3,
-            mitigation=t('risk_register', 'thin_content_mitigation', language),
+            mitigation="Pillar/cluster content plan",
             risk_score=9
         ))
     
     # SPA risk
     if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
         risks.append(RiskItem(
-            risk=t('risk_register', 'spa_risk', language),
+            risk="SPA client-only rendering → low visibility",
             likelihood=3,
             impact=4,
-            mitigation=t('risk_register', 'spa_mitigation', language),
+            mitigation="SSR/prerender critical routes",
             risk_score=12
         ))
     
     # Security risk
     if breakdown.get('security', 0) < 10:
         risks.append(RiskItem(
-            risk=t('risk_register', 'weak_security', language),
+            risk="Weak security → trust/SEO penalty",
             likelihood=2,
             impact=4,
-            mitigation=t('risk_register', 'security_mitigation', language),
+            mitigation="Install SSL + security headers",
             risk_score=8
         ))
     
     # Mobile risk
     if breakdown.get('mobile', 0) < 10:
         risks.append(RiskItem(
-            risk=t('risk_register', 'poor_mobile', language),
+            risk="Poor mobile UX → high bounce rate",
             likelihood=4,
             impact=3,
-            mitigation=t('risk_register', 'mobile_mitigation', language),
+            mitigation="Responsive design + CWV optimization",
             risk_score=12
         ))
     
     return risks
 
 
-def build_snippet_examples(url: str, basic: Dict[str, Any], language: str = 'en') -> SnippetExamples:
+def build_snippet_examples(url: str, basic: Dict[str, Any]) -> SnippetExamples:
     """Build SEO snippet examples"""
     domain = get_domain_from_url(url).capitalize()
     
     return SnippetExamples(
         seo_title=[
-            f"{domain} {t('snippet_examples', 'title_1', language)}",
-            f"{domain}{t('snippet_examples', 'title_2', language)}",
-            f"{domain} {t('snippet_examples', 'title_3', language)}"
+            f"{domain} — fast, modern & reliable",
+            f"{domain}: solutions that drive results",
+            f"{domain} | Everything you need to grow"
         ],
         meta_desc=[
-            t('snippet_examples', 'desc_1', language, domain=domain),
-            t('snippet_examples', 'desc_2', language, domain=domain)
+            f"{domain} helps you get measurable results. Explore features, stories and pricing — start today.",
+            f"Modern {domain} with impact. See how teams ship better experiences. Try now."
         ],
         h1_intro=[
-            t('snippet_examples', 'h1_1', language, domain=domain),
-            t('snippet_examples', 'h1_2', language, domain=domain)
+            f"{domain} that gets the job done.",
+            f"Build, ship and grow with {domain}."
         ],
         product_copy=[
-            t('snippet_examples', 'product_1', language),
-            t('snippet_examples', 'product_2', language)
+            "Value prop in 1–2 lines → 2–3 benefits with proof → single CTA.",
+            "Problem → outcome → proof → CTA. Keep it scannable (40–80 words)."
         ]
     )
 # ============================================================================
@@ -4762,43 +4763,6 @@ async def generate_ai_insights(
     
     insights = generate_english_insights(overall, basic, technical, content, ux, social)
     
-    # ✅ GENERATE ENHANCED SWOT (always, for all analyses)
-    logger.info(f"[AI Insights] Generating enhanced SWOT for {url}")
-    try:
-        # Build minimal analysis dict for SWOT generation
-        temp_analysis = {
-            'basic_analysis': basic,
-            'detailed_analysis': {
-                'technical_audit': technical,
-                'content_analysis': content,
-                'ux_analysis': ux,
-                'social_media': social
-            }
-        }
-        
-        enhanced_swot = await generate_competitive_swot_analysis(
-            temp_analysis,
-            competitor_analyses=None,  # Single analysis, no competitors
-            language=language
-        )
-        
-        # Replace basic SWOT with enhanced SWOT
-        insights['enhanced_swot'] = enhanced_swot
-        
-        # Keep backward compatibility: also keep root-level SWOT as strings
-        # (for old frontend code that might still use them)
-        insights['strengths'] = [s.get('area', s.get('finding', '')) for s in enhanced_swot.get('strengths', [])]
-        insights['weaknesses'] = [w.get('area', w.get('finding', '')) for w in enhanced_swot.get('weaknesses', [])]
-        insights['opportunities'] = [o.get('area', o.get('opportunity', '')) for o in enhanced_swot.get('opportunities', [])]
-        insights['threats'] = [t.get('threat', '') for t in enhanced_swot.get('threats', [])]
-        
-        logger.info(f"[AI Insights] ✅ Enhanced SWOT complete: {len(enhanced_swot.get('strengths', []))} strengths, {len(enhanced_swot.get('weaknesses', []))} weaknesses")
-        
-    except Exception as e:
-        logger.error(f"[AI Insights] ❌ Enhanced SWOT failed: {e}", exc_info=True)
-        # Keep basic SWOT as fallback
-        logger.warning("[AI Insights] Falling back to basic SWOT")
-    
     # Enhance with OpenAI if available
     if openai_client:
         try:
@@ -4848,26 +4812,16 @@ async def generate_ai_insights(
         )
         
         role = build_role_summaries(url, basic, impact, language=language)
-        
-        # Use enhanced 90-day plan with intelligent prioritization
-        # Note: competitor_gap will be None for now, but the function handles it gracefully
-        plan = generate_enhanced_90day_plan(
-            basic=basic, 
-            content=content, 
-            technical=technical, 
-            language=language,
-            competitor_gap=None  # TODO: Add competitor analysis data when available
-        )
-        
-        risks = build_risk_register(basic, technical, content, language=language)
-        snippets = build_snippet_examples(url, basic, language=language)
+        plan = build_plan_90d(basic, content, technical, language=language)  
+        risks = build_risk_register(basic, technical, content)
+        snippets = build_snippet_examples(url, basic)
 
         insights.update({
-            "business_impact": detailed_impact.model_dump(),  # FIX 10: Pydantic V2
-            "role_summaries": role.model_dump(),
-            "plan_90d": plan.model_dump(),
-            "risk_register": [r.model_dump() for r in risks],
-            "snippet_examples": snippets.model_dump()
+            "business_impact": detailed_impact.dict(),
+            "role_summaries": role.dict(),
+            "plan_90d": plan.dict(),
+            "risk_register": [r.dict() for r in risks],
+            "snippet_examples": snippets.dict()
         })
     except Exception as e:
         logger.warning(f"Humanized layer build failed: {e}")
@@ -5553,43 +5507,18 @@ def generate_english_insights(overall: int, basic: Dict[str, Any], technical: Di
         weaknesses.append("CRITICAL: No SSL certificate")
         threats.append("Search engines penalize non-HTTPS sites")
         recommendations.append("Install SSL certificate immediately")
-    elif breakdown.get('security', 0) < 15:
-        # FIX 12: Add subtle improvements even for good sites
-        weaknesses.append(f"Security headers could be enhanced ({breakdown.get('security', 0)}/15)")
-        recommendations.append("Add Content-Security-Policy and security headers")
-    
     if breakdown.get('content', 0) < 5:
         weaknesses.append(f"Very low content depth ({wc} words)")
         recommendations.append("Develop comprehensive content strategy")
-    elif wc < 1500:
-        # FIX 12: Content improvement for good sites
-        weaknesses.append(f"Content depth could be improved ({wc} words)")
-        recommendations.append("Expand content to 2000+ words for better SEO")
-    
     if not technical.get('has_analytics'):
         weaknesses.append("No analytics tracking")
         recommendations.append("Install Google Analytics 4")
-    
     if breakdown.get('mobile', 0) < 8:
         weaknesses.append("Poor mobile optimization")
         recommendations.append("Implement responsive design")
-    
     if len(social.get('platforms', [])) < 2:
         weaknesses.append("Limited social media presence")
         recommendations.append("Expand to key social platforms")
-    elif len(social.get('platforms', [])) < 4:
-        # FIX 12: Social media expansion for good sites
-        weaknesses.append("Social media presence could be expanded")
-        recommendations.append("Consider adding LinkedIn, TikTok, or YouTube")
-    
-    # FIX 12: Add competitive threats even for strong sites
-    if overall >= 70:
-        threats.append("Market leaders face increased competitive pressure")
-        threats.append("Digital trends evolve rapidly - continuous innovation required")
-    elif overall >= 50:
-        threats.append("Competitors may catch up if improvements stall")
-    else:
-        threats.append("Risk of losing market share to more digital-mature competitors")
     
     # Opportunities
     if overall < 30:
@@ -6332,9 +6261,7 @@ async def login(request: LoginRequest):
     # ✅ VERIFY PASSWORD
     logger.info(f"🔐 Verifying password for: {user.get('username')} (key: {user_key})")
     
-    # FIX: verify_password can return None, must explicitly check for False
-    password_valid = verify_password(request.password, user["hashed_password"])
-    if password_valid is False or not password_valid:
+    if not verify_password(request.password, user["hashed_password"]):
         logger.error(f"❌ INVALID PASSWORD for: {request.username}")
         raise HTTPException(401, "Invalid credentials")
     
@@ -6800,9 +6727,7 @@ async def _perform_comprehensive_analysis_internal(
     url = clean_url(url)
     
     # Check cache
-    # FIX 11: Updated cache version to v6.3.1_fixed to invalidate old cache
-    # with incorrect accessibility scores (45/15 bug) and modern features bugs
-    cache_key = get_cache_key(url, "ai_comprehensive_v6.3.1_fixed")
+    cache_key = get_cache_key(url, "ai_comprehensive_v6.1.1_complete")
     cached_result = await get_from_cache(cache_key)
     if cached_result:
         logger.info(f"Cache hit for {url}")
@@ -6883,9 +6808,8 @@ async def _perform_comprehensive_analysis_internal(
     
     # AI Search Visibility
     if hasattr(ai_analysis, 'ai_search_visibility') and ai_analysis.ai_search_visibility:
-        # FIX 10: Use Pydantic V2 model_dump() instead of deprecated dict()
-        ai_vis_dict = (ai_analysis.ai_search_visibility.model_dump() 
-                      if hasattr(ai_analysis.ai_search_visibility, 'model_dump') 
+        ai_vis_dict = (ai_analysis.ai_search_visibility.dict() 
+                      if hasattr(ai_analysis.ai_search_visibility, 'dict') 
                       else ai_analysis.ai_search_visibility)
         enhanced_features["ai_search_visibility"] = ai_vis_dict
     
@@ -6948,7 +6872,7 @@ async def _perform_comprehensive_analysis_internal(
         "spa_detected": basic_analysis.get('spa_detected', False),
         "rendering_method": basic_analysis.get('rendering_method', 'http'),
         "technology_level": basic_analysis.get('technology_level', 'standard'),
-        "ai_analysis": ai_analysis.model_dump(),  # FIX 10: Pydantic V2
+        "ai_analysis": ai_analysis.dict(),
         
         "detailed_analysis": {
             "social_media": social_analysis,
@@ -7337,42 +7261,6 @@ async def discover_competitors(
             "Please wait for completion or check status."
         )
     
-    # === 1.5. CHECK SUBSCRIPTION LIMITS ===
-    # First check history_db if available (most accurate)
-    if history_db and user.role not in ["admin", "super_user"]:
-        can_proceed, error_msg = await history_db.check_user_limit(
-            user.username,
-            'discovery'
-        )
-        if not can_proceed:
-            raise HTTPException(403, error_msg or "Discovery limit reached")
-    
-    # Then check Stripe limits if available  
-    if STRIPE_AVAILABLE and stripe_manager:
-        user_data = USERS_DB.get(user.email, {})
-        tier_str = user_data.get("subscription_tier", "free")
-        try:
-            tier = SubscriptionTier(tier_str)
-        except ValueError:
-            tier = SubscriptionTier.FREE
-        
-        # Get current usage
-        discoveries_this_month = user_data.get("discoveries_this_month", 0)
-        
-        # Get limits
-        limits = stripe_manager.get_tier_limits(tier)
-        discovery_limit = limits.get("discoveries_per_month", 3)
-        
-        # Check if within limit (skip for unlimited tiers)
-        if discovery_limit != -1 and discoveries_this_month >= discovery_limit:
-            raise HTTPException(
-                402,  # Payment Required
-                f"Monthly discovery limit reached ({discovery_limit} discoveries for {tier.value} plan). "
-                f"Please upgrade your plan to continue."
-            )
-        
-        logger.info(f"Usage check: {user.username} - {discoveries_this_month}/{discovery_limit} discoveries used")
-    
     # === 2. VALIDATE USER URL ===
     try:
         user_domain = urlparse(request.url).netloc.replace("www.", "")
@@ -7670,32 +7558,6 @@ async def discover_competitors(
                     "duration_seconds": (datetime.now() - start_time).total_seconds()
                 })
                 
-                # === SAVE TO HISTORY DATABASE ===
-                if history_db:
-                    try:
-                        # Get all results from task
-                        task_data = task_queue.get_task(task_id)
-                        competitor_analyses = task_data.get("results", [])
-                        
-                        analysis_id = await history_db.save_competitor_discovery(
-                            user_id=user.username,
-                            url=request.url,
-                            industry=request.industry,
-                            country_code=request.country_code,
-                            max_competitors=request.max_competitors,
-                            search_terms=search_terms,
-                            search_provider="multi_provider",
-                            competitors=competitor_analyses,
-                            summary={
-                                "successful": successful_count,
-                                "failed": failed_count,
-                                "duration_seconds": (datetime.now() - start_time).total_seconds()
-                            }
-                        )
-                        logger.info(f"💾 Discovery saved to history: ID {analysis_id}")
-                    except Exception as e:
-                        logger.error(f"❌ Failed to save discovery to history: {e}")
-                
                 logger.info(
                     f"🏁 Discovery task {task_id} completed for {user.username}: "
                     f"{successful_count}/{required_analyses} successful in "
@@ -7719,13 +7581,6 @@ async def discover_competitors(
         
         # ✅ Start background task
         asyncio.create_task(process_discovery())
-        
-        # === 8.5. INCREMENT USAGE COUNTER ===
-        if STRIPE_AVAILABLE and stripe_manager:
-            user_data = USERS_DB.get(user.email)
-            if user_data:
-                user_data["discoveries_this_month"] = user_data.get("discoveries_this_month", 0) + 1
-                logger.info(f"📊 Incremented discovery count for {user.username}: {user_data['discoveries_this_month']}")
         
         # === 9. RETURN IMMEDIATE RESPONSE ===
         return {
@@ -7927,10 +7782,60 @@ async def get_discovery_results(
 # USER DISCOVERIES LIST
 # ============================================================================
 
-# ============================================================================
-# USER DISCOVERIES LIST - See working version at line ~7950
-# ============================================================================
+@app.get("/api/v1/my-discoveries", tags=["Competitor Discovery"])
+async def get_my_discoveries(
+    user: UserInfo = Depends(require_user),
+    limit: int = 20,
+    status: Optional[str] = None
+):
+    """
+    Get list of user's discovery tasks.
+    
+    Args:
+        limit: Maximum number of tasks to return
+        status: Filter by status (pending, running, completed, failed)
+    """
+    
+    if not task_queue:
+        raise HTTPException(503, "Task queue not available")
+    
+    try:
+        # Get user's tasks from Redis
+        user_tasks = task_queue.get_user_tasks(user.username, limit=limit)
+        
+        # Filter by status if requested
+        if status:
+            user_tasks = [t for t in user_tasks if t.get("status") == status]
+        
+        # Enrich with summary data
+        enriched_tasks = []
+        for task in user_tasks:
+            task_id = task.get("task_id")
+            results = task_queue.get_results(task_id)
+            
+            enriched_tasks.append({
+                "task_id": task_id,
+                "status": task.get("status"),
+                "progress": task.get("progress", 0),
+                "created_at": task.get("created_at"),
+                "completed_at": task.get("completed_at"),
+                "industry": task.get("industry"),
+                "total_competitors": task.get("total", 0),
+                "successful": len([r for r in results if r.get("status") == "success"]),
+                "failed": len([r for r in results if r.get("status") == "failed"])
+            })
+        
+        return {
+            "discoveries": enriched_tasks,
+            "total": len(enriched_tasks)
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get user discoveries: {e}")
+        raise HTTPException(500, "Failed to retrieve discoveries")
 
+
+# ============================================================================
 # MAIN ANALYSIS ENDPOINT
 # ============================================================================
 
@@ -7942,29 +7847,16 @@ async def ai_analyze_comprehensive(
 ):
     """Complete comprehensive website analysis with full SPA support."""
     try:
-        # === QUOTA CHECK - Use database if available ===
+        # === QUOTA CHECK ===
         if user.role != "admin":
-            if history_db:
-                # Check quota from database
-                can_proceed, error_msg = await history_db.check_user_limit(
-                    user.username,
-                    'single'
+            user_limit = USERS_DB.get(user.username, {}).get("search_limit", DEFAULT_USER_LIMIT)
+            current_count = user_search_counts.get(user.username, 0)
+            
+            if user_limit > 0 and current_count >= user_limit:
+                raise HTTPException(
+                    status_code=403, 
+                    detail=f"Search limit reached ({user_limit} searches). Contact admin for more quota."
                 )
-                if not can_proceed:
-                    raise HTTPException(
-                        status_code=403,
-                        detail=error_msg or "Analysis limit reached"
-                    )
-            else:
-                # Fallback to in-memory quota
-                user_limit = USERS_DB.get(user.username, {}).get("search_limit", DEFAULT_USER_LIMIT)
-                current_count = user_search_counts.get(user.username, 0)
-                
-                if user_limit > 0 and current_count >= user_limit:
-                    raise HTTPException(
-                        status_code=403, 
-                        detail=f"Search limit reached ({user_limit} searches). Contact admin for more quota."
-                    )
         
         # === URL VALIDATION ===
         url = clean_url(request.url)
@@ -7980,27 +7872,9 @@ async def ai_analyze_comprehensive(
             revenue_input=None
         )
         
-        # === SAVE TO DATABASE ===
-        if history_db:
-            try:
-                analysis_id = await history_db.save_single_analysis(
-                    user_id=user.username,
-                    url=url,
-                    company_name=request.company_name,
-                    language=request.language,
-                    analysis_result=result
-                )
-                logger.info(f"💾 Analysis saved to history: ID {analysis_id}")
-            except Exception as e:
-                logger.error(f"❌ Failed to save analysis to history: {e}")
-                # Continue even if save fails - don't block the analysis
-        
         # === POST-PROCESSING ===
-        if user.role != "admin" and not history_db:
-            # Only use in-memory counter if database not available
-            current_count = user_search_counts.get(user.username, 0)
+        if user.role != "admin":
             user_search_counts[user.username] = current_count + 1
-            user_limit = USERS_DB.get(user.username, {}).get("search_limit", DEFAULT_USER_LIMIT)
             logger.info(
                 f"Quota: {user.username} used {user_search_counts[user.username]}/{user_limit}"
             )
@@ -8089,10 +7963,8 @@ async def get_my_discoveries(
                         "id": task_id,
                         "task_id": task_id,
                         "url": discovery_data.get("url", ""),
-                        "user_url": discovery_data.get("url", ""),  # ✅ LISÄTTY: Frontend lukee tämän
                         "domain": discovery_data.get("url", "").replace("https://", "").replace("http://", "").split("/")[0],
                         "industry": discovery_data.get("industry"),
-                        "data": discovery_data,  # ✅ LISÄTTY: Koko data-objekti frontendille
                         "status": status.get("status", "unknown"),
                         "competitors_found": len([r for r in results if r.get("status") == "success"]),
                         "total": status.get("total", 0),
@@ -8144,137 +8016,61 @@ async def get_my_discoveries(
 # ============================================================================
 # Lisää tämä heti get_my_discoveries jälkeen
 
-# ============================================================================
-# ANALYSIS CORE - INTERNAL HELPER
-# ============================================================================
-# (Discovery results endpoint is above at line ~7726)
-
-# ============================================================================
-# ANALYSIS HISTORY ENDPOINTS
-# ============================================================================
-
-@app.get("/api/v1/analysis-history", tags=["History"])
-async def get_analysis_history(
-    limit: int = 20,
-    analysis_type: Optional[str] = None,
+@app.get("/api/v1/discovery-results/{task_id}")
+async def get_discovery_results(
+    task_id: str,
     user: UserInfo = Depends(require_user)
 ):
     """
-    Get user's analysis history.
-    
-    Parameters:
-    - limit: Number of results (max 100)
-    - analysis_type: Filter by 'single' or 'discovery'
+    Get full results for a specific discovery task
+    Allows user to view detailed analysis of a past discovery
     """
-    if not history_db:
-        raise HTTPException(503, "Analysis history not available")
     
-    if limit > 100:
-        limit = 100
+    if not task_queue:
+        raise HTTPException(503, "Task queue not available")
     
     try:
-        history = await history_db.get_user_history(
-            user_id=user.username,
-            limit=limit,
-            analysis_type=analysis_type
-        )
+        # Tarkista että task kuuluu käyttäjälle
+        task_key = f"task:{task_id}"
+        task_data = redis_client.get(task_key)
+        
+        if not task_data:
+            raise HTTPException(404, "Discovery not found")
+        
+        task = json.loads(task_data)
+        
+        if task.get("username") != user.username:
+            raise HTTPException(403, "Access denied")
+        
+        # Hae task status ja tulokset
+        status = task_queue.get_task_status(task_id)
+        
+        if status.get("status") == "not_found":
+            raise HTTPException(404, "Discovery not found")
         
         return {
-            "history": [
-                {
-                    "id": record.id,
-                    "type": record.analysis_type,
-                    "url": record.url,
-                    "company_name": record.company_name,
-                    "status": record.status,
-                    "score": record.score,
-                    "competitors_count": record.competitors_count,
-                    "created_at": record.created_at.isoformat(),
-                    "completed_at": record.completed_at.isoformat() if record.completed_at else None
-                }
-                for record in history
-            ],
-            "total": len(history)
+            "task_id": task_id,
+            "status": status.get("status"),
+            "url": task.get("data", {}).get("url"),
+            "industry": task.get("data", {}).get("industry"),
+            "total": status.get("total", 0),
+            "progress": status.get("progress", 0),
+            "results": status.get("results", []),
+            "analyses": status.get("analyses", []),  # Full analysis data
+            "created_at": status.get("created_at"),
+            "completed_at": status.get("completed_at")
         }
-        
-    except Exception as e:
-        logger.error(f"Error fetching history: {e}")
-        raise HTTPException(500, "Failed to fetch history")
-
-
-@app.get("/api/v1/analysis-history/{analysis_id}", tags=["History"])
-async def get_analysis_details(
-    analysis_id: int,
-    user: UserInfo = Depends(require_user)
-):
-    """Get full details of a specific analysis"""
-    if not history_db:
-        raise HTTPException(503, "Analysis history not available")
-    
-    try:
-        details = await history_db.get_analysis_details(
-            analysis_id=analysis_id,
-            user_id=user.username
-        )
-        
-        if not details:
-            raise HTTPException(404, "Analysis not found")
-        
-        return details
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error fetching analysis details: {e}")
-        raise HTTPException(500, "Failed to fetch analysis details")
-
-
-@app.get("/api/v1/user-usage", tags=["History"])
-async def get_user_usage_stats(
-    user: UserInfo = Depends(require_user)
-):
-    """Get user's usage statistics and limits"""
-    if not history_db:
-        raise HTTPException(503, "Usage stats not available")
-    
-    try:
-        usage = await history_db.get_user_usage(user.username)
-        
-        if not usage:
-            return {
-                "single_analyses_this_month": 0,
-                "discoveries_this_month": 0,
-                "total_single_analyses": 0,
-                "total_discoveries": 0,
-                "single_analysis_limit": 100,
-                "discovery_limit": 10
-            }
-        
-        return {
-            "single_analyses_this_month": usage.single_analyses_this_month,
-            "discoveries_this_month": usage.discoveries_this_month,
-            "total_single_analyses": usage.total_single_analyses,
-            "total_discoveries": usage.total_discoveries,
-            "total_competitors_analyzed": usage.total_competitors_analyzed,
-            "single_analysis_limit": usage.single_analysis_limit,
-            "discovery_limit": usage.discovery_limit,
-            "single_analyses_remaining": (
-                usage.single_analysis_limit - usage.single_analyses_this_month
-                if usage.single_analysis_limit > 0
-                else -1  # Unlimited
-            ),
-            "discoveries_remaining": (
-                usage.discovery_limit - usage.discoveries_this_month
-                if usage.discovery_limit > 0
-                else -1  # Unlimited
-            )
-        }
-        
-    except Exception as e:
-        logger.error(f"Error fetching usage stats: {e}")
-        raise HTTPException(500, "Failed to fetch usage stats")
+        logger.error(f"Failed to fetch discovery results: {e}")
+        raise HTTPException(500, f"Failed to fetch discovery results: {str(e)}")
 
 # ============================================================================
+# ANALYSIS CORE - INTERNAL HELPER
+
+## ============================================================================
 # SYSTEM AND ADMIN ENDPOINTS
 # ============================================================================
 
@@ -8285,12 +8081,7 @@ async def root():
         "endpoints": {
             "health": "/health", 
             "auth": {"login": "/auth/login", "me": "/auth/me"},
-            "analysis": {"comprehensive": "/api/v1/ai-analyze", "basic": "/api/v1/analyze"},
-            "history": {
-                "list": "/api/v1/analysis-history",
-                "details": "/api/v1/analysis-history/{id}",
-                "usage": "/api/v1/user-usage"
-            } if history_db else {}
+            "analysis": {"comprehensive": "/api/v1/ai-analyze", "basic": "/api/v1/analyze"}
         },
         "features": [
             "JWT authentication with role-based access",
@@ -8299,8 +8090,7 @@ async def root():
             "SPA detection and smart rendering",
             "Playwright support for modern web apps",
             "AI-powered insights with OpenAI integration",
-            "Complete frontend compatibility",
-            "Analysis history tracking" if history_db else None
+            "Complete frontend compatibility"
         ],
         "capabilities": {
             "playwright_available": PLAYWRIGHT_AVAILABLE,
@@ -8308,8 +8098,7 @@ async def root():
             "spa_detection": True,
             "modern_web_analysis": True,
             "enhanced_features_count": 9,
-            "openai_available": bool(openai_client),
-            "analysis_history": bool(history_db)
+            "openai_available": bool(openai_client)
         },
         "scoring_system": {"version": "configurable_v1_complete", "weights": SCORING_CONFIG.weights}
     }
@@ -8324,12 +8113,9 @@ async def health_check():
             "openai_available": bool(openai_client),
             "playwright_available": PLAYWRIGHT_AVAILABLE,
             "playwright_enabled": PLAYWRIGHT_ENABLED,
-            "stripe_available": STRIPE_AVAILABLE,
             "cache_size": len(analysis_cache),
-            "enhanced_features": 10,
-            "complete_models": True,
-            "agent_system": AGENT_SYSTEM_AVAILABLE,
-            "agent_chat_v2": AGENT_CHAT_V2_AVAILABLE
+            "enhanced_features": 9,
+            "complete_models": True
         },
         "scoring": {"weights": SCORING_CONFIG.weights, "configurable": True}
     }
@@ -8343,296 +8129,6 @@ async def get_config(user: UserInfo = Depends(require_admin)):
         "seo_thresholds": SCORING_CONFIG.seo_thresholds,
         "version": APP_VERSION
     }
-
-# ============================================================================
-# STRIPE PAYMENT ENDPOINTS
-# ============================================================================
-
-@app.post("/api/subscription/checkout")
-async def create_subscription_checkout(
-    tier: str,
-    user: UserInfo = Depends(require_user)
-):
-    """
-    Create Stripe Checkout session for subscription
-    
-    Args:
-        tier: Subscription tier (starter, pro, enterprise)
-    
-    Returns:
-        Checkout URL to redirect user to Stripe
-    """
-    if not STRIPE_AVAILABLE:
-        raise HTTPException(503, "Payment system not available")
-    
-    # Validate tier
-    try:
-        subscription_tier = SubscriptionTier(tier.lower())
-    except ValueError:
-        raise HTTPException(400, f"Invalid tier: {tier}")
-    
-    # Get user data
-    user_data = USERS_DB.get(user.email)
-    if not user_data:
-        raise HTTPException(404, "User not found")
-    
-    # Get or create Stripe customer ID
-    stripe_customer_id = user_data.get("stripe_customer_id")
-    
-    if not stripe_customer_id:
-        # Create new Stripe customer
-        stripe_customer_id = await create_customer(user.email, user.username)
-        if not stripe_customer_id:
-            raise HTTPException(500, "Failed to create customer")
-        
-        # Save to database
-        user_data["stripe_customer_id"] = stripe_customer_id
-        logger.info(f"Created Stripe customer for {user.email}: {stripe_customer_id}")
-    
-    # Create checkout session
-    base_url = os.getenv("APP_BASE_URL", "http://localhost:8000")
-    checkout_url = await create_checkout_session(
-        customer_id=stripe_customer_id,
-        tier=subscription_tier,
-        success_url=f"{base_url}/subscription/success?session_id={{CHECKOUT_SESSION_ID}}",
-        cancel_url=f"{base_url}/subscription/cancel"
-    )
-    
-    if not checkout_url:
-        raise HTTPException(500, "Failed to create checkout session")
-    
-    logger.info(f"Created checkout for {user.email} - tier: {tier}")
-    
-    return {
-        "checkout_url": checkout_url,
-        "tier": tier
-    }
-
-
-@app.get("/api/subscription/current")
-async def get_current_subscription(user: UserInfo = Depends(require_user)):
-    """
-    Get user's current subscription status and usage limits
-    
-    Returns:
-        Subscription info, tier, limits, and current usage
-    """
-    if not STRIPE_AVAILABLE:
-        # Return free tier info if Stripe not available
-        return {
-            "tier": "free",
-            "status": "active",
-            "limits": stripe_manager.get_tier_limits(SubscriptionTier.FREE) if stripe_manager else {
-                "discoveries_per_month": 3,
-                "competitors_per_discovery": 10,
-                "exports_per_month": 5
-            },
-            "usage": {
-                "discoveries_per_month": 0,
-                "exports_per_month": 0
-            },
-            "stripe_available": False
-        }
-    
-    user_data = USERS_DB.get(user.email)
-    if not user_data:
-        raise HTTPException(404, "User not found")
-    
-    # Get tier (default to free)
-    tier_str = user_data.get("subscription_tier", "free")
-    try:
-        tier = SubscriptionTier(tier_str)
-    except ValueError:
-        tier = SubscriptionTier.FREE
-    
-    # Get limits
-    limits = stripe_manager.get_tier_limits(tier)
-    
-    # Get current usage
-    current_usage = {
-        "discoveries_per_month": user_data.get("discoveries_this_month", 0),
-        "exports_per_month": user_data.get("exports_this_month", 0),
-        "competitors_per_discovery": 0  # Not tracked per-request
-    }
-    
-    # Calculate remaining
-    remaining = {}
-    for key, limit in limits.items():
-        if limit == -1:  # Unlimited
-            remaining[key] = -1
-        else:
-            remaining[key] = max(0, limit - current_usage.get(key, 0))
-    
-    # Check if within limits
-    within_limits = stripe_manager.is_within_limits(tier, current_usage)
-    
-    return {
-        "tier": tier.value,
-        "status": user_data.get("subscription_status", "inactive"),
-        "subscription_id": user_data.get("subscription_id"),
-        "current_period_end": user_data.get("current_period_end"),
-        "cancel_at_period_end": user_data.get("cancel_at_period_end", False),
-        "limits": limits,
-        "usage": current_usage,
-        "remaining": remaining,
-        "within_limits": within_limits,
-        "stripe_available": True
-    }
-
-
-@app.get("/api/subscription/manage")
-async def manage_subscription(user: UserInfo = Depends(require_user)):
-    """
-    Get Stripe Billing Portal URL for user to manage their subscription
-    
-    Returns:
-        Portal URL to redirect user to Stripe Customer Portal
-    """
-    if not STRIPE_AVAILABLE:
-        raise HTTPException(503, "Payment system not available")
-    
-    user_data = USERS_DB.get(user.email)
-    if not user_data:
-        raise HTTPException(404, "User not found")
-    
-    stripe_customer_id = user_data.get("stripe_customer_id")
-    if not stripe_customer_id:
-        raise HTTPException(400, "No subscription found")
-    
-    base_url = os.getenv("APP_BASE_URL", "http://localhost:8000")
-    portal_url = await stripe_manager.create_billing_portal_session(
-        customer_id=stripe_customer_id,
-        return_url=f"{base_url}/settings"
-    )
-    
-    if not portal_url:
-        raise HTTPException(500, "Failed to create portal session")
-    
-    logger.info(f"Created billing portal for {user.email}")
-    
-    return {
-        "portal_url": portal_url
-    }
-
-
-@app.post("/api/webhooks/stripe")
-async def stripe_webhook(request: Request):
-    """
-    Stripe webhook handler
-    
-    Handles subscription events from Stripe:
-    - customer.subscription.created
-    - customer.subscription.updated
-    - customer.subscription.deleted
-    - invoice.payment_succeeded
-    - invoice.payment_failed
-    
-    This endpoint must be registered in Stripe Dashboard:
-    https://dashboard.stripe.com/webhooks
-    """
-    if not STRIPE_AVAILABLE:
-        raise HTTPException(503, "Payment system not available")
-    
-    # Get raw body and signature
-    payload = await request.body()
-    signature = request.headers.get("stripe-signature")
-    
-    if not signature:
-        logger.warning("Webhook received without signature")
-        raise HTTPException(400, "No signature provided")
-    
-    # Verify and handle webhook
-    result = await handle_webhook(payload, signature)
-    
-    if not result:
-        logger.error("Webhook verification failed")
-        raise HTTPException(400, "Invalid webhook signature")
-    
-    if result.get("status") != "success":
-        logger.error(f"Webhook handling error: {result.get('error')}")
-        raise HTTPException(500, "Webhook handling failed")
-    
-    # Update database based on webhook data
-    updates = result.get("updates", {})
-    event_type = result.get("event_type")
-    
-    logger.info(f"Processing webhook: {event_type}")
-    
-    try:
-        # Find user by subscription_id or customer_id
-        subscription_id = updates.get("subscription_id")
-        customer_id = updates.get("customer_id")
-        
-        user_email = None
-        for email, user_data in USERS_DB.items():
-            if (subscription_id and user_data.get("subscription_id") == subscription_id) or \
-               (customer_id and user_data.get("stripe_customer_id") == customer_id):
-                user_email = email
-                break
-        
-        if not user_email:
-            logger.warning(f"User not found for webhook {event_type}")
-            return {"status": "ok", "message": "User not found but webhook acknowledged"}
-        
-        user_data = USERS_DB[user_email]
-        
-        # Update user data based on event
-        if event_type in ["customer.subscription.created", "customer.subscription.updated"]:
-            user_data["subscription_id"] = updates.get("subscription_id", user_data.get("subscription_id"))
-            user_data["subscription_status"] = updates.get("status", "active")
-            user_data["subscription_tier"] = updates.get("tier", user_data.get("subscription_tier", "free"))
-            user_data["current_period_end"] = updates.get("current_period_end")
-            user_data["cancel_at_period_end"] = updates.get("cancel_at_period_end", False)
-            
-            logger.info(f"Updated subscription for {user_email}: {updates.get('tier')} - {updates.get('status')}")
-        
-        elif event_type == "customer.subscription.deleted":
-            user_data["subscription_status"] = "cancelled"
-            user_data["subscription_tier"] = "free"
-            user_data["cancelled_at"] = updates.get("cancelled_at")
-            
-            logger.info(f"Subscription cancelled for {user_email}")
-        
-        elif event_type == "invoice.payment_succeeded":
-            user_data["last_payment_date"] = datetime.now().isoformat()
-            user_data["last_payment_amount"] = updates.get("amount_paid", 0)
-            
-            logger.info(f"Payment succeeded for {user_email}: ${updates.get('amount_paid', 0)/100}")
-        
-        elif event_type == "invoice.payment_failed":
-            user_data["payment_failed"] = True
-            user_data["payment_failed_count"] = user_data.get("payment_failed_count", 0) + 1
-            
-            logger.warning(f"Payment failed for {user_email} (attempt {user_data['payment_failed_count']})")
-        
-        elif event_type == "customer.created":
-            user_data["stripe_customer_id"] = updates.get("customer_id")
-            
-            logger.info(f"Stripe customer created: {user_email}")
-        
-        # Sync to file if available
-        if hasattr(sys.modules[__name__], 'sync_hardcoded_users_to_db'):
-            try:
-                sync_hardcoded_users_to_db(USERS_DB)
-            except Exception as e:
-                logger.warning(f"Failed to sync users to file: {e}")
-        
-        return {
-            "status": "ok",
-            "event_type": event_type,
-            "user": user_email,
-            "updated": True
-        }
-    
-    except Exception as e:
-        logger.error(f"Error processing webhook: {e}")
-        # Still return 200 to acknowledge webhook
-        return {
-            "status": "ok",
-            "error": str(e),
-            "acknowledged": True
-        }
-
 
 @app.post("/admin/reset-all")
 async def admin_reset_all(user: UserInfo = Depends(require_admin)):
@@ -8829,223 +8325,6 @@ async def admin_delete_user(username: str, user: UserInfo = Depends(require_admi
     return {"ok": True, "message": f"User '{username}' deleted successfully"}
 
 # ============================================================================
-async def analyze_creative_boldness(
-    your_analysis: Dict[str, Any],
-    competitor_analyses: List[Dict[str, Any]],
-    language: str = 'en'
-) -> Dict[str, Any]:
-    """
-    Analyze creative boldness by comparing visual and narrative approaches.
-    
-    Returns:
-        Dict with:
-        - creative_boldness_score (0-100)
-        - classification (Timid/Safe/Bold/Radical)
-        - visual_boldness_analysis
-        - narrative_boldness_analysis
-        - competitive_creative_position
-        - specific_observations
-        - opportunities
-        - strategic_recommendation
-    """
-    
-    # Extract your data
-    your_basic = your_analysis.get('basic_analysis', {})
-    your_content = your_analysis.get('detailed_analysis', {}).get('content_analysis', {})
-    your_ux = your_analysis.get('detailed_analysis', {}).get('ux_analysis', {})
-    your_social = your_analysis.get('detailed_analysis', {}).get('social_media', {})
-    
-    your_score = your_basic.get('digital_maturity_score', 0)
-    your_word_count = your_content.get('word_count', 0)
-    your_heading_count = your_content.get('heading_count', 0)
-    
-    # Calculate competitor averages
-    comp_scores = []
-    comp_word_counts = []
-    comp_heading_counts = []
-    
-    for comp in competitor_analyses:
-        comp_basic = comp.get('basic_analysis', {})
-        comp_content = comp.get('detailed_analysis', {}).get('content_analysis', {})
-        
-        comp_scores.append(comp_basic.get('digital_maturity_score', 0))
-        comp_word_counts.append(comp_content.get('word_count', 0))
-        comp_heading_counts.append(comp_content.get('heading_count', 0))
-    
-    avg_comp_score = sum(comp_scores) / len(comp_scores) if comp_scores else 50
-    avg_comp_words = sum(comp_word_counts) / len(comp_word_counts) if comp_word_counts else 1000
-    avg_comp_headings = sum(comp_heading_counts) / len(comp_heading_counts) if comp_heading_counts else 5
-    
-    # === VISUAL BOLDNESS ANALYSIS ===
-    visual_score = 0
-    visual_factors = []
-    
-    # Layout complexity (headings as proxy)
-    if your_heading_count > avg_comp_headings * 1.5:
-        visual_score += 30
-        visual_factors.append(t('creative_boldness', 'visual_factors.rich_structure', language, 
-                               current=your_heading_count, avg=int(avg_comp_headings)))
-    elif your_heading_count > avg_comp_headings:
-        visual_score += 20
-        visual_factors.append(t('creative_boldness', 'visual_factors.good_structure', language, 
-                               current=your_heading_count))
-    else:
-        visual_score += 10
-        visual_factors.append(t('creative_boldness', 'visual_factors.basic_structure', language, 
-                               current=your_heading_count))
-    
-    # Interactive elements
-    interactive_score = your_ux.get('interactivity_score', 0)
-    if interactive_score >= 7:
-        visual_score += 25
-        visual_factors.append(t('creative_boldness', 'visual_factors.high_interactivity', language))
-    elif interactive_score >= 4:
-        visual_score += 15
-        visual_factors.append(t('creative_boldness', 'visual_factors.moderate_interactivity', language))
-    else:
-        visual_score += 5
-        visual_factors.append(t('creative_boldness', 'visual_factors.limited_interactivity', language))
-    
-    # Social presence
-    social_score = your_social.get('social_score', 0)
-    if social_score >= 80:
-        visual_score += 20
-        visual_factors.append(t('creative_boldness', 'visual_factors.strong_social', language))
-    elif social_score >= 50:
-        visual_score += 10
-        visual_factors.append(t('creative_boldness', 'visual_factors.moderate_social', language))
-    else:
-        visual_score += 5
-        visual_factors.append(t('creative_boldness', 'visual_factors.minimal_social', language))
-    
-    # Modernity
-    modernity = your_basic.get('modernity_score', 0)
-    if modernity >= 80:
-        visual_score += 25
-        visual_factors.append(t('creative_boldness', 'visual_factors.modern_design', language))
-    elif modernity >= 60:
-        visual_score += 15
-        visual_factors.append(t('creative_boldness', 'visual_factors.contemporary_design', language))
-    else:
-        visual_score += 5
-        visual_factors.append(t('creative_boldness', 'visual_factors.traditional_design', language))
-    
-    visual_score = min(100, visual_score)
-    
-    # === NARRATIVE BOLDNESS ANALYSIS ===
-    narrative_score = 0
-    narrative_factors = []
-    
-    # Content depth
-    if your_word_count > avg_comp_words * 1.5:
-        narrative_score += 35
-        narrative_factors.append(t('creative_boldness', 'narrative_factors.comprehensive', language,
-                                  current=your_word_count, avg=int(avg_comp_words)))
-    elif your_word_count > avg_comp_words:
-        narrative_score += 25
-        narrative_factors.append(t('creative_boldness', 'narrative_factors.above_average', language,
-                                  current=your_word_count))
-    else:
-        narrative_score += 10
-        narrative_factors.append(t('creative_boldness', 'narrative_factors.standard', language,
-                                  current=your_word_count))
-    
-    # Content quality
-    content_quality = your_content.get('content_quality_score', 0)
-    if content_quality >= 80:
-        narrative_score += 30
-        narrative_factors.append(t('creative_boldness', 'narrative_factors.excellent_quality', language))
-    elif content_quality >= 60:
-        narrative_score += 20
-        narrative_factors.append(t('creative_boldness', 'narrative_factors.good_quality', language))
-    else:
-        narrative_score += 10
-        narrative_factors.append(t('creative_boldness', 'narrative_factors.basic_quality', language))
-    
-    # SEO storytelling
-    seo_score = your_basic.get('seo_score', 0)
-    if seo_score >= 80:
-        narrative_score += 20
-        narrative_factors.append(t('creative_boldness', 'narrative_factors.strong_seo', language))
-    elif seo_score >= 60:
-        narrative_score += 10
-        narrative_factors.append(t('creative_boldness', 'narrative_factors.decent_seo', language))
-    else:
-        narrative_score += 5
-        narrative_factors.append(t('creative_boldness', 'narrative_factors.weak_seo', language))
-    
-    # Competitive advantage
-    if your_score > avg_comp_score + 10:
-        narrative_score += 15
-        narrative_factors.append(t('creative_boldness', 'narrative_factors.clear_positioning', language))
-    elif your_score > avg_comp_score:
-        narrative_score += 10
-        narrative_factors.append(t('creative_boldness', 'narrative_factors.slight_edge', language))
-    else:
-        narrative_score += 5
-        narrative_factors.append(t('creative_boldness', 'narrative_factors.following_market', language))
-    
-    narrative_score = min(100, narrative_score)
-    
-    # === OVERALL CREATIVE BOLDNESS SCORE ===
-    creative_boldness_score = int((visual_score * 0.5) + (narrative_score * 0.5))
-    
-    # === CLASSIFICATION ===
-    if creative_boldness_score >= 85:
-        classification_key = "radical"
-    elif creative_boldness_score >= 70:
-        classification_key = "bold"
-    elif creative_boldness_score >= 50:
-        classification_key = "safe"
-    else:
-        classification_key = "timid"
-    
-    classification = t('creative_boldness', f'classification.{classification_key}', language)
-    competitive_position = t('creative_boldness', f'competitive_position.{classification_key}', language)
-    
-    # === SPECIFIC OBSERVATIONS ===
-    observations = []
-    
-    if your_word_count > avg_comp_words * 1.3:
-        observations.append(t('creative_boldness', 'observations.content_depth', language))
-    if interactive_score > 7:
-        observations.append(t('creative_boldness', 'observations.high_engagement', language))
-    if modernity >= 80:
-        observations.append(t('creative_boldness', 'observations.modern_design', language))
-    if your_score > avg_comp_score + 15:
-        observations.append(t('creative_boldness', 'observations.competitive_moat', language))
-    
-    if len(observations) == 0:
-        observations.append(t('creative_boldness', 'observations.default', language))
-    
-    # === OPPORTUNITIES ===
-    opportunities = []
-    
-    if visual_score < 70:
-        opportunities.append(t('creative_boldness', 'opportunities.visual', language))
-    if narrative_score < 70:
-        opportunities.append(t('creative_boldness', 'opportunities.narrative', language))
-    if interactive_score < 5:
-        opportunities.append(t('creative_boldness', 'opportunities.interactive', language))
-    if social_score < 60:
-        opportunities.append(t('creative_boldness', 'opportunities.social', language))
-    if your_word_count < avg_comp_words:
-        opportunities.append(t('creative_boldness', 'opportunities.content_depth', language,
-                              current=your_word_count, avg=int(avg_comp_words)))
-    
-    # === STRATEGIC RECOMMENDATION ===
-    strategic_rec = t('creative_boldness', f'strategic_rec.{classification_key}', language)
-    
-    return {
-        "creative_boldness_score": creative_boldness_score,
-        "classification": classification,
-        "visual_boldness_analysis": t('creative_boldness', 'visual_score_label', language, score=visual_score) + " ".join(visual_factors),
-        "narrative_boldness_analysis": t('creative_boldness', 'narrative_score_label', language, score=narrative_score) + " ".join(narrative_factors),
-        "competitive_creative_position": competitive_position,
-        "specific_observations": observations,
-        "opportunities": opportunities,
-        "strategic_recommendation": strategic_rec
-    }
 # KILPAILUETU-TUTKA ENDPOINT - KAUPALLINEN VERSIO
 # ============================================================================
 
@@ -9068,27 +8347,16 @@ async def analyze_competitive_radar(
         required_analyses = 1 + len(request.competitor_urls)
         
         if user.role != "admin":
-            # Check from history_db if available (most accurate)
-            if history_db:
-                # Competitive radar uses "single" analysis quota
-                can_proceed, error_msg = await history_db.check_user_limit(
-                    user.username,
-                    'single'
+            user_limit = USERS_DB.get(user.username, {}).get("search_limit", DEFAULT_USER_LIMIT)
+            current_count = user_search_counts.get(user.username, 0)
+            available = user_limit - current_count
+            
+            if user_limit > 0 and required_analyses > available:
+                raise HTTPException(
+                    403,
+                    f"Competitive Radar requires {required_analyses} analyses. "
+                    f"You have {available} remaining of {user_limit} quota."
                 )
-                if not can_proceed:
-                    raise HTTPException(403, error_msg or "Analysis limit reached")
-            else:
-                # Fallback to in-memory
-                user_limit = USERS_DB.get(user.username, {}).get("search_limit", DEFAULT_USER_LIMIT)
-                current_count = user_search_counts.get(user.username, 0)
-                available = user_limit - current_count
-                
-                if user_limit > 0 and required_analyses > available:
-                    raise HTTPException(
-                        403,
-                        f"Competitive Radar requires {required_analyses} analyses. "
-                        f"You have {available} remaining of {user_limit} quota."
-                    )
         
         logger.info(f"[Radar] Starting analysis for {user.username}: {request.your_url} vs {len(request.competitor_urls)} competitors")
         
@@ -9185,7 +8453,11 @@ async def analyze_competitive_radar(
             f"your_score={your_summary['score']}, "
             f"competitors={[(c['company'], c['score']) for c in comp_summaries]}"
         )
-        
+        # ✅ LISÄÄ TÄMÄ - Yhtenäistä your_analysis samaan muotoon kuin competitors
+        your_analysis_unified = {
+                **your_summary,  # company, score, content_strategy, technical_maturity...
+                'analysis': your_analysis  # full analysis detailed view:tä varten
+            }
         # === 6. SYVÄLLINEN EROTTUVUUSANALYYSI ===
         logger.info("[Radar] Building differentiation matrix...")
         
@@ -9235,97 +8507,28 @@ async def analyze_competitive_radar(
         
         logger.info(f"[Radar] ✅ Generated {len(strategic_recommendations)} strategic recommendations")
         
-        # === 10. ENHANCED SWOT ANALYSIS ===
-        logger.info("[Radar] Generating enhanced SWOT analysis...")
-        
-        try:
-            enhanced_swot = await generate_competitive_swot_analysis(
-                your_analysis,
-                competitor_analyses,
-                request.language
-            )
-            logger.info("[Radar] ✅ Enhanced SWOT analysis complete")
-        except Exception as e:
-            logger.error(f"[Radar] ❌ Enhanced SWOT failed: {e}")
-            enhanced_swot = None
-        
-        # === 11. CREATIVE BOLDNESS ANALYSIS ===
-        logger.info("[Radar] Analyzing creative boldness...")
-        
-        try:
-            creative_boldness = await analyze_creative_boldness(
-                your_analysis,
-                competitor_analyses,
-                request.language
-            )
-            logger.info(f"[Radar] ✅ Creative boldness score: {creative_boldness.get('creative_boldness_score', 0)}")
-        except Exception as e:
-            logger.error(f"[Radar] ❌ Creative boldness failed: {e}")
-            creative_boldness = None
-        
-        # === 11.5. REGENERATE 90-DAY PLAN WITH COMPETITOR DATA ===
-        logger.info("[Radar] Regenerating 90-day plan with competitor intelligence...")
-        
-        try:
-            # Calculate competitive gap for Enhanced plan
-            your_score = your_analysis['basic_analysis']['digital_maturity_score']
-            competitor_scores = [c.get('basic_analysis', {}).get('digital_maturity_score', 50) 
-                                for c in competitor_analyses]
-            avg_competitor_score = sum(competitor_scores) / len(competitor_scores) if competitor_scores else your_score
-            
-            competitor_gap_data = {
-                'avg_competitor_score': avg_competitor_score,
-                'gap': avg_competitor_score - your_score,
-                'your_rank': sum(1 for s in competitor_scores if s > your_score) + 1,
-                'total_analyzed': len(competitor_scores) + 1,
-                'market_gaps': market_gaps[:3] if market_gaps else []  # Top 3 gaps for context
-            }
-            
-            # Regenerate with competitive intelligence
-            enhanced_plan = generate_enhanced_90day_plan(
-                basic=your_analysis['basic_analysis'],
-                content=your_analysis.get('content_analysis', {}),
-                technical=your_analysis.get('technical_audit', {}),
-                language=request.language,
-                competitor_gap=competitor_gap_data
-            )
-            
-            # Replace the basic 90-day plan with enhanced version
-            your_analysis['ai_analysis']['plan_90d'] = enhanced_plan.model_dump()
-            
-            logger.info(
-                f"[Radar] ✅ Enhanced 90-day plan regenerated: "
-                f"Gap={competitor_gap_data['gap']:.1f}, "
-                f"Rank={competitor_gap_data['your_rank']}/{competitor_gap_data['total_analyzed']}, "
-                f"Actions={enhanced_plan.summary['total_actions']}"
-            )
-        except Exception as e:
-            logger.error(f"[Radar] ⚠️ Enhanced 90-day plan regeneration failed (keeping original): {e}")
-        
-       # === 12. RAKENNA RESPONSE ===
+       # === 10. RAKENNA RESPONSE ===
         logger.info("[Radar] Building final response...")
 
-        # ✅ Kilpailijoille säilytetään summary + analysis rakenne
+        # ✅ KORJAUS: Yhdenmukaista your_analysis summary-muotoon
+        # Rakenna unified structure jossa on sekä summary että täysi analyysi
+        your_analysis_unified = {
+            **your_summary,           # ✅ Summary-kentät (company, score, messaging...)
+            'analysis': your_analysis # ✅ Täysi analyysi sisällä (jos frontend tarvitsee)
+        }
+
+        # ✅ Lisää sama rakenne kilpailijoille
         comp_summaries_unified = []
         for idx, comp_summary in enumerate(comp_summaries):
             comp_summaries_unified.append({
-                **comp_summary,
-                'analysis': competitor_analyses[idx]
+                **comp_summary,                    # ✅ Summary-kentät
+                'analysis': competitor_analyses[idx] # ✅ Täysi analyysi sisällä
             })
-        
-        # ✅ Lisää enhanced_swot ja creative_boldness your_analysis.ai_analysis:iin
-        if enhanced_swot:
-            your_analysis['ai_analysis']['enhanced_swot'] = enhanced_swot
-            logger.info("[Radar] ✅ Added enhanced_swot to your_analysis.ai_analysis")
-        
-        if creative_boldness:
-            your_analysis['ai_analysis']['creative_boldness'] = creative_boldness
-            logger.info("[Radar] ✅ Added creative_boldness to your_analysis.ai_analysis")
 
-        # ✅ Rakenna response - your_analysis suoraan ilman wrapperia
+        # ✅ Rakenna response yhdenmukaisen datan kanssa
         response = CompetitiveRadarResponse(
-            your_analysis=your_analysis,          # ✅ KORJATTU: Suoraan täysi analyysi
-            competitors=comp_summaries_unified,
+            your_analysis=your_analysis_unified,  # ✅ Unified rakenne
+            competitors=comp_summaries_unified,   # ✅ Unified rakenne
             differentiation_matrix=differentiation_matrix,
             market_gaps=market_gaps,
             competitive_score=positioning['competitive_score'],
