@@ -336,8 +336,9 @@ async def websocket_agent_analysis(
                 # Aloita analyysi
                 url = data.get("url")
                 competitor_urls = data.get("competitor_urls", [])
-                language = data.get("language", "fi")
-                industry_context = data.get("industry_context")
+                # Tukee molempia kenttänimiä (backward compatible)
+                language = data.get("language") or data.get("country_code", "fi")
+                industry_context = data.get("industry_context") or data.get("industry")
                 
                 if not url:
                     await manager.send_json(websocket, {
@@ -376,8 +377,11 @@ async def websocket_agent_analysis(
                 # Callbackit jotka lähettävät viestit HETI
                 def sync_insight(insight: AgentInsight):
                     try:
+                        # Tarkista onko tämä agent-to-agent viesti
+                        is_agent_communication = insight.from_agent and insight.to_agent
+                        
                         msg = {
-                            "type": WSMessageType.AGENT_INSIGHT.value,
+                            "type": "agent_communication" if is_agent_communication else WSMessageType.AGENT_INSIGHT.value,
                             "data": {
                                 "agent_id": insight.agent_id,
                                 "agent_name": insight.agent_name,
@@ -386,14 +390,21 @@ async def websocket_agent_analysis(
                                 "priority": insight.priority.value if hasattr(insight.priority, 'value') else insight.priority,
                                 "insight_type": insight.insight_type.value if hasattr(insight.insight_type, 'value') else insight.insight_type,
                                 "timestamp": insight.timestamp.isoformat() if hasattr(insight.timestamp, 'isoformat') else str(insight.timestamp),
-                                "data": insight.data
+                                "data": insight.data,
+                                # Agent-to-agent communication fields
+                                "from_agent": insight.from_agent,
+                                "to_agent": insight.to_agent
                             },
                             "timestamp": datetime.now().isoformat()
                         }
                         # Send immediately via queue
                         message_queue.put_nowait(msg)
                         pending_messages.append(msg)
-                        logger.info(f"[WS] Queued insight: {insight.agent_name} - {insight.message[:50]}...")
+                        
+                        if is_agent_communication:
+                            logger.info(f"[WS] Queued agent comm: {insight.from_agent} → {insight.to_agent}: {insight.message[:50]}...")
+                        else:
+                            logger.info(f"[WS] Queued insight: {insight.agent_name} - {insight.message[:50]}...")
                     except Exception as e:
                         logger.error(f"[WS] Failed to queue insight: {e}")
                 
@@ -834,7 +845,6 @@ async def websocket_agent_analysis(
                     # Send notification to user's dashboard (if connected)
                     try:
                         from notification_ws import notify_analysis_complete
-                        import asyncio
                         asyncio.create_task(notify_analysis_complete(
                             user_id=user_id,
                             analysis_result={
