@@ -377,8 +377,10 @@ async def websocket_agent_analysis(
                 # Callbackit jotka lähettävät viestit HETI
                 def sync_insight(insight: AgentInsight):
                     try:
-                        # Tarkista onko tämä agent-to-agent viesti
-                        is_agent_communication = insight.from_agent and insight.to_agent
+                        # Tarkista onko tämä agent-to-agent viesti (turvallisesti)
+                        from_agent = getattr(insight, 'from_agent', None)
+                        to_agent = getattr(insight, 'to_agent', None)
+                        is_agent_communication = from_agent and to_agent
                         
                         msg = {
                             "type": "agent_communication" if is_agent_communication else WSMessageType.AGENT_INSIGHT.value,
@@ -392,8 +394,8 @@ async def websocket_agent_analysis(
                                 "timestamp": insight.timestamp.isoformat() if hasattr(insight.timestamp, 'isoformat') else str(insight.timestamp),
                                 "data": insight.data,
                                 # Agent-to-agent communication fields
-                                "from_agent": insight.from_agent,
-                                "to_agent": insight.to_agent
+                                "from_agent": from_agent,
+                                "to_agent": to_agent
                             },
                             "timestamp": datetime.now().isoformat()
                         }
@@ -402,7 +404,7 @@ async def websocket_agent_analysis(
                         pending_messages.append(msg)
                         
                         if is_agent_communication:
-                            logger.info(f"[WS] Queued agent comm: {insight.from_agent} → {insight.to_agent}: {insight.message[:50]}...")
+                            logger.info(f"[WS] Queued agent comm: {from_agent} → {to_agent}: {insight.message[:50]}...")
                         else:
                             logger.info(f"[WS] Queued insight: {insight.agent_name} - {insight.message[:50]}...")
                     except Exception as e:
