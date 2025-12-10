@@ -106,7 +106,7 @@ class CompanyIntel:
                 return None
             
             # Merge data
-            profile = self._merge_company_data(ytj_data, kl_data, business_id)
+            profile = await self._merge_company_data(ytj_data, kl_data, business_id)
             
             logger.info(f"[CompanyIntel] ✅ Profile fetched: {profile.get('name', business_id)}")
             return profile
@@ -631,6 +631,89 @@ class CompanyIntel:
         
         return result
     
+    async def _scrape_prh_revenue(self, business_id: str) -> Optional[int]:
+        """
+        Scrape revenue data from PRH website as fallback when Kauppalehti fails.
+        
+        Args:
+            business_id: Finnish Y-tunnus (format: 1234567-8)
+            
+        Returns:
+            Revenue in euros or None if not found
+        """
+        try:
+            # Format business ID (remove dash)
+            clean_id = business_id.replace('-', '')
+            
+            # PRH company page URL
+            url = f"https://www.prh.fi/fi/kaupparekisteri/yritys/{clean_id}"
+            logger.info(f"[CompanyIntel] Scraping PRH: {url}")
+            
+            response = await self.client.get(url, follow_redirects=True, timeout=10.0)
+            
+            if response.status_code != 200:
+                logger.warning(f"[CompanyIntel] PRH returned status {response.status_code}")
+                return None
+            
+            html = response.text
+            soup = BeautifulSoup(html, 'html.parser')
+            
+            # Strategy 1: Look for "Liikevaihto" or "Turnover" text in page
+            revenue_pattern = re.compile(r'liikevaihto|turnover', re.IGNORECASE)
+            
+            for elem in soup.find_all(string=revenue_pattern):
+                # Find parent element (could be td, div, li, etc)
+                parent = elem.find_parent(['tr', 'div', 'td', 'li', 'dt'])
+                if parent:
+                    # Look for value in next sibling or child elements
+                    next_elem = parent.find_next(['td', 'span', 'div', 'strong', 'dd'])
+                    if next_elem:
+                        text = next_elem.get_text(strip=True)
+                        parsed = self._parse_financial_value(text)
+                        if parsed.get('value'):
+                            logger.info(f"[CompanyIntel] Found revenue from PRH: {text} -> {parsed['value']}")
+                            return int(parsed['value'])
+            
+            # Strategy 2: Look in tables for financial data
+            for table in soup.find_all('table'):
+                rows = table.find_all('tr')
+                for row in rows:
+                    cells = row.find_all(['td', 'th'])
+                    if len(cells) >= 2:
+                        label = cells[0].get_text(strip=True)
+                        if re.search(revenue_pattern, label):
+                            value = cells[1].get_text(strip=True)
+                            parsed = self._parse_financial_value(value)
+                            if parsed.get('value'):
+                                logger.info(f"[CompanyIntel] Found revenue in table: {value} -> {parsed['value']}")
+                                return int(parsed['value'])
+            
+            # Strategy 3: Look for structured data (JSON-LD)
+            for script in soup.find_all('script', type='application/ld+json'):
+                try:
+                    data = json.loads(script.string)
+                    if isinstance(data, dict):
+                        # Check for revenue in various schema.org formats
+                        revenue = (data.get('revenue') or 
+                                 data.get('annualRevenue') or
+                                 data.get('totalRevenue'))
+                        if revenue:
+                            if isinstance(revenue, (int, float)):
+                                return int(revenue)
+                            elif isinstance(revenue, str):
+                                parsed = self._parse_financial_value(revenue)
+                                if parsed.get('value'):
+                                    return int(parsed['value'])
+                except:
+                    continue
+            
+            logger.warning(f"[CompanyIntel] No revenue found on PRH page for {business_id}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"[CompanyIntel] PRH scraping error for {business_id}: {e}")
+            return None
+    
     # =========================================================================
     # HELPERS
     # =========================================================================
@@ -658,7 +741,7 @@ class CompanyIntel:
         # Format with dash
         return f"{digits[:7]}-{digits[7]}"
     
-    def _merge_company_data(
+    async def _merge_company_data(
         self, 
         ytj_data: Optional[Dict], 
         kl_data: Optional[Dict],
@@ -711,6 +794,20 @@ class CompanyIntel:
             
             if kl_data.get('financial_history'):
                 profile['financial_history'] = kl_data['financial_history']
+        
+        # FALLBACK: Try PRH scraping if no revenue from Kauppalehti
+        if not profile.get('revenue') and business_id:
+            logger.warning(f"[CompanyIntel] No revenue from Kauppalehti, trying PRH scraping for {business_id}")
+            try:
+                prh_revenue = await self._scrape_prh_revenue(business_id)
+                if prh_revenue:
+                    profile['revenue'] = prh_revenue
+                    profile['revenue_text'] = f"€{prh_revenue:,}"
+                    if 'prh_scrape' not in profile.get('sources', []):
+                        profile['sources'].append('prh_scrape')
+                    logger.info(f"[CompanyIntel] ✅ Got revenue from PRH: €{prh_revenue:,}")
+            except Exception as e:
+                logger.warning(f"[CompanyIntel] PRH scraping failed: {e}")
         
         # Calculate company age
         if profile.get('founded_year'):
