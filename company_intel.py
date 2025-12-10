@@ -1,3 +1,4 @@
+# PRH_SCRAPER_ACTIVE = True
 """
 Growth Engine 2.0 - Company Intelligence Module
 Due Diligence data from official Finnish sources
