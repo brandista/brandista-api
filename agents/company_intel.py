@@ -1,4 +1,3 @@
-# PRH_SCRAPER_ACTIVE = True
 """
 Growth Engine 2.0 - Company Intelligence Module
 Due Diligence data from official Finnish sources
@@ -452,9 +451,9 @@ class CompanyIntel:
     
     async def _kauppalehti_get_company(self, business_id: str) -> Optional[Dict[str, Any]]:
         """
-        Scrape company financial data from Kauppalehti.
+        Scrape company financial data from Kauppalehti using Playwright.
         
-        Note: This is scraping, may break if they change their HTML.
+        Kauppalehti loads financial data via JavaScript, so we need browser rendering.
         """
         
         # Format: https://www.kauppalehti.fi/yritykset/yritys/01167544
@@ -463,20 +462,42 @@ class CompanyIntel:
         url = f"{self.KAUPPALEHTI_BASE}/{clean_id}"
         
         try:
-            response = await self.client.get(url)
+            # Try with Playwright first (for JS-rendered content)
+            try:
+                from playwright.async_api import async_playwright
+                
+                logger.info(f"[CompanyIntel] Using Playwright for Kauppalehti: {url}")
+                
+                async with async_playwright() as p:
+                    browser = await p.chromium.launch(headless=True)
+                    page = await browser.new_page()
+                    
+                    # Navigate and wait for content
+                    await page.goto(url, wait_until='networkidle', timeout=30000)
+                    
+                    # Wait for financial data to load
+                    await page.wait_for_timeout(3000)  # Give JS time to render
+                    
+                    html = await page.content()
+                    await browser.close()
+                    
+                    return self._parse_kauppalehti_html(html, business_id)
+                    
+            except ImportError:
+                logger.warning("[CompanyIntel] Playwright not available, falling back to httpx")
+                # Fallback to simple HTTP request
+                response = await self.client.get(url)
+                
+                if response.status_code == 404:
+                    return None
+                
+                response.raise_for_status()
+                html = response.text
+                return self._parse_kauppalehti_html(html, business_id)
             
-            if response.status_code == 404:
-                return None
-            
-            response.raise_for_status()
-            
-            html = response.text
-            return self._parse_kauppalehti_html(html, business_id)
-            
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                return None
-            raise
+        except Exception as e:
+            logger.error(f"[CompanyIntel] Kauppalehti fetch error: {e}")
+            return None
     
     def _parse_kauppalehti_html(self, html: str, business_id: str) -> Optional[Dict[str, Any]]:
         """Parse Kauppalehti company page HTML"""
@@ -548,6 +569,25 @@ class CompanyIntel:
                 parsed = self._parse_financial_value(employees_elem.get_text())
                 if parsed.get('value'):
                     data['employees'] = parsed['value']
+            
+            # Method 4: Search all text for revenue patterns (for JS-rendered content)
+            if not data.get('revenue'):
+                # Look for patterns like "Liikevaihto 2,1 M€" or "Liikevaihto: 2100000"
+                text_content = soup.get_text()
+                revenue_patterns = [
+                    r'Liikevaihto[:\s]+([0-9.,\s]+)\s*M?€?',
+                    r'Liikevaihto[:\s]+([0-9.,\s]+)',
+                ]
+                for pattern in revenue_patterns:
+                    match = re.search(pattern, text_content, re.IGNORECASE)
+                    if match:
+                        value_text = match.group(1).strip()
+                        parsed = self._parse_financial_value(value_text)
+                        if parsed.get('value'):
+                            data['revenue'] = parsed['value']
+                            data['revenue_text'] = value_text
+                            logger.info(f"[CompanyIntel] Found revenue via text search: {value_text}")
+                            break
             
             # Try to extract financial history from tables
             tables = soup.find_all('table')
