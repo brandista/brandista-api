@@ -1152,12 +1152,43 @@ class PlannerAgent(BaseAgent):
         # ========================================
         phase2_tasks = []
         
-        # 1. AI/GEO Readiness (future of search)
+        # 1. AI/GEO Readiness (only if company is ready for it)
+        # Requirements:
+        # - Overall score > 40 (basic health in place)
+        # - Has content (word_count > 500)
+        # - Has some SEO basics (seo_score > 10)
+        # - Is B2C or content-heavy B2B (not small local B2B)
         if 'ai_optimization' not in used_keys:
-            action = self._get_action('ai_optimization')
-            if action:
-                phase2_tasks.append(action)
-                used_keys.add('ai_optimization')
+            should_show_ai_optimization = False
+            
+            # Check readiness criteria
+            has_enough_content = True  # Default to true if no data
+            has_basic_seo = True  # Default to true if no data
+            
+            # Get word count from your_analysis
+            your_analysis = guardian_results.get('your_website', {})
+            content = your_analysis.get('content_analysis', {})
+            word_count = content.get('word_count', 1000)  # Default to passing
+            if word_count < 500:
+                has_enough_content = False
+            
+            # Get SEO score
+            seo_score = your_analysis.get('basic_analysis', {}).get('score_breakdown', {}).get('seo_basics', 15)  # Default to passing
+            if seo_score < 10:
+                has_basic_seo = False
+            
+            # Decision: Show AI optimization if:
+            # 1. Overall score is decent (> 40) - company has foundation
+            # 2. Has content to optimize (> 500 words)
+            # 3. Has basic SEO in place (score > 10)
+            if overall_score > 40 and has_enough_content and has_basic_seo:
+                should_show_ai_optimization = True
+            
+            if should_show_ai_optimization:
+                action = self._get_action('ai_optimization')
+                if action:
+                    phase2_tasks.append(action)
+                    used_keys.add('ai_optimization')
         
         # 2. Content Strategy (E-E-A-T)
         content_actions = ['content_strategy', 'authority_building', 'competitive_content_gap']
@@ -1176,11 +1207,22 @@ class PlannerAgent(BaseAgent):
                 used_keys.add('structured_data')
         
         if phase2_tasks:
+            # Adjust phase name/goal based on content
+            has_ai_optimization = any(task.get('category') == 'ai_visibility' for task in phase2_tasks)
+            
+            if has_ai_optimization:
+                phase_name = 'Phase 2: Content & AI Visibility' if self._language == 'en' else 'Vaihe 2: Sisältö & AI-näkyvyys'
+                phase_goal = 'Be found by AI search engines' if self._language == 'en' else 'Löydy AI-hakukoneista'
+            else:
+                # Focus on content strategy only
+                phase_name = 'Phase 2: Content Strategy' if self._language == 'en' else 'Vaihe 2: Sisältöstrategia'
+                phase_goal = 'Build authority through quality content' if self._language == 'en' else 'Rakenna auktoriteettia laadukkaan sisällön avulla'
+            
             phases.append({
                 'phase': 2,
-                'name': 'Phase 2: Content & AI Visibility' if self._language == 'en' else 'Vaihe 2: Sisalto & AI-nakyvyys',
+                'name': phase_name,
                 'duration': 'Weeks 5-8' if self._language == 'en' else 'Viikot 5-8',
-                'goal': 'Be found by AI search engines' if self._language == 'en' else 'Loydy AI-hakukoneista',
+                'goal': phase_goal,
                 'tasks': phase2_tasks[:4]
             })
         
