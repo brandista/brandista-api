@@ -14,7 +14,7 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from company_intel import CompanyIntel, get_company_intel, search_companies
+from agents.company_intel import CompanyIntel, get_company_intel, search_companies
 
 logger = logging.getLogger(__name__)
 
