@@ -128,6 +128,22 @@ except ImportError:
 # OPTIONAL DEPENDENCIES
 # ============================================================================
 
+# Business Impact Service (unified revenue calculations)
+try:
+    from business_impact_service import (
+        calculate_unified_business_impact,
+        create_business_impact_from_analysis,
+        UnifiedBusinessImpact,
+        CalculationBasis,
+        ConfidenceLevel,
+        EU_SME_AVERAGE_REVENUE,
+    )
+    BUSINESS_IMPACT_SERVICE_AVAILABLE = True
+    logger.info("✅ Business Impact Service loaded - unified revenue calculations enabled")
+except ImportError:
+    BUSINESS_IMPACT_SERVICE_AVAILABLE = False
+    logger.warning("⚠️ Business Impact Service not available - using legacy calculations")
+
 # Playwright (for SPA support)
 try:
     from playwright.async_api import async_playwright
@@ -3877,14 +3893,89 @@ def compute_business_impact_with_input(
     revenue_input: Optional[RevenueInputRequest] = None
 ) -> BusinessImpactDetailed:
     """
-    Compute business impact with optional user-provided revenue data
+    Compute business impact with optional user-provided revenue data.
     
-    Priority logic:
-    1. If user provides annual_revenue → use that
-    2. If user provides monthly_revenue → calculate annual (monthly × 12)
-    3. If user provides traffic + conversion + AOV → calculate revenue
-    4. Otherwise → use EU SME average (450k€)
+    UPDATED 2024-12: Now uses unified business_impact_service for consistent 
+    results across all endpoints (/analyze, /calculate-impact, /competitive-radar).
+    
+    Priority logic for revenue:
+    1. If user provides annual_revenue → use that (confidence: H)
+    2. If user provides monthly_revenue → calculate annual (confidence: H)
+    3. If user provides traffic + conversion + AOV → calculate (confidence: M)
+    4. Otherwise → use EU SME average 450k€ (confidence: L)
+    
+    Args:
+        basic: BasicAnalysis dictionary with digital_maturity_score, score_breakdown
+        content: ContentAnalysis dictionary with content_quality_score
+        ux: UXAnalysis dictionary with overall_ux_score
+        revenue_input: Optional RevenueInputRequest with user's revenue data
+    
+    Returns:
+        BusinessImpactDetailed with all calculated values
     """
+    
+    # Check if unified service is available
+    if BUSINESS_IMPACT_SERVICE_AVAILABLE:
+        # Extract score data
+        score = basic.get('digital_maturity_score', 0)
+        breakdown = basic.get('score_breakdown', {})
+        
+        # Handle revenue_input - convert Pydantic model to dict if needed
+        annual_rev = None
+        monthly_rev = None
+        visitors = None
+        conv_rate = None
+        aov = None
+        
+        if revenue_input:
+            if hasattr(revenue_input, 'model_dump'):  # Pydantic V2
+                rev_data = revenue_input.model_dump()
+            elif hasattr(revenue_input, 'dict'):  # Pydantic V1
+                rev_data = revenue_input.dict()
+            elif isinstance(revenue_input, dict):
+                rev_data = revenue_input
+            else:
+                rev_data = {}
+            
+            annual_rev = rev_data.get('annual_revenue')
+            monthly_rev = rev_data.get('monthly_revenue')
+            visitors = rev_data.get('monthly_visitors')
+            conv_rate = rev_data.get('conversion_rate')
+            aov = rev_data.get('average_order_value')
+        
+        # Use unified calculation service
+        result = calculate_unified_business_impact(
+            digital_maturity_score=score,
+            annual_revenue=annual_rev,
+            monthly_revenue=monthly_rev,
+            monthly_visitors=visitors,
+            conversion_rate=conv_rate,
+            average_order_value=aov,
+            seo_score=breakdown.get('seo_basics', 0),
+            mobile_score=breakdown.get('mobile', 0),
+            content_score=content.get('content_quality_score', 0),
+            ux_score=ux.get('overall_ux_score', 0),
+            security_score=breakdown.get('security', 0),
+            language='en'
+        )
+        
+        # Convert to BusinessImpactDetailed format
+        return BusinessImpactDetailed(
+            lead_gain_estimate=result.lead_gain_estimate,
+            revenue_uplift_range=result.revenue_uplift_range,
+            monthly_revenue_range=result.monthly_revenue_range,
+            confidence=result.confidence.value,
+            customer_trust_effect=result.customer_trust_effect,
+            calculation_basis=result.calculation_basis.value,
+            metrics_used=result.metrics_used,
+            improvement_areas=result.improvement_areas,
+            potential_scenarios=result.potential_scenarios
+        )
+    
+    # =========================================================================
+    # FALLBACK: Legacy calculation if service not available
+    # =========================================================================
+    logger.warning("[BusinessImpact] Using legacy calculation - service not available")
     
     score = basic.get('digital_maturity_score', 0)
     seo_pts = basic.get('score_breakdown', {}).get('seo_basics', 0)
@@ -3899,174 +3990,107 @@ def compute_business_impact_with_input(
     content_score = content.get('content_quality_score', 0)
     ux_score = ux.get('overall_ux_score', 0)
     
-    # ===== REVENUE DETERMINATION =====
+    # Revenue determination (legacy)
     calculation_basis = "estimated"
     metrics_used = {}
-    annual_revenue = 450_000  # Default EU SME average
+    annual_revenue = 450_000
     
-    # ✅ KORJAUS: Handle both Pydantic model AND dict
     if revenue_input:
-        # Convert to dict if it's a Pydantic model
-        if hasattr(revenue_input, 'dict'):
+        if hasattr(revenue_input, 'model_dump'):
+            rev_data = revenue_input.model_dump()
+        elif hasattr(revenue_input, 'dict'):
             rev_data = revenue_input.dict()
         elif isinstance(revenue_input, dict):
             rev_data = revenue_input
         else:
             rev_data = {}
         
-        # Now safely access as dict
         if rev_data.get('annual_revenue') and rev_data['annual_revenue'] > 0:
             annual_revenue = rev_data['annual_revenue']
             calculation_basis = "provided"
             metrics_used['annual_revenue'] = annual_revenue
-            
         elif rev_data.get('monthly_revenue') and rev_data['monthly_revenue'] > 0:
             annual_revenue = rev_data['monthly_revenue'] * 12
             calculation_basis = "provided"
             metrics_used['monthly_revenue'] = rev_data['monthly_revenue']
-            metrics_used['calculated_annual'] = annual_revenue
-            
-        elif (rev_data.get('monthly_visitors') and 
-              rev_data.get('conversion_rate') and 
-              rev_data.get('average_order_value')):
-            # Calculate revenue from traffic metrics
-            monthly_orders = (rev_data['monthly_visitors'] * 
-                            rev_data['conversion_rate'] / 100)
+        elif (rev_data.get('monthly_visitors') and rev_data.get('conversion_rate') and rev_data.get('average_order_value')):
+            monthly_orders = rev_data['monthly_visitors'] * rev_data['conversion_rate'] / 100
             monthly_revenue = int(monthly_orders * rev_data['average_order_value'])
             annual_revenue = monthly_revenue * 12
             calculation_basis = "calculated"
-            metrics_used.update({
-                'monthly_visitors': rev_data['monthly_visitors'],
-                'conversion_rate': rev_data['conversion_rate'],
-                'average_order_value': rev_data['average_order_value'],
-                'calculated_monthly_revenue': monthly_revenue,
-                'calculated_annual_revenue': annual_revenue
-            })
-        else:
-            calculation_basis = "hybrid"
-            metrics_used['note'] = "Using EU SME average, partial data provided"
+            metrics_used['calculated_annual'] = annual_revenue
     
-    # ===== LEAD GENERATION (original logic) =====
+    # Lead generation
     lead_low = max(3, (seo_pct + content_score) // 40)
     lead_high = max(lead_low + 2, (seo_pct + content_score) // 25)
     
-    # ===== REVENUE CALCULATION =====
+    # Revenue calculation
     score_improvement_potential = max(10, 90 - score)
-    
-    # Base growth rates (conservative to aggressive based on score gap)
     if score < 30:
-        # Very low score → high potential
-        growth_rate_low = (score_improvement_potential * 0.5) / 100
-        growth_rate_high = (score_improvement_potential * 0.9) / 100
+        growth_rate_low, growth_rate_high = 0.05, 0.09
     elif score < 50:
-        # Below average → good potential
-        growth_rate_low = (score_improvement_potential * 0.4) / 100
-        growth_rate_high = (score_improvement_potential * 0.7) / 100
+        growth_rate_low, growth_rate_high = 0.04, 0.07
     elif score < 70:
-        # Average → moderate potential
-        growth_rate_low = (score_improvement_potential * 0.3) / 100
-        growth_rate_high = (score_improvement_potential * 0.5) / 100
+        growth_rate_low, growth_rate_high = 0.03, 0.05
     else:
-        pass
-        # High score → incremental gains
-        growth_rate_low = (score_improvement_potential * 0.2) / 100
-        growth_rate_high = (score_improvement_potential * 0.4) / 100
+        growth_rate_low, growth_rate_high = 0.02, 0.04
     
-    # Calculate impact
-    revenue_impact_low = int(annual_revenue * growth_rate_low)
-    revenue_impact_high = int(annual_revenue * growth_rate_high)
-    
+    improvement_factor = score_improvement_potential / 100
+    revenue_impact_low = int(annual_revenue * growth_rate_low * improvement_factor)
+    revenue_impact_high = int(annual_revenue * growth_rate_high * improvement_factor)
     monthly_impact_low = revenue_impact_low // 12
     monthly_impact_high = revenue_impact_high // 12
     
-    # ===== IMPROVEMENT AREAS ANALYSIS =====
+    # Improvement areas
     improvement_areas = []
-    if seo_pct < 60:
-        improvement_areas.append("SEO optimization")
-    if mobile_pct < 60:
-        improvement_areas.append("Mobile experience")
-    if content_score < 60:
-        improvement_areas.append("Content depth and quality")
-    if ux_score < 60:
-        improvement_areas.append("User experience design")
-    if score < 50:
-        improvement_areas.append("Technical foundation")
+    if seo_pct < 60: improvement_areas.append("SEO optimization")
+    if mobile_pct < 60: improvement_areas.append("Mobile experience")
+    if content_score < 60: improvement_areas.append("Content depth and quality")
+    if ux_score < 60: improvement_areas.append("User experience design")
+    if score < 50: improvement_areas.append("Technical foundation")
     
-    # ===== SCENARIO PLANNING =====
+    # Scenarios
     potential_scenarios = {
-        "quick_wins": {
-            "timeframe": "1-3 months",
-            "effort": "low",
-            "revenue_uplift": f"€{revenue_impact_low//3:,} - €{revenue_impact_low//2:,}",
-            "actions": ["Fix critical SEO issues", "Improve mobile viewport", "Add analytics tracking"]
-        },
-        "standard_improvement": {
-            "timeframe": "3-6 months",
-            "effort": "medium",
-            "revenue_uplift": f"€{revenue_impact_low:,} - €{int(revenue_impact_low*1.5):,}",
-            "actions": ["Content strategy execution", "Technical SEO overhaul", "UX optimization"]
-        },
-        "comprehensive_transformation": {
-            "timeframe": "6-12 months",
-            "effort": "high",
-            "revenue_uplift": f"€{int(revenue_impact_high*0.8):,} - €{revenue_impact_high:,}",
-            "actions": ["Complete digital strategy", "Marketing automation", "Conversion optimization"]
-        }
+        "quick_wins": {"timeframe": "1-3 months", "effort": "low", "revenue_uplift": f"€{revenue_impact_low//3:,} - €{revenue_impact_low//2:,}"},
+        "standard_improvement": {"timeframe": "3-6 months", "effort": "medium", "revenue_uplift": f"€{revenue_impact_low:,} - €{int(revenue_impact_low*1.5):,}"},
+        "comprehensive_transformation": {"timeframe": "6-12 months", "effort": "high", "revenue_uplift": f"€{int(revenue_impact_high*0.8):,} - €{revenue_impact_high:,}"}
     }
     
-    # ===== FORMATTING =====
-    def format_currency(amount: int) -> str:
-        if amount >= 1_000_000:
-            return f"€{amount/1_000_000:.1f}M"
-        elif amount >= 1000:
-            return f"€{amount//1000}k"
-        else:
-            return f"€{amount}"
+    # Format currency helper
+    def fmt_curr(amt): return f"€{amt/1_000_000:.1f}M" if amt >= 1_000_000 else f"€{amt//1000}k" if amt >= 1000 else f"€{amt}"
     
-    revenue_range = (
-        f"{format_currency(revenue_impact_low)}–{format_currency(revenue_impact_high)}/year "
-        f"({format_currency(monthly_impact_low)}–{format_currency(monthly_impact_high)}/mo)"
-    )
-    
-    monthly_range = f"{format_currency(monthly_impact_low)}–{format_currency(monthly_impact_high)}"
-    
-    # Confidence based on data quality
-    if calculation_basis == "provided":
-        confidence = "H"  # High confidence with real data
-    elif calculation_basis == "calculated":
-        confidence = "M"  # Medium confidence with derived data
-    else:
-        confidence = "L"  # Low confidence with estimates
-    
-    # Trust effect
-    customer_trust_effect = (
-        "Improves perceived quality (NPS +2–4)" 
-        if basic.get('modernity_score', 0) >= 50 
-        else "Small positive trust signal"
-    )
+    revenue_range = f"{fmt_curr(revenue_impact_low)} - {fmt_curr(revenue_impact_high)}/year ({fmt_curr(monthly_impact_low)} - {fmt_curr(monthly_impact_high)}/mo)"
+    monthly_range = f"{fmt_curr(monthly_impact_low)} - {fmt_curr(monthly_impact_high)}"
+    confidence = "H" if calculation_basis == "provided" else "M" if calculation_basis == "calculated" else "L"
+    trust_effect = "Improves perceived quality (NPS +2–4)" if basic.get('modernity_score', 0) >= 50 else "Small positive trust signal"
     
     return BusinessImpactDetailed(
         lead_gain_estimate=_fmt_range(lead_low, lead_high, "leads/mo"),
         revenue_uplift_range=revenue_range,
         monthly_revenue_range=monthly_range,
         confidence=confidence,
-        customer_trust_effect=customer_trust_effect,
+        customer_trust_effect=trust_effect,
         calculation_basis=calculation_basis,
         metrics_used=metrics_used,
         improvement_areas=improvement_areas,
         potential_scenarios=potential_scenarios
     )
 
-# Keep old function for backward compatibility
+
 def compute_business_impact(
     basic: Dict[str, Any], 
     content: Dict[str, Any], 
     ux: Dict[str, Any],
     estimated_annual_revenue: int = 450_000
 ) -> BusinessImpact:
-    """Backward compatible wrapper - calls new function without revenue input"""
+    """
+    Backward compatible wrapper for simple BusinessImpact.
+    
+    UPDATED 2024-12: Now uses unified business_impact_service.
+    For new code, prefer compute_business_impact_with_input or 
+    calculate_unified_business_impact directly.
+    """
     detailed = compute_business_impact_with_input(basic, content, ux, revenue_input=None)
-    # Convert detailed to simple BusinessImpact
     return BusinessImpact(
         lead_gain_estimate=detailed.lead_gain_estimate,
         revenue_uplift_range=detailed.revenue_uplift_range,
