@@ -405,12 +405,63 @@ def calculate_unified_business_impact(
         confidence = ConfidenceLevel.LOW
     
     # =========================================================================
-    # STEP 5: Calculate revenue at risk percentage
+    # STEP 5: Calculate revenue at risk (if not provided from Guardian/RASM)
     # =========================================================================
     
+    # If revenue_at_risk not provided, calculate based on digital deficiencies
+    # This mirrors Guardian/RASM logic but simplified for standalone calculation
+    calculated_revenue_at_risk = revenue_at_risk
+    
+    if calculated_revenue_at_risk == 0 and final_annual_revenue > 0 and digital_maturity_score > 0:
+        # Risk calculation based on score deficiencies
+        # Higher score = lower risk, Lower score = higher risk
+        # Base risk factors by score range (aligned with RASM methodology)
+        
+        if digital_maturity_score < 30:
+            # Very low score: 3-5% of revenue at risk
+            risk_factor = 0.04  # 4% average
+        elif digital_maturity_score < 50:
+            # Low score: 2-3.5% of revenue at risk
+            risk_factor = 0.0275  # 2.75% average
+        elif digital_maturity_score < 70:
+            # Medium score: 1-2% of revenue at risk
+            risk_factor = 0.015  # 1.5% average
+        else:
+            # High score: 0.5-1% of revenue at risk
+            risk_factor = 0.0075  # 0.75% average
+        
+        # Adjust risk based on specific deficiencies
+        deficiency_multiplier = 1.0
+        
+        # SEO deficiency adds risk (organic traffic loss)
+        if seo_score < 50:
+            deficiency_multiplier += 0.15
+        
+        # Mobile deficiency adds risk (mobile traffic loss)
+        if mobile_score < 50:
+            deficiency_multiplier += 0.15
+        
+        # Security deficiency adds risk (trust & compliance)
+        if security_score < 50:
+            deficiency_multiplier += 0.10
+        
+        # Content deficiency adds risk (engagement loss)
+        if content_score < 50:
+            deficiency_multiplier += 0.10
+        
+        # Cap multiplier at 1.5x
+        deficiency_multiplier = min(deficiency_multiplier, 1.5)
+        
+        # Calculate final risk
+        calculated_revenue_at_risk = int(final_annual_revenue * risk_factor * deficiency_multiplier)
+        
+        logger.info(f"[BusinessImpact] Calculated revenue at risk: €{calculated_revenue_at_risk:,} "
+                   f"(score={digital_maturity_score}, factor={risk_factor}, mult={deficiency_multiplier})")
+    
+    # Calculate risk percentage
     risk_percentage = 0.0
-    if final_annual_revenue > 0 and revenue_at_risk > 0:
-        risk_percentage = round((revenue_at_risk / final_annual_revenue) * 100, 2)
+    if final_annual_revenue > 0 and calculated_revenue_at_risk > 0:
+        risk_percentage = round((calculated_revenue_at_risk / final_annual_revenue) * 100, 2)
     
     # =========================================================================
     # STEP 6: Format output strings
@@ -516,7 +567,7 @@ def calculate_unified_business_impact(
         revenue_uplift_expected=revenue_uplift_expected,
         revenue_uplift_range=revenue_uplift_range,
         monthly_revenue_range=monthly_revenue_range,
-        revenue_at_risk=revenue_at_risk,
+        revenue_at_risk=calculated_revenue_at_risk,
         revenue_at_risk_percentage=risk_percentage,
         confidence=confidence,
         calculation_basis=calculation_basis,

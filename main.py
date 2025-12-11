@@ -2231,10 +2231,22 @@ class BusinessImpactDetailed(BaseModel):
     confidence: Optional[str] = "M"
     customer_trust_effect: Optional[str] = None
     # New detailed fields
-    calculation_basis: str = "estimated"  # "estimated" | "provided" | "calculated" | "hybrid"
+    calculation_basis: str = "estimated"  # "estimated" | "provided" | "calculated" | "hybrid" | "company_intel"
     metrics_used: Dict[str, Any] = {}
     improvement_areas: List[str] = []
     potential_scenarios: Dict[str, Dict[str, Any]] = {}
+    # Revenue fields for unified business impact
+    annual_revenue_used: Optional[int] = None
+    revenue_uplift_low: Optional[int] = None
+    revenue_uplift_high: Optional[int] = None
+    revenue_uplift_expected: Optional[int] = None
+    # Risk fields
+    revenue_at_risk: Optional[int] = None
+    revenue_at_risk_percentage: Optional[float] = None
+    # Methodology
+    methodology_note: Optional[str] = None
+    # Revenue data source info (for frontend display)
+    revenue_data: Optional[Dict[str, Any]] = None
 
 class RoleSummaries(BaseModel):
     CEO: Optional[str] = None
@@ -3969,7 +3981,20 @@ def compute_business_impact_with_input(
             calculation_basis=result.calculation_basis.value,
             metrics_used=result.metrics_used,
             improvement_areas=result.improvement_areas,
-            potential_scenarios=result.potential_scenarios
+            potential_scenarios=result.potential_scenarios,
+            # New unified fields
+            annual_revenue_used=result.annual_revenue_used,
+            revenue_uplift_low=result.revenue_uplift_low,
+            revenue_uplift_high=result.revenue_uplift_high,
+            revenue_uplift_expected=result.revenue_uplift_expected,
+            revenue_at_risk=result.revenue_at_risk,
+            revenue_at_risk_percentage=result.revenue_at_risk_percentage,
+            methodology_note=result.methodology_note,
+            revenue_data={
+                'source': result.calculation_basis.value,
+                'annual_revenue_used': result.annual_revenue_used,
+                'confidence': result.confidence.value,
+            }
         )
     
     # =========================================================================
