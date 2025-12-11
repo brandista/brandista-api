@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
-# Version: 2025-11-30-1015
-# Changes: Company intel integration, ai_visibility threat, real revenue/employees in threat calc, revenue_data transparency
+# Version: 2025-12-11-unified
+# Changes: Integrated unified business_impact_service for consistent revenue calculations
 """
 Growth Engine 2.0 - Guardian Agent
 The Risk Manager - RASM, threat analysis and Competitor Threat Assessment
 
 Responsibilities:
 1. Build risk register from analysis data
-2. Calculate realistic revenue impact (revenue_impact_model.py)
+2. Calculate realistic revenue impact (unified business_impact_service)
 3. Identify threats (SEO, mobile, SSL, performance, competitive, content)
 4. Assess competitor threat levels
 5. Prioritize actions by ROI
@@ -31,6 +31,16 @@ from .types import (
     AgentPriority,
     InsightType
 )
+
+# Unified Business Impact Service
+try:
+    from business_impact_service import (
+        calculate_unified_business_impact,
+        UnifiedBusinessImpact,
+    )
+    UNIFIED_IMPACT_SERVICE_AVAILABLE = True
+except ImportError:
+    UNIFIED_IMPACT_SERVICE_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -154,22 +164,29 @@ class GuardianAgent(BaseAgent):
         
         self._update_progress(30, self._task("calculating_impact"))
         
-        # 2. UUSI: Realistinen Revenue Impact Model
+        # =====================================================================
+        # 2. UNIFIED REVENUE IMPACT CALCULATION
+        # =====================================================================
+        # Uses the unified business_impact_service for consistent results
+        # across all endpoints (Guardian, /analyze, /competitive-radar)
+        
+        # Load RASM model for risk detection
         try:
             from revenue_impact_model import (
-                calculate_revenue_impact, 
+                calculate_revenue_impact as calculate_rasm_risk, 
                 detect_risks_from_analysis,
                 detect_industry,
                 revenue_impact_to_dict
             )
-            USE_NEW_REVENUE_MODEL = True
-            logger.info("[Guardian] [OK] revenue_impact_model loaded successfully")
+            USE_RASM_MODEL = True
+            logger.info("[Guardian] ✅ RASM model loaded")
         except ImportError as e:
-            logger.warning(f"[Guardian] [WARN] revenue_impact_model not available, using fallback: {e}")
-            USE_NEW_REVENUE_MODEL = False
+            logger.warning(f"[Guardian] ⚠️ RASM model not available: {e}")
+            USE_RASM_MODEL = False
         
-        # Hae liikevaihto
-        annual_revenue = 500000  # Default EUR500k fallback
+        # Determine annual revenue (priority: company_intel > user_input > default)
+        annual_revenue = 500000  # Default EUR500k
+        company_intel_revenue = None
         revenue_source = "default"
         company_name = "Company"
         revenue_warning = None
@@ -178,12 +195,12 @@ class GuardianAgent(BaseAgent):
             your_company_intel = scout_results.get('your_company_intel', {}) if scout_results else {}
             
             if your_company_intel and your_company_intel.get('revenue'):
-                annual_revenue = int(your_company_intel.get('revenue', 500000))
+                company_intel_revenue = int(your_company_intel.get('revenue', 0))
+                annual_revenue = company_intel_revenue
                 revenue_source = "company_intel"
                 company_name = your_company_intel.get('name', 'Company')
-                logger.info(f"[Guardian] ✅ Using REAL revenue from Company Intel: EUR{annual_revenue:,} ({company_name})")
+                logger.info(f"[Guardian] ✅ Using REAL revenue from Company Intel: EUR{company_intel_revenue:,} ({company_name})")
             elif your_company_intel and your_company_intel.get('name'):
-                # Company found but no revenue data
                 company_name = your_company_intel.get('name', 'Company')
                 revenue_warning = f"Company '{company_name}' found but revenue data not available - using estimate"
                 logger.warning(f"[Guardian] ⚠️ {revenue_warning}")
@@ -197,102 +214,101 @@ class GuardianAgent(BaseAgent):
                 
         except Exception as e:
             logger.warning(f"[Guardian] Revenue fetch failed, using default: {e}")
-            annual_revenue = 500000
             revenue_warning = f"Revenue fetch failed: {e}"
         
-        # Kayta uutta mallia jos saatavilla
-        if USE_NEW_REVENUE_MODEL:
-            # Tunnista toimiala (basic_data, technical_data, content_data defined above)
-            industry = detect_industry(
-                context.url,
-                basic_data,
-                scout_results.get('your_company_intel', {}) if scout_results else None
-            )
-            logger.info(f"[Guardian] Detected industry: {industry}")
-            
-            # Tunnista riskit analyysidatasta
-            detected_risks = detect_risks_from_analysis(
-                basic_data,
-                technical_data,
-                content_data
-            )
-            logger.info(f"[Guardian] Detected risks: {detected_risks}")
-            
-            # Hae HTML sisalto presence-tunnistusta varten
-            html_content = basic_data.get('html_content', '')
-            if not html_content:
-                # Yritetaan hakea URL:sta
-                try:
-                    import httpx
-                    async with httpx.AsyncClient(timeout=10.0) as client:
-                        resp = await client.get(context.url)
-                        html_content = resp.text[:50000]  # Max 50KB
-                except Exception as e:
-                    logger.warning(f"[Guardian] Could not fetch HTML for presence detection: {e}")
-                    html_content = ''
-            
-            # Laske realistinen revenue impact
-            revenue_impact_analysis = calculate_revenue_impact(
-                annual_revenue=annual_revenue,
-                detected_risks=detected_risks,
-                industry=industry,
-                company_name=company_name,
-                language=context.language,
-                html_content=html_content
-            )
-            
-            # Muunna dictiksi
-            revenue_impact_data = revenue_impact_to_dict(revenue_impact_analysis)
-            
-            # Emit insight
-            total_impact = revenue_impact_analysis.total_impact_expected
-            if total_impact > 100000:
-                self._emit_insight(
-                    f"[WARN] {'Arvioitu vuotuinen riski' if self._language == 'fi' else 'Estimated annual risk'}: EUR{total_impact:,.0f} ({revenue_impact_analysis.total_impact_percentage}% {'liikevaihdosta' if self._language == 'fi' else 'of revenue'})",
-                    priority=AgentPriority.CRITICAL,
-                    insight_type=InsightType.THREAT,
-                    data={'annual_risk': total_impact, 'percentage': revenue_impact_analysis.total_impact_percentage}
+        # Calculate RASM-based revenue at risk
+        annual_risk = 0
+        rasm_analysis = None
+        
+        if USE_RASM_MODEL:
+            try:
+                industry = detect_industry(
+                    context.url,
+                    basic_data,
+                    scout_results.get('your_company_intel', {}) if scout_results else None
                 )
-            elif total_impact > 20000:
-                self._emit_insight(
-                    f"[TIP] {'Arvioitu vuotuinen riski' if self._language == 'fi' else 'Estimated annual risk'}: EUR{total_impact:,.0f}",
-                    priority=AgentPriority.HIGH,
-                    insight_type=InsightType.THREAT,
-                    data={'annual_risk': total_impact}
+                logger.info(f"[Guardian] Detected industry: {industry}")
+                
+                detected_risks = detect_risks_from_analysis(
+                    basic_data,
+                    technical_data,
+                    content_data
                 )
+                logger.info(f"[Guardian] Detected risks: {detected_risks}")
+                
+                html_content = basic_data.get('html_content', '')
+                
+                # Calculate RASM risk
+                rasm_result = calculate_rasm_risk(
+                    annual_revenue=company_intel_revenue or annual_revenue,
+                    detected_risks=detected_risks,
+                    industry=industry,
+                    company_name=company_name,
+                    language=context.language,
+                    html_content=html_content
+                )
+                
+                annual_risk = rasm_result.total_impact_expected
+                rasm_analysis = revenue_impact_to_dict(rasm_result)
+                
+                logger.info(f"[Guardian] RASM Risk: EUR{annual_risk:,} ({rasm_result.confidence_level} confidence)")
+                
+            except Exception as e:
+                logger.error(f"[Guardian] RASM calculation failed: {e}")
+                annual_risk = int((company_intel_revenue or annual_revenue) * 0.05)
+        else:
+            # Simple fallback: 5% of revenue at risk
+            annual_risk = int((company_intel_revenue or annual_revenue) * 0.05)
+        
+        # =====================================================================
+        # USE UNIFIED BUSINESS IMPACT SERVICE
+        # This ensures consistency with /analyze and /competitive-radar
+        # =====================================================================
+        
+        if UNIFIED_IMPACT_SERVICE_AVAILABLE:
+            unified_impact = calculate_unified_business_impact(
+                digital_maturity_score=your_score,
+                company_intel_revenue=company_intel_revenue,
+                annual_revenue=annual_revenue if revenue_source == "user_input" else None,
+                seo_score=basic_data.get('score_breakdown', {}).get('seo_basics', 0),
+                mobile_score=basic_data.get('score_breakdown', {}).get('mobile', 0),
+                content_score=content_data.get('content_quality_score', 0),
+                ux_score=0,  # Not always available in Guardian context
+                security_score=basic_data.get('score_breakdown', {}).get('security', 0),
+                revenue_at_risk=annual_risk,
+                language=context.language
+            )
             
-            # Log methodology
-            logger.info(f"[Guardian] Revenue Impact: EUR{total_impact:,} ({revenue_impact_analysis.confidence_level} confidence)")
-            logger.info(f"[Guardian] Methodology: {revenue_impact_analysis.methodology_note}")
+            # Build business_impact in unified format
+            business_impact = unified_impact.to_guardian_format()
             
-            # Vanha business_impact sailytetaan yhteensopivuutta varten
-            business_impact = {
-                'total_monthly_risk': total_impact // 12,
-                'total_annual_risk': total_impact,
-                # Uusi rikas data
-                'revenue_impact_analysis': revenue_impact_data
+            # Add RASM-specific data
+            if rasm_analysis:
+                business_impact['revenue_impact_analysis'] = rasm_analysis
+            
+            # Add revenue source metadata
+            business_impact['revenue_data'] = {
+                'source': revenue_source,
+                'annual_revenue_used': unified_impact.annual_revenue_used,
+                'company_name': company_name,
+                'warning': revenue_warning,
+                'calculation_basis': unified_impact.calculation_basis.value,
+                'confidence': unified_impact.confidence.value,
             }
             
-            annual_risk = total_impact
+            logger.info(f"[Guardian] ✅ Unified Impact: uplift={unified_impact.revenue_uplift_range}, risk=EUR{annual_risk:,}, confidence={unified_impact.confidence.value}")
+            
         else:
-            # FALLBACK: Vanha yksinkertainen laskenta
-            logger.info("[Guardian] Using fallback revenue calculation")
-            risk_multipliers = {12: 0.06, 9: 0.04, 8: 0.03, 6: 0.02}
-            total_risk_percent = 0
-            for risk_item in risk_register:
-                risk_score = getattr(risk_item, 'risk_score', 0) if hasattr(risk_item, 'risk_score') else (risk_item.get('risk_score', 0) if isinstance(risk_item, dict) else 0)
-                multiplier = risk_multipliers.get(risk_score, risk_score * 0.005)
-                total_risk_percent += multiplier
-            
-            total_risk_percent = min(total_risk_percent, 0.25)
-            annual_risk = int(annual_revenue * total_risk_percent)
-            
+            # Fallback if unified service not available
+            logger.warning("[Guardian] ⚠️ Using legacy business_impact format")
             business_impact = {
                 'total_monthly_risk': annual_risk // 12,
-                'total_annual_risk': annual_risk
+                'total_annual_risk': annual_risk,
             }
+            if rasm_analysis:
+                business_impact['revenue_impact_analysis'] = rasm_analysis
         
-        # Emit revenue risk insight
+        # Emit revenue risk insights
         if annual_risk > 50000:
             self._emit_insight(
                 self._t("guardian.risk_critical", amount=f"{annual_risk:,.0f}"),
