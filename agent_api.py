@@ -58,6 +58,25 @@ def serialize_for_json(obj: Any) -> Any:
 # Auth functions - lazy import to avoid circular dependency
 def _get_auth_functions():
     """Lazy import auth functions from main to avoid circular import"""
+
+# Lazy imports for main.py functions
+def _get_creative_boldness_analyzer():
+    """Lazy import analyze_creative_boldness to avoid circular dependency"""
+    try:
+        from main import analyze_creative_boldness
+        return analyze_creative_boldness
+    except ImportError as e:
+        logging.warning(f"[agent_api] Could not import analyze_creative_boldness: {e}")
+        return None
+
+def _get_business_impact_calculator():
+    """Lazy import calculate_unified_business_impact"""
+    try:
+        from business_impact_service import calculate_unified_business_impact
+        return calculate_unified_business_impact
+    except ImportError as e:
+        logging.warning(f"[agent_api] Could not import calculate_unified_business_impact: {e}")
+        return None
     try:
         from main import get_current_user, UserInfo
         return get_current_user, UserInfo
@@ -695,68 +714,95 @@ async def websocket_agent_analysis(
                     # Get additional Strategist data
                     market_position = strategist_result.get('market_position', '') if strategist_result else ''
                     strategic_score = strategist_result.get('strategic_score', 0) if strategist_result else 0
-                    # creative_boldness will be generated below with full analysis
-                    creative_boldness_score = strategist_result.get('overall_score', 50) if strategist_result else 50
+                    
+                    # NEW: Get full Strategist data that was missing
+                    executive_summary = strategist_result.get('executive_summary', '') if strategist_result else ''
+                    maturity_level = strategist_result.get('maturity_level', 'developing') if strategist_result else 'developing'
+                    strategic_priorities = strategist_result.get('strategic_priorities', []) if strategist_result else []
+                    key_insights = strategist_result.get('key_insights', []) if strategist_result else []
+                    strategist_recommendations = strategist_result.get('recommendations', []) if strategist_result else []
+                    competitive_position = strategist_result.get('competitive_position', {}) if strategist_result else {}
                     
                     # === GENERATE FULL CREATIVE BOLDNESS ANALYSIS ===
                     creative_boldness = None
                     try:
-                        from main import analyze_creative_boldness
-                        if your_analysis and analyst_result:
+                        analyze_creative_boldness = _get_creative_boldness_analyzer()
+                        if analyze_creative_boldness and your_analysis and analyst_result:
                             competitor_analyses = analyst_result.get('competitor_analyses', [])
                             creative_boldness = await analyze_creative_boldness(
                                 your_analysis,
                                 competitor_analyses,
                                 language
                             )
-                            logger.info(f"[WS] Creative boldness generated: score={creative_boldness.get('creative_boldness_score', 'N/A')}")
+                            logger.info(f"[WS] ✅ Creative boldness generated: score={creative_boldness.get('creative_boldness_score', 'N/A')}")
                     except Exception as e:
-                        logger.warning(f"[WS] Creative boldness generation failed: {e}")
-                        # Fallback to basic structure
-                        classification = 'differentiator' if creative_boldness_score >= 70 else 'conventional' if creative_boldness_score >= 50 else 'generic'
+                        logger.warning(f"[WS] ⚠️ Creative boldness generation failed: {e}")
+                    
+                    # Fallback if creative_boldness generation failed
+                    if not creative_boldness:
+                        cb_score = strategist_result.get('overall_score', 50) if strategist_result else 50
+                        classification = 'disruptor' if cb_score >= 85 else 'differentiator' if cb_score >= 70 else 'conventional' if cb_score >= 50 else 'generic'
                         creative_boldness = {
-                            "creative_boldness_score": creative_boldness_score,
+                            "creative_boldness_score": cb_score,
                             "classification": classification,
                             "visual_boldness_analysis": None,
                             "narrative_boldness_analysis": None,
-                            "competitive_creative_position": f"Luova rohkeuspistemäärä: {creative_boldness_score}/100",
+                            "competitive_creative_position": f"Luova rohkeuspistemäärä: {cb_score}/100",
                             "specific_observations": [],
                             "opportunities": [],
                             "strategic_recommendation": None
                         }
                     
-                    # === GENERATE BUSINESS IMPACT ===
+                    # === GENERATE UNIFIED BUSINESS IMPACT ===
                     business_impact = None
                     try:
-                        from business_impact_service import calculate_unified_business_impact
-                        
-                        # Get revenue from company intel or Guardian
-                        company_revenue = None
-                        if your_company and your_company.get('revenue'):
-                            company_revenue = your_company.get('revenue')
-                        
-                        # Get score breakdown from your_analysis
-                        basic = your_analysis.get('basic_analysis', {})
-                        breakdown = basic.get('score_breakdown', {})
-                        content = your_analysis.get('detailed_analysis', {}).get('content_analysis', {})
-                        ux = your_analysis.get('detailed_analysis', {}).get('ux_analysis', {})
-                        
-                        impact_result = calculate_unified_business_impact(
-                            digital_maturity_score=your_score,
-                            company_intel_revenue=company_revenue,
-                            seo_score=breakdown.get('seo_basics', 0),
-                            mobile_score=breakdown.get('mobile', 0),
-                            content_score=content.get('content_quality_score', 50),
-                            ux_score=ux.get('overall_ux_score', 50),
-                            security_score=breakdown.get('security', 0),
-                            language=language
-                        )
-                        business_impact = impact_result.to_dict() if hasattr(impact_result, 'to_dict') else impact_result
-                        logger.info(f"[WS] Business impact generated: uplift={business_impact.get('revenue_uplift_range', 'N/A')}")
+                        calculate_unified_business_impact = _get_business_impact_calculator()
+                        if calculate_unified_business_impact:
+                            # Get revenue from company intel or Guardian
+                            company_revenue = None
+                            if your_company and your_company.get('revenue'):
+                                company_revenue = your_company.get('revenue')
+                            
+                            # Get score breakdown from your_analysis
+                            basic = your_analysis.get('basic_analysis', {}) if your_analysis else {}
+                            breakdown = basic.get('score_breakdown', {})
+                            detailed = your_analysis.get('detailed_analysis', {}) if your_analysis else {}
+                            content = detailed.get('content_analysis', {})
+                            ux = detailed.get('ux_analysis', {})
+                            
+                            impact_result = calculate_unified_business_impact(
+                                digital_maturity_score=your_score,
+                                company_intel_revenue=company_revenue,
+                                seo_score=breakdown.get('seo_basics', 0),
+                                mobile_score=breakdown.get('mobile', 0),
+                                content_score=content.get('content_quality_score', 50),
+                                ux_score=ux.get('overall_ux_score', 50),
+                                security_score=breakdown.get('security', 0),
+                                language=language
+                            )
+                            business_impact = impact_result.to_dict() if hasattr(impact_result, 'to_dict') else serialize_for_json(impact_result)
+                            logger.info(f"[WS] ✅ Business impact generated: uplift={business_impact.get('revenue_uplift_range', 'N/A')}")
                     except Exception as e:
-                        logger.warning(f"[WS] Business impact generation failed: {e}")
+                        logger.warning(f"[WS] ⚠️ Business impact generation failed: {e}")
                         # Use Guardian's revenue_impact as fallback
                         business_impact = revenue_impact if revenue_impact else {}
+                    
+                    # === GET FULL PROSPECTOR DATA ===
+                    swot = prospector_result.get('swot', {}) if prospector_result else {}
+                    quick_wins = prospector_result.get('quick_wins', []) if prospector_result else []
+                    growth_opportunities = prospector_result.get('growth_opportunities', []) if prospector_result else []
+                    
+                    # === GET FULL PLANNER DATA ===
+                    weekly_sprints = planner.get('weekly_sprints', []) if planner else []
+                    resource_estimate = planner.get('resource_estimate', {}) if planner else {}
+                    roi_projection = planner.get('roi_projection', {}) if planner else {}
+                    
+                    # === GET GUARDIAN REVENUE DATA (source transparency) ===
+                    revenue_data = guardian_result.get('revenue_data', {}) if guardian_result else {}
+                    
+                    # === GET ANALYST METADATA ===
+                    score_interpretation = analyst_result.get('score_interpretation', {}) if analyst_result else {}
+                    top_findings = analyst_result.get('top_findings', []) if analyst_result else []
                     
                     # Get Prospector advantages (map to strings for frontend)
                     advantages_raw = prospector_result.get('competitive_advantages', []) if prospector_result else []
@@ -830,11 +876,24 @@ async def websocket_agent_analysis(
                             "position_quadrant": position_quadrant,
                             "market_position": market_position,  # NEW
                             "strategic_score": strategic_score,  # NEW
-                            "creative_boldness": creative_boldness,  # NEW
+                            "creative_boldness": creative_boldness,  # NOW FULL OBJECT
+                            
+                            # NEW: Full Strategist data
+                            "executive_summary": executive_summary,
+                            "maturity_level": maturity_level,
+                            "strategic_priorities": serialize_for_json(strategic_priorities),
+                            "key_insights": serialize_for_json(key_insights),
+                            "strategist_recommendations": serialize_for_json(strategist_recommendations),
+                            "competitive_position": serialize_for_json(competitive_position),
                             
                             # Planner data
                             "action_plan": action_plan_mapped,
                             "projected_improvement": projected_improvement,
+                            
+                            # NEW: Full Planner data
+                            "weekly_sprints": serialize_for_json(weekly_sprints),
+                            "resource_estimate": serialize_for_json(resource_estimate),
+                            "roi_projection": serialize_for_json(roi_projection),
                             
                             # Legacy fields
                             "overall_score": result.overall_score,
@@ -845,11 +904,23 @@ async def websocket_agent_analysis(
                             "your_company_intel": your_company,  # Alias for compatibility
                             "ai_analysis": serialize_for_json(your_analysis.get('ai_analysis', {})),
                             
-                            # Full your_analysis for detailed views (includes creative_boldness if in ai_analysis)
+                            # NEW: Full your_analysis for detailed views
                             "your_analysis": serialize_for_json(your_analysis),
                             
-                            # Business Impact (unified format)
+                            # NEW: Unified Business Impact
                             "business_impact": serialize_for_json(business_impact),
+                            
+                            # NEW: Full Prospector data
+                            "swot": serialize_for_json(swot),
+                            "quick_wins": serialize_for_json(quick_wins),
+                            "growth_opportunities": serialize_for_json(growth_opportunities),
+                            
+                            # NEW: Guardian revenue data (source transparency)
+                            "revenue_data": serialize_for_json(revenue_data),
+                            
+                            # NEW: Analyst metadata
+                            "score_interpretation": serialize_for_json(score_interpretation),
+                            "top_findings": serialize_for_json(top_findings),
                             
                             # Full agent results for deep dive views (serialized to avoid Pydantic issues)
                             "agent_results": serialize_for_json({
