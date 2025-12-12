@@ -1,3 +1,4 @@
+# PRH_SCRAPER_ACTIVE = True
 """
 Growth Engine 2.0 - Company Intelligence Module
 Due Diligence data from official Finnish sources
@@ -45,6 +46,9 @@ class CompanyIntel:
     
     # Kauppalehti company pages
     KAUPPALEHTI_BASE = "https://www.kauppalehti.fi/yritykset/yritys"
+    
+    # Asiakastieto.fi - reliable fallback for financial data
+    ASIAKASTIETO_BASE = "https://www.asiakastieto.fi/yritykset/fi"
     
     def __init__(self):
         self.client = httpx.AsyncClient(
@@ -451,9 +455,9 @@ class CompanyIntel:
     
     async def _kauppalehti_get_company(self, business_id: str) -> Optional[Dict[str, Any]]:
         """
-        Scrape company financial data from Kauppalehti using Playwright.
+        Scrape company financial data from Kauppalehti.
         
-        Kauppalehti loads financial data via JavaScript, so we need browser rendering.
+        Note: This is scraping, may break if they change their HTML.
         """
         
         # Format: https://www.kauppalehti.fi/yritykset/yritys/01167544
@@ -462,42 +466,20 @@ class CompanyIntel:
         url = f"{self.KAUPPALEHTI_BASE}/{clean_id}"
         
         try:
-            # Try with Playwright first (for JS-rendered content)
-            try:
-                from playwright.async_api import async_playwright
-                
-                logger.info(f"[CompanyIntel] Using Playwright for Kauppalehti: {url}")
-                
-                async with async_playwright() as p:
-                    browser = await p.chromium.launch(headless=True)
-                    page = await browser.new_page()
-                    
-                    # Navigate and wait for content
-                    await page.goto(url, wait_until='networkidle', timeout=30000)
-                    
-                    # Wait for financial data to load
-                    await page.wait_for_timeout(3000)  # Give JS time to render
-                    
-                    html = await page.content()
-                    await browser.close()
-                    
-                    return self._parse_kauppalehti_html(html, business_id)
-                    
-            except ImportError:
-                logger.warning("[CompanyIntel] Playwright not available, falling back to httpx")
-                # Fallback to simple HTTP request
-                response = await self.client.get(url)
-                
-                if response.status_code == 404:
-                    return None
-                
-                response.raise_for_status()
-                html = response.text
-                return self._parse_kauppalehti_html(html, business_id)
+            response = await self.client.get(url)
             
-        except Exception as e:
-            logger.error(f"[CompanyIntel] Kauppalehti fetch error: {e}")
-            return None
+            if response.status_code == 404:
+                return None
+            
+            response.raise_for_status()
+            
+            html = response.text
+            return self._parse_kauppalehti_html(html, business_id)
+            
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return None
+            raise
     
     def _parse_kauppalehti_html(self, html: str, business_id: str) -> Optional[Dict[str, Any]]:
         """Parse Kauppalehti company page HTML"""
@@ -569,25 +551,6 @@ class CompanyIntel:
                 parsed = self._parse_financial_value(employees_elem.get_text())
                 if parsed.get('value'):
                     data['employees'] = parsed['value']
-            
-            # Method 4: Search all text for revenue patterns (for JS-rendered content)
-            if not data.get('revenue'):
-                # Look for patterns like "Liikevaihto 2,1 M€" or "Liikevaihto: 2100000"
-                text_content = soup.get_text()
-                revenue_patterns = [
-                    r'Liikevaihto[:\s]+([0-9.,\s]+)\s*M?€?',
-                    r'Liikevaihto[:\s]+([0-9.,\s]+)',
-                ]
-                for pattern in revenue_patterns:
-                    match = re.search(pattern, text_content, re.IGNORECASE)
-                    if match:
-                        value_text = match.group(1).strip()
-                        parsed = self._parse_financial_value(value_text)
-                        if parsed.get('value'):
-                            data['revenue'] = parsed['value']
-                            data['revenue_text'] = value_text
-                            logger.info(f"[CompanyIntel] Found revenue via text search: {value_text}")
-                            break
             
             # Try to extract financial history from tables
             tables = soup.find_all('table')
@@ -755,6 +718,88 @@ class CompanyIntel:
             logger.error(f"[CompanyIntel] PRH scraping error for {business_id}: {e}")
             return None
     
+    async def _asiakastieto_get_revenue(self, business_id: str, company_name: str = None) -> Optional[Dict[str, Any]]:
+        """
+        Scrape financial data from Asiakastieto.fi.
+        
+        This is more reliable than Kauppalehti as it renders server-side.
+        Returns dict with revenue, employees, profit.
+        """
+        try:
+            # Format: https://www.asiakastieto.fi/yritykset/fi/valio-oy/01162976/yleiskuva
+            clean_id = business_id.replace('-', '')
+            
+            # Create URL-safe company name
+            if company_name:
+                # valio oy -> valio-oy
+                name_slug = company_name.lower().replace(' ', '-').replace('ä', 'a').replace('ö', 'o')
+                name_slug = re.sub(r'[^a-z0-9-]', '', name_slug)
+            else:
+                name_slug = 'company'
+            
+            url = f"{self.ASIAKASTIETO_BASE}/{name_slug}/{clean_id}/yleiskuva"
+            logger.info(f"[CompanyIntel] Fetching Asiakastieto: {url}")
+            
+            response = await self.client.get(url, timeout=15.0)
+            
+            if response.status_code != 200:
+                logger.warning(f"[CompanyIntel] Asiakastieto returned {response.status_code}")
+                return None
+            
+            html = response.text
+            soup = BeautifulSoup(html, 'html.parser')
+            
+            data = {
+                'business_id': business_id,
+                'source': 'asiakastieto'
+            }
+            
+            # Parse the financial data from the structured layout
+            # Look for "Liikevaihto" header followed by value
+            revenue_section = soup.find('h3', string=re.compile('Liikevaihto', re.IGNORECASE))
+            if revenue_section:
+                # Get next sibling or parent's next element with the value
+                value_elem = revenue_section.find_next(['p', 'div', 'span'])
+                if value_elem:
+                    value_text = value_elem.get_text(strip=True)
+                    parsed = self._parse_financial_value(value_text)
+                    if parsed.get('value'):
+                        data['revenue'] = int(parsed['value'])
+                        data['revenue_text'] = value_text
+                        logger.info(f"[CompanyIntel] ✅ Asiakastieto revenue: {value_text} -> €{data['revenue']:,}")
+            
+            # Look for employees "Henkilöstö"
+            employees_section = soup.find('h3', string=re.compile('Henkilöstö', re.IGNORECASE))
+            if employees_section:
+                value_elem = employees_section.find_next(['p', 'div', 'span'])
+                if value_elem:
+                    value_text = value_elem.get_text(strip=True)
+                    parsed = self._parse_financial_value(value_text)
+                    if parsed.get('value'):
+                        data['employees'] = int(parsed['value'])
+                        data['employees_text'] = value_text
+            
+            # Look for profit "Liikevoitto"
+            profit_section = soup.find('h3', string=re.compile('Liikevoitto', re.IGNORECASE))
+            if profit_section:
+                value_elem = profit_section.find_next(['p', 'div', 'span'])
+                if value_elem:
+                    value_text = value_elem.get_text(strip=True)
+                    parsed = self._parse_financial_value(value_text)
+                    if parsed.get('value'):
+                        data['profit'] = int(parsed['value'])
+                        data['profit_text'] = value_text
+            
+            if data.get('revenue') or data.get('employees'):
+                return data
+            
+            logger.warning(f"[CompanyIntel] No financial data found on Asiakastieto for {business_id}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"[CompanyIntel] Asiakastieto scraping error for {business_id}: {e}")
+            return None
+    
     # =========================================================================
     # HELPERS
     # =========================================================================
@@ -836,9 +881,32 @@ class CompanyIntel:
             if kl_data.get('financial_history'):
                 profile['financial_history'] = kl_data['financial_history']
         
-        # FALLBACK: Try PRH scraping if no revenue from Kauppalehti
+        # FALLBACK 1: Try Asiakastieto.fi if no revenue from Kauppalehti
         if not profile.get('revenue') and business_id:
-            logger.warning(f"[CompanyIntel] No revenue from Kauppalehti, trying PRH scraping for {business_id}")
+            logger.info(f"[CompanyIntel] No revenue from Kauppalehti, trying Asiakastieto.fi for {business_id}")
+            try:
+                asiakastieto_data = await self._asiakastieto_get_revenue(
+                    business_id, 
+                    profile.get('name')
+                )
+                if asiakastieto_data:
+                    if asiakastieto_data.get('revenue'):
+                        profile['revenue'] = asiakastieto_data['revenue']
+                        profile['revenue_text'] = asiakastieto_data.get('revenue_text')
+                        profile['sources'].append('asiakastieto')
+                        logger.info(f"[CompanyIntel] ✅ Got revenue from Asiakastieto: €{profile['revenue']:,}")
+                    if asiakastieto_data.get('employees') and not profile.get('employees'):
+                        profile['employees'] = asiakastieto_data['employees']
+                        profile['employees_text'] = asiakastieto_data.get('employees_text')
+                    if asiakastieto_data.get('profit') and not profile.get('profit'):
+                        profile['profit'] = asiakastieto_data['profit']
+                        profile['profit_text'] = asiakastieto_data.get('profit_text')
+            except Exception as e:
+                logger.warning(f"[CompanyIntel] Asiakastieto scraping failed: {e}")
+        
+        # FALLBACK 2: Try PRH scraping if still no revenue
+        if not profile.get('revenue') and business_id:
+            logger.warning(f"[CompanyIntel] No revenue from Asiakastieto, trying PRH scraping for {business_id}")
             try:
                 prh_revenue = await self._scrape_prh_revenue(business_id)
                 if prh_revenue:
