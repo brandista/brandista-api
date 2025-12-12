@@ -695,7 +695,68 @@ async def websocket_agent_analysis(
                     # Get additional Strategist data
                     market_position = strategist_result.get('market_position', '') if strategist_result else ''
                     strategic_score = strategist_result.get('strategic_score', 0) if strategist_result else 0
-                    creative_boldness = strategist_result.get('creative_boldness', 50) if strategist_result else 50
+                    # creative_boldness will be generated below with full analysis
+                    creative_boldness_score = strategist_result.get('overall_score', 50) if strategist_result else 50
+                    
+                    # === GENERATE FULL CREATIVE BOLDNESS ANALYSIS ===
+                    creative_boldness = None
+                    try:
+                        from main import analyze_creative_boldness
+                        if your_analysis and analyst_result:
+                            competitor_analyses = analyst_result.get('competitor_analyses', [])
+                            creative_boldness = await analyze_creative_boldness(
+                                your_analysis,
+                                competitor_analyses,
+                                language
+                            )
+                            logger.info(f"[WS] Creative boldness generated: score={creative_boldness.get('creative_boldness_score', 'N/A')}")
+                    except Exception as e:
+                        logger.warning(f"[WS] Creative boldness generation failed: {e}")
+                        # Fallback to basic structure
+                        classification = 'differentiator' if creative_boldness_score >= 70 else 'conventional' if creative_boldness_score >= 50 else 'generic'
+                        creative_boldness = {
+                            "creative_boldness_score": creative_boldness_score,
+                            "classification": classification,
+                            "visual_boldness_analysis": None,
+                            "narrative_boldness_analysis": None,
+                            "competitive_creative_position": f"Luova rohkeuspistemäärä: {creative_boldness_score}/100",
+                            "specific_observations": [],
+                            "opportunities": [],
+                            "strategic_recommendation": None
+                        }
+                    
+                    # === GENERATE BUSINESS IMPACT ===
+                    business_impact = None
+                    try:
+                        from business_impact_service import calculate_unified_business_impact
+                        
+                        # Get revenue from company intel or Guardian
+                        company_revenue = None
+                        if your_company and your_company.get('revenue'):
+                            company_revenue = your_company.get('revenue')
+                        
+                        # Get score breakdown from your_analysis
+                        basic = your_analysis.get('basic_analysis', {})
+                        breakdown = basic.get('score_breakdown', {})
+                        content = your_analysis.get('detailed_analysis', {}).get('content_analysis', {})
+                        ux = your_analysis.get('detailed_analysis', {}).get('ux_analysis', {})
+                        
+                        impact_result = calculate_unified_business_impact(
+                            digital_maturity_score=your_score,
+                            company_intel_revenue=company_revenue,
+                            seo_score=breakdown.get('seo_basics', 0),
+                            mobile_score=breakdown.get('mobile', 0),
+                            content_score=content.get('content_quality_score', 50),
+                            ux_score=ux.get('overall_ux_score', 50),
+                            security_score=breakdown.get('security', 0),
+                            language=language
+                        )
+                        business_impact = impact_result.to_dict() if hasattr(impact_result, 'to_dict') else impact_result
+                        logger.info(f"[WS] Business impact generated: uplift={business_impact.get('revenue_uplift_range', 'N/A')}")
+                    except Exception as e:
+                        logger.warning(f"[WS] Business impact generation failed: {e}")
+                        # Use Guardian's revenue_impact as fallback
+                        business_impact = revenue_impact if revenue_impact else {}
                     
                     # Get Prospector advantages (map to strings for frontend)
                     advantages_raw = prospector_result.get('competitive_advantages', []) if prospector_result else []
@@ -783,6 +844,12 @@ async def websocket_agent_analysis(
                             # AI Analysis data (from your_analysis)
                             "your_company_intel": your_company,  # Alias for compatibility
                             "ai_analysis": serialize_for_json(your_analysis.get('ai_analysis', {})),
+                            
+                            # Full your_analysis for detailed views (includes creative_boldness if in ai_analysis)
+                            "your_analysis": serialize_for_json(your_analysis),
+                            
+                            # Business Impact (unified format)
+                            "business_impact": serialize_for_json(business_impact),
                             
                             # Full agent results for deep dive views (serialized to avoid Pydantic issues)
                             "agent_results": serialize_for_json({
