@@ -1,0 +1,30 @@
+# ============================================================================
+# RAILWAY NIXPACKS CONFIGURATION
+# Project: Brandista API
+# Updated: 2025-11-01
+# Python 3.11 + Playwright + Chromium
+# ============================================================================
+
+[phases.setup]
+nixPkgs = [
+    "python311",      # Python 3.11 (upgrade from 3.10)
+    "nodejs",         # Required for Playwright
+    "chromium"        # Browser automation
+]
+
+[phases.install]
+cmds = [
+    # Upgrade pip for better compatibility
+    "pip install --upgrade pip setuptools wheel",
+    
+    # Install Python dependencies
+    "pip install -r requirements.txt",
+    
+    # Install Playwright browsers
+    "playwright install chromium",
+    "playwright install-deps chromium"
+]
+
+[start]
+# Your main.py file
+cmd = "python main.py"

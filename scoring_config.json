@@ -1,0 +1,9 @@
+{
+  "content_thresholds": {
+    "excellent": 1500,
+    "good": 1000,
+    "fair": 700,
+    "basic": 400,
+    "minimal": 200
+  }
+}
