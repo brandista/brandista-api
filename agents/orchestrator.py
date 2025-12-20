@@ -361,56 +361,6 @@ class GrowthEngineOrchestrator:
                 self._on_agent_complete(agent_id, result)
             except Exception as e:
                 logger.error(f"[Orchestrator] Agent complete callback error: {e}")
-        logger.info(f"[Orchestrator] Competitors: {competitor_urls}")
-        logger.info(f"[Orchestrator] Language: {language}")
-        
-        errors = []
-        
-        try:
-            # Suorita tierit järjestyksessä
-            for tier_idx, tier_agents in enumerate(self.EXECUTION_PLAN, 1):
-                logger.info(f"[Orchestrator] === TIER {tier_idx}: {tier_agents} ===")
-                
-                # Tarkista riippuvuudet
-                if not self._check_dependencies(tier_agents):
-                    error_msg = f"Dependencies not met for tier {tier_idx}"
-                    logger.error(f"[Orchestrator] {error_msg}")
-                    errors.append(error_msg)
-                    continue
-                
-                # Suorita agentit (rinnakkain jos useampi)
-                if len(tier_agents) > 1:
-                    # Rinnakkainen suoritus
-                    results = await self._run_parallel(tier_agents)
-                else:
-                    # Yksittäinen agentti
-                    results = [await self._run_agent(tier_agents[0])]
-                
-                # Tallenna tulokset kontekstiin
-                for result in results:
-                    if result:
-                        self.context.agent_results[result.agent_id] = result
-                        
-                        if self._on_agent_complete:
-                            self._on_agent_complete(result.agent_id, result)
-                        
-                        if result.status == AgentStatus.ERROR:
-                            errors.append(f"{result.agent_name}: {result.error}")
-                
-                logger.info(f"[Orchestrator] Tier {tier_idx} complete")
-        
-        except Exception as e:
-            logger.error(f"[Orchestrator] Fatal error: {e}", exc_info=True)
-            errors.append(f"Orchestration error: {str(e)}")
-        
-        finally:
-            self.is_running = False
-        
-        # Koosta lopputulos
-        end_time = datetime.now()
-        execution_time = int((end_time - self.start_time).total_seconds() * 1000)
-        
-        return self._build_result(execution_time, errors)
     
     async def _run_agent(self, agent_id: str) -> Optional[AgentResult]:
         """Suorita yksittäinen agentti"""
