@@ -643,7 +643,6 @@ APP_DESCRIPTION = """Production-ready website analysis with configurable scoring
 # ============================================================================
 
 # Configuration from environment
-SECRET_KEY = os.getenv("SECRET_KEY", "brandista-key-" + os.urandom(32).hex())
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
 
