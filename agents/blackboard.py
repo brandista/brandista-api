@@ -1,26 +1,42 @@
 # -*- coding: utf-8 -*-
 """
 Growth Engine 2.0 - Blackboard Architecture
-TRUE SWARM AGENTS - Shared working memory
+TRUE SWARM EDITION - Reactive shared memory
 
 The Blackboard is where agents:
-- Publish intermediate findings
+- Publish intermediate findings in real-time
 - Subscribe to updates from other agents
 - Query shared knowledge
-- Coordinate through shared state
+- Build collective understanding
 
-This enables collective intelligence.
+This enables TRUE collective intelligence where each agent's
+discoveries immediately benefit all other agents.
 """
 
 import asyncio
 import logging
 import re
-from typing import Dict, Any, List, Optional, Callable, Set, Pattern
-from datetime import datetime
+from typing import Dict, Any, List, Optional, Callable, Set, Pattern, Union
+from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from collections import defaultdict
+from enum import Enum
+import json
 
 logger = logging.getLogger(__name__)
+
+
+class DataCategory(Enum):
+    """Categories of blackboard data"""
+    COMPETITOR = "competitor"
+    ANALYSIS = "analysis"
+    THREAT = "threat"
+    OPPORTUNITY = "opportunity"
+    SCORE = "score"
+    INSIGHT = "insight"
+    RECOMMENDATION = "recommendation"
+    ACTION = "action"
+    META = "meta"
 
 
 @dataclass
@@ -28,10 +44,9 @@ class BlackboardEntry:
     """
     Single entry on the blackboard.
     
-    Entries are organized by key (hierarchical namespace).
-    Example keys:
-    - "scout.competitors.high_threat"
-    - "analyst.scores.trend"
+    Keys use hierarchical namespace:
+    - "scout.competitors.discovered"
+    - "analyst.scores.security"
     - "guardian.threats.critical"
     """
     
@@ -39,9 +54,12 @@ class BlackboardEntry:
     value: Any
     agent_id: str
     timestamp: datetime = field(default_factory=datetime.now)
-    ttl: Optional[int] = None  # Time to live in seconds
+    ttl: Optional[int] = None
     tags: Set[str] = field(default_factory=set)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    category: Optional[DataCategory] = None
+    version: int = 1
+    previous_value: Any = None
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary"""
@@ -52,137 +70,217 @@ class BlackboardEntry:
             'timestamp': self.timestamp.isoformat(),
             'ttl': self.ttl,
             'tags': list(self.tags),
-            'metadata': self.metadata
+            'metadata': self.metadata,
+            'category': self.category.value if self.category else None,
+            'version': self.version
         }
     
     def is_expired(self) -> bool:
         """Check if entry has expired"""
         if self.ttl is None:
             return False
-        
         age = (datetime.now() - self.timestamp).total_seconds()
         return age > self.ttl
+    
+    def has_changed(self, new_value: Any) -> bool:
+        """Check if value has changed significantly"""
+        if self.value is None:
+            return new_value is not None
+        
+        # Deep comparison for dicts
+        if isinstance(self.value, dict) and isinstance(new_value, dict):
+            return json.dumps(self.value, sort_keys=True) != json.dumps(new_value, sort_keys=True)
+        
+        return self.value != new_value
+
+
+@dataclass
+class Subscription:
+    """Blackboard subscription"""
+    pattern: str
+    agent_id: str
+    callback: Callable
+    categories: Optional[Set[DataCategory]] = None
+    created_at: datetime = field(default_factory=datetime.now)
+    trigger_count: int = 0
 
 
 class Blackboard:
     """
     Shared working memory for agent swarm.
     
-    Think of this as a bulletin board where agents can:
-    - Pin notes (publish)
-    - Read notes (query)
-    - Get notified when new notes appear (subscribe)
-    
-    This enables agents to:
-    1. See each other's thought process
-    2. React to findings in real-time
-    3. Build collective understanding
+    The bulletin board where agents pin notes, read others' findings,
+    and get notified in real-time when relevant data appears.
     """
     
     def __init__(self):
         # Storage: key -> BlackboardEntry
         self._data: Dict[str, BlackboardEntry] = {}
         
-        # History: all entries ever posted
+        # History: all entries ever posted (for replay)
         self._history: List[BlackboardEntry] = []
         
-        # Subscriptions: pattern -> [(agent_id, callback)]
-        self._subscriptions: Dict[str, List[tuple[str, Callable]]] = defaultdict(list)
+        # Subscriptions: pattern -> [Subscription]
+        self._subscriptions: Dict[str, List[Subscription]] = defaultdict(list)
         
-        # Compiled regex patterns for subscriptions
-        self._subscription_patterns: Dict[str, Pattern] = {}
+        # Compiled regex patterns
+        self._compiled_patterns: Dict[str, Pattern] = {}
+        
+        # Index by category for fast lookup
+        self._by_category: Dict[DataCategory, Set[str]] = defaultdict(set)
+        
+        # Index by agent
+        self._by_agent: Dict[str, Set[str]] = defaultdict(set)
+        
+        # Event callbacks for monitoring
+        self._on_publish: Optional[Callable] = None
+        self._on_subscribe: Optional[Callable] = None
         
         # Statistics
         self._stats = {
             'total_writes': 0,
             'total_reads': 0,
             'total_notifications': 0,
+            'total_subscriptions': 0,
             'by_agent': defaultdict(lambda: {'writes': 0, 'reads': 0}),
-            'by_key_prefix': defaultdict(int)
+            'by_category': defaultdict(int)
         }
+        
+        # Lock for thread safety
+        self._lock = asyncio.Lock()
         
         logger.info("[Blackboard] 📋 Blackboard initialized")
     
-    def publish(
+    def set_event_callbacks(
+        self,
+        on_publish: Optional[Callable] = None,
+        on_subscribe: Optional[Callable] = None
+    ):
+        """Set callbacks for blackboard events"""
+        self._on_publish = on_publish
+        self._on_subscribe = on_subscribe
+    
+    async def publish(
         self,
         key: str,
         value: Any,
         agent_id: str,
         ttl: Optional[int] = None,
         tags: Optional[Set[str]] = None,
-        metadata: Optional[Dict[str, Any]] = None
-    ):
+        metadata: Optional[Dict[str, Any]] = None,
+        category: Optional[DataCategory] = None
+    ) -> BlackboardEntry:
         """
         Publish data to blackboard.
         
         Args:
             key: Hierarchical key (e.g. "scout.competitors.new")
-            value: Data to publish (any type)
+            value: Data to publish
             agent_id: Agent publishing
-            ttl: Optional time-to-live in seconds
-            tags: Optional tags for categorization
-            metadata: Optional metadata
+            ttl: Time-to-live in seconds
+            tags: Tags for categorization
+            metadata: Additional metadata
+            category: Data category for indexing
         
-        Example:
-            blackboard.publish(
-                key="scout.competitors.high_threat",
-                value={"url": "example.com", "score": 95},
-                agent_id="scout",
-                tags={"threat", "immediate"}
-            )
+        Returns:
+            The created BlackboardEntry
         """
-        entry = BlackboardEntry(
-            key=key,
-            value=value,
-            agent_id=agent_id,
-            ttl=ttl,
-            tags=tags or set(),
-            metadata=metadata or {}
-        )
-        
-        # Store entry
-        self._data[key] = entry
-        self._history.append(entry)
-        
-        # Update stats
-        self._stats['total_writes'] += 1
-        self._stats['by_agent'][agent_id]['writes'] += 1
-        
-        key_prefix = key.split('.')[0] if '.' in key else key
-        self._stats['by_key_prefix'][key_prefix] += 1
+        async with self._lock:
+            # Check for existing entry (versioning)
+            existing = self._data.get(key)
+            version = 1
+            previous_value = None
+            
+            if existing:
+                version = existing.version + 1
+                previous_value = existing.value
+                
+                # Skip if value hasn't changed
+                if not existing.has_changed(value):
+                    logger.debug(f"[Blackboard] Skipping unchanged value for '{key}'")
+                    return existing
+            
+            # Create entry
+            entry = BlackboardEntry(
+                key=key,
+                value=value,
+                agent_id=agent_id,
+                ttl=ttl,
+                tags=tags or set(),
+                metadata=metadata or {},
+                category=category,
+                version=version,
+                previous_value=previous_value
+            )
+            
+            # Store entry
+            self._data[key] = entry
+            self._history.append(entry)
+            
+            # Update indexes
+            if category:
+                self._by_category[category].add(key)
+            self._by_agent[agent_id].add(key)
+            
+            # Update stats
+            self._stats['total_writes'] += 1
+            self._stats['by_agent'][agent_id]['writes'] += 1
+            if category:
+                self._stats['by_category'][category.value] += 1
         
         logger.info(
-            f"[Blackboard] 📌 {agent_id} published to '{key}': "
-            f"{str(value)[:100]}"
+            f"[Blackboard] 📌 {agent_id} published '{key}' "
+            f"(v{version}): {str(value)[:80]}..."
         )
         
-        # Notify subscribers
-        self._notify_subscribers(entry)
+        # Notify subscribers (outside lock)
+        await self._notify_subscribers(entry)
+        
+        # Fire event callback
+        if self._on_publish:
+            try:
+                if asyncio.iscoroutinefunction(self._on_publish):
+                    await self._on_publish(entry)
+                else:
+                    self._on_publish(entry)
+            except Exception as e:
+                logger.error(f"[Blackboard] Event callback error: {e}")
+        
+        return entry
+    
+    def publish_sync(
+        self,
+        key: str,
+        value: Any,
+        agent_id: str,
+        **kwargs
+    ):
+        """Synchronous publish (schedules async)"""
+        asyncio.create_task(self.publish(key, value, agent_id, **kwargs))
     
     def get(
         self,
         key: str,
-        agent_id: Optional[str] = None
-    ) -> Optional[Any]:
+        agent_id: Optional[str] = None,
+        default: Any = None
+    ) -> Any:
         """
         Get value from blackboard.
         
         Args:
             key: Key to retrieve
-            agent_id: Optional agent requesting (for stats)
-            
-        Returns:
-            Value or None if not found
+            agent_id: Agent requesting (for stats)
+            default: Default value if not found
         """
         entry = self._data.get(key)
         
         if entry is None:
-            return None
+            return default
         
-        # Check if expired
+        # Check expiration
         if entry.is_expired():
             del self._data[key]
-            return None
+            return default
         
         # Update stats
         self._stats['total_reads'] += 1
@@ -192,7 +290,7 @@ class Blackboard:
         return entry.value
     
     def get_entry(self, key: str) -> Optional[BlackboardEntry]:
-        """Get full entry (including metadata)"""
+        """Get full entry including metadata"""
         entry = self._data.get(key)
         
         if entry and entry.is_expired():
@@ -201,49 +299,64 @@ class Blackboard:
         
         return entry
     
+    def get_many(
+        self,
+        keys: List[str],
+        agent_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Get multiple values at once"""
+        result = {}
+        for key in keys:
+            value = self.get(key, agent_id)
+            if value is not None:
+                result[key] = value
+        return result
+    
     def query(
         self,
         pattern: str,
         agent_id: Optional[str] = None,
-        tags: Optional[Set[str]] = None
+        tags: Optional[Set[str]] = None,
+        category: Optional[DataCategory] = None,
+        limit: int = 100
     ) -> List[BlackboardEntry]:
         """
         Query blackboard with pattern matching.
         
         Args:
-            pattern: Glob pattern (e.g. "scout.*", "*.high_threat")
-            agent_id: Optional agent querying (for stats)
-            tags: Optional filter by tags
-            
-        Returns:
-            List of matching entries
-        
-        Example:
-            # Get all scout findings
-            entries = blackboard.query("scout.*")
-            
-            # Get all high threat items
-            entries = blackboard.query("*.high_threat")
-            
-            # Get by tags
-            entries = blackboard.query("*", tags={"critical"})
+            pattern: Glob pattern (e.g. "scout.*", "*.threat")
+            agent_id: Agent querying
+            tags: Filter by tags
+            category: Filter by category
+            limit: Max results
         """
-        # Convert glob to regex
-        regex_pattern = pattern.replace('.', r'\.').replace('*', '.*')
-        regex = re.compile(f'^{regex_pattern}$')
+        # Get or compile pattern
+        if pattern not in self._compiled_patterns:
+            regex_pattern = pattern.replace('.', r'\.').replace('*', '.*')
+            self._compiled_patterns[pattern] = re.compile(f'^{regex_pattern}$')
         
+        regex = self._compiled_patterns[pattern]
         results = []
         
-        for key, entry in self._data.items():
-            # Check expiration
-            if entry.is_expired():
+        # Start with category index if available
+        if category:
+            keys_to_check = self._by_category.get(category, set())
+        else:
+            keys_to_check = self._data.keys()
+        
+        for key in keys_to_check:
+            if len(results) >= limit:
+                break
+            
+            entry = self._data.get(key)
+            if not entry or entry.is_expired():
                 continue
             
-            # Match pattern
+            # Pattern match
             if not regex.match(key):
                 continue
             
-            # Match tags if specified
+            # Tag filter
             if tags and not tags.issubset(entry.tags):
                 continue
             
@@ -253,195 +366,260 @@ class Blackboard:
         if agent_id:
             self._stats['by_agent'][agent_id]['reads'] += len(results)
         
-        logger.info(
-            f"[Blackboard] 🔍 Query '{pattern}' returned {len(results)} entries"
-        )
+        logger.debug(f"[Blackboard] 🔍 Query '{pattern}' returned {len(results)} entries")
         
         return results
+    
+    def query_by_category(
+        self,
+        category: DataCategory,
+        agent_id: Optional[str] = None,
+        limit: int = 100
+    ) -> List[BlackboardEntry]:
+        """Query by category (fast indexed lookup)"""
+        keys = list(self._by_category.get(category, set()))[:limit]
+        entries = []
+        
+        for key in keys:
+            entry = self._data.get(key)
+            if entry and not entry.is_expired():
+                entries.append(entry)
+        
+        if agent_id:
+            self._stats['by_agent'][agent_id]['reads'] += len(entries)
+        
+        return entries
+    
+    def query_by_agent(
+        self,
+        from_agent: str,
+        requester_id: Optional[str] = None,
+        limit: int = 100
+    ) -> List[BlackboardEntry]:
+        """Get all entries published by specific agent"""
+        keys = list(self._by_agent.get(from_agent, set()))[:limit]
+        entries = []
+        
+        for key in keys:
+            entry = self._data.get(key)
+            if entry and not entry.is_expired():
+                entries.append(entry)
+        
+        if requester_id:
+            self._stats['by_agent'][requester_id]['reads'] += len(entries)
+        
+        return entries
     
     def subscribe(
         self,
         pattern: str,
         agent_id: str,
-        callback: Callable[[BlackboardEntry], None]
+        callback: Callable[[BlackboardEntry], None],
+        categories: Optional[Set[DataCategory]] = None
     ):
         """
-        Subscribe to blackboard updates matching pattern.
-        
-        Callback will be called whenever a matching entry is published.
+        Subscribe to blackboard updates.
         
         Args:
             pattern: Glob pattern to match
             agent_id: Agent subscribing
             callback: Function to call on match
-        
-        Example:
-            def on_threat_found(entry: BlackboardEntry):
-                print(f"Threat found: {entry.value}")
-            
-            blackboard.subscribe(
-                pattern="*.high_threat",
-                agent_id="guardian",
-                callback=on_threat_found
-            )
+            categories: Optional category filter
         """
-        # Store subscription
-        self._subscriptions[pattern].append((agent_id, callback))
-        
-        # Compile regex pattern if not already done
-        if pattern not in self._subscription_patterns:
-            regex_pattern = pattern.replace('.', r'\.').replace('*', '.*')
-            self._subscription_patterns[pattern] = re.compile(f'^{regex_pattern}$')
-        
-        logger.info(
-            f"[Blackboard] 📬 {agent_id} subscribed to pattern '{pattern}'"
+        subscription = Subscription(
+            pattern=pattern,
+            agent_id=agent_id,
+            callback=callback,
+            categories=categories
         )
+        
+        self._subscriptions[pattern].append(subscription)
+        
+        # Compile pattern if needed
+        if pattern not in self._compiled_patterns:
+            regex_pattern = pattern.replace('.', r'\.').replace('*', '.*')
+            self._compiled_patterns[pattern] = re.compile(f'^{regex_pattern}$')
+        
+        self._stats['total_subscriptions'] += 1
+        
+        logger.info(f"[Blackboard] 📬 {agent_id} subscribed to '{pattern}'")
+        
+        # Fire callback
+        if self._on_subscribe:
+            try:
+                self._on_subscribe(subscription)
+            except Exception:
+                pass
     
-    def unsubscribe(
-        self,
-        pattern: str,
-        agent_id: str
-    ):
+    def unsubscribe(self, pattern: str, agent_id: str):
         """Unsubscribe from pattern"""
         if pattern in self._subscriptions:
             self._subscriptions[pattern] = [
-                (aid, cb) for aid, cb in self._subscriptions[pattern]
-                if aid != agent_id
+                sub for sub in self._subscriptions[pattern]
+                if sub.agent_id != agent_id
             ]
             
-            # Clean up if no subscribers left
+            # Clean up empty patterns
             if not self._subscriptions[pattern]:
                 del self._subscriptions[pattern]
-                if pattern in self._subscription_patterns:
-                    del self._subscription_patterns[pattern]
     
-    def _notify_subscribers(self, entry: BlackboardEntry):
-        """Notify all subscribers matching the entry's key"""
+    def unsubscribe_all(self, agent_id: str):
+        """Remove all subscriptions for an agent"""
+        for pattern in list(self._subscriptions.keys()):
+            self._subscriptions[pattern] = [
+                sub for sub in self._subscriptions[pattern]
+                if sub.agent_id != agent_id
+            ]
+            if not self._subscriptions[pattern]:
+                del self._subscriptions[pattern]
+    
+    async def _notify_subscribers(self, entry: BlackboardEntry):
+        """Notify all matching subscribers"""
         notifications = 0
         
         for pattern, subscribers in self._subscriptions.items():
-            regex = self._subscription_patterns[pattern]
+            regex = self._compiled_patterns.get(pattern)
+            if not regex:
+                continue
             
-            if regex.match(entry.key):
-                for agent_id, callback in subscribers:
-                    try:
-                        # Call callback (can be async)
-                        if asyncio.iscoroutinefunction(callback):
-                            # Schedule async callback
-                            asyncio.create_task(callback(entry))
-                        else:
-                            callback(entry)
-                        
-                        notifications += 1
-                        
-                    except Exception as e:
-                        logger.error(
-                            f"[Blackboard] ❌ Callback error for {agent_id}: {e}",
-                            exc_info=True
-                        )
+            if not regex.match(entry.key):
+                continue
+            
+            for sub in subscribers:
+                # Skip self-notifications
+                if sub.agent_id == entry.agent_id:
+                    continue
+                
+                # Category filter
+                if sub.categories and entry.category not in sub.categories:
+                    continue
+                
+                try:
+                    if asyncio.iscoroutinefunction(sub.callback):
+                        await sub.callback(entry)
+                    else:
+                        sub.callback(entry)
+                    
+                    sub.trigger_count += 1
+                    notifications += 1
+                    
+                except Exception as e:
+                    logger.error(
+                        f"[Blackboard] ❌ Callback error for {sub.agent_id}: {e}"
+                    )
         
         if notifications > 0:
             self._stats['total_notifications'] += notifications
-            logger.info(
-                f"[Blackboard] 🔔 Notified {notifications} subscribers "
-                f"for key '{entry.key}'"
+            logger.debug(
+                f"[Blackboard] 🔔 Notified {notifications} subscribers for '{entry.key}'"
             )
     
     def delete(self, key: str):
-        """Delete entry from blackboard"""
+        """Delete entry"""
         if key in self._data:
+            entry = self._data[key]
+            
+            # Remove from indexes
+            if entry.category:
+                self._by_category[entry.category].discard(key)
+            self._by_agent[entry.agent_id].discard(key)
+            
             del self._data[key]
-            logger.info(f"[Blackboard] 🗑️ Deleted '{key}'")
+            logger.debug(f"[Blackboard] 🗑️ Deleted '{key}'")
     
     def clear(self, pattern: Optional[str] = None):
-        """
-        Clear blackboard entries.
-        
-        Args:
-            pattern: Optional glob pattern (None = clear all)
-        """
+        """Clear entries matching pattern (or all)"""
         if pattern is None:
-            # Clear everything
             self._data.clear()
+            self._by_category.clear()
+            self._by_agent.clear()
             logger.info("[Blackboard] 🗑️ Cleared all entries")
         else:
-            # Clear matching pattern
-            regex_pattern = pattern.replace('.', r'\.').replace('*', '.*')
-            regex = re.compile(f'^{regex_pattern}$')
-            
-            keys_to_delete = [
-                key for key in self._data.keys()
-                if regex.match(key)
-            ]
+            regex = re.compile(pattern.replace('.', r'\.').replace('*', '.*'))
+            keys_to_delete = [k for k in self._data if regex.match(k)]
             
             for key in keys_to_delete:
-                del self._data[key]
+                self.delete(key)
             
-            logger.info(
-                f"[Blackboard] 🗑️ Cleared {len(keys_to_delete)} entries "
-                f"matching '{pattern}'"
-            )
+            logger.info(f"[Blackboard] 🗑️ Cleared {len(keys_to_delete)} entries")
+    
+    def cleanup_expired(self) -> int:
+        """Remove expired entries"""
+        expired = [k for k, e in self._data.items() if e.is_expired()]
+        
+        for key in expired:
+            self.delete(key)
+        
+        if expired:
+            logger.info(f"[Blackboard] 🧹 Cleaned {len(expired)} expired entries")
+        
+        return len(expired)
     
     def get_all_keys(self) -> List[str]:
         """Get all current keys"""
         return list(self._data.keys())
     
     def get_stats(self) -> Dict[str, Any]:
-        """Get blackboard statistics"""
+        """Get statistics"""
         return {
             'total_entries': len(self._data),
             'total_writes': self._stats['total_writes'],
             'total_reads': self._stats['total_reads'],
             'total_notifications': self._stats['total_notifications'],
-            'by_agent': dict(self._stats['by_agent']),
-            'by_key_prefix': dict(self._stats['by_key_prefix']),
-            'active_subscriptions': sum(
-                len(subs) for subs in self._subscriptions.values()
-            ),
-            'subscription_patterns': list(self._subscriptions.keys())
+            'total_subscriptions': self._stats['total_subscriptions'],
+            'by_agent': {k: dict(v) for k, v in self._stats['by_agent'].items()},
+            'by_category': dict(self._stats['by_category']),
+            'active_subscriptions': sum(len(s) for s in self._subscriptions.values()),
+            'subscription_patterns': list(self._subscriptions.keys()),
+            'history_size': len(self._history)
         }
     
     def get_history(
         self,
         agent_id: Optional[str] = None,
         since: Optional[datetime] = None,
+        category: Optional[DataCategory] = None,
         limit: int = 100
     ) -> List[BlackboardEntry]:
-        """
-        Get blackboard history.
-        
-        Args:
-            agent_id: Optional filter by agent
-            since: Optional filter by timestamp
-            limit: Maximum entries to return
-        """
+        """Get blackboard history"""
         history = self._history
         
-        # Filter by agent
         if agent_id:
             history = [e for e in history if e.agent_id == agent_id]
         
-        # Filter by time
         if since:
             history = [e for e in history if e.timestamp >= since]
         
-        # Limit results
+        if category:
+            history = [e for e in history if e.category == category]
+        
         return history[-limit:]
     
-    def cleanup_expired(self):
-        """Remove expired entries"""
-        expired = [
-            key for key, entry in self._data.items()
-            if entry.is_expired()
-        ]
-        
-        for key in expired:
-            del self._data[key]
-        
-        if expired:
-            logger.info(
-                f"[Blackboard] 🧹 Cleaned up {len(expired)} expired entries"
-            )
+    def get_snapshot(self) -> Dict[str, Any]:
+        """Get complete snapshot of current state"""
+        return {
+            key: entry.to_dict()
+            for key, entry in self._data.items()
+            if not entry.is_expired()
+        }
+    
+    def reset(self):
+        """Full reset"""
+        self._data.clear()
+        self._history.clear()
+        self._subscriptions.clear()
+        self._compiled_patterns.clear()
+        self._by_category.clear()
+        self._by_agent.clear()
+        self._stats = {
+            'total_writes': 0,
+            'total_reads': 0,
+            'total_notifications': 0,
+            'total_subscriptions': 0,
+            'by_agent': defaultdict(lambda: {'writes': 0, 'reads': 0}),
+            'by_category': defaultdict(int)
+        }
+        logger.info("[Blackboard] 🔄 Blackboard reset")
 
 
 # Global blackboard instance
@@ -457,6 +635,8 @@ def get_blackboard() -> Blackboard:
 
 
 def reset_blackboard():
-    """Reset global blackboard (for testing)"""
+    """Reset global blackboard"""
     global _blackboard
+    if _blackboard:
+        _blackboard.reset()
     _blackboard = None

@@ -21,7 +21,7 @@ import logging
 from typing import Dict, Any, List
 
 from .base_agent import BaseAgent
-from .types import (
+from .agent_types import (
     AnalysisContext,
     AgentPriority,
     InsightType

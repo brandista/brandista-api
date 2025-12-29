@@ -1,9 +1,12 @@
+# -*- coding: utf-8 -*-
 """
 Growth Engine 2.0 - Agent System
-Agenttipohjainen strateginen analyysi SMB:ille
+TRUE SWARM EDITION
+
+A complete multi-agent system with real inter-agent communication.
 """
 
-from .types import (
+from .agent_types import (
     AgentStatus,
     AgentPriority,
     InsightType,
@@ -12,8 +15,8 @@ from .types import (
     AgentResult,
     AnalysisContext,
     OrchestrationResult,
-    WSMessageType,
-    WSMessage
+    SwarmEvent,
+    SwarmEventType
 )
 
 from .base_agent import BaseAgent
@@ -27,42 +30,82 @@ from .planner_agent import PlannerAgent
 
 from .orchestrator import (
     GrowthEngineOrchestrator,
-    get_orchestrator
+    get_orchestrator,
+    reset_orchestrator
 )
 
-from .translations import t, AGENT_TRANSLATIONS
+from .communication import (
+    MessageBus,
+    MessageType,
+    MessagePriority,
+    AgentMessage,
+    get_message_bus,
+    reset_message_bus
+)
 
+from .blackboard import (
+    Blackboard,
+    BlackboardEntry,
+    DataCategory,
+    get_blackboard,
+    reset_blackboard
+)
+
+from .collaboration import (
+    CollaborationManager,
+    CollaborationResult,
+    VoteType,
+    get_collaboration_manager,
+    reset_collaboration_manager
+)
+
+from .task_delegation import (
+    TaskDelegationManager,
+    DynamicTask,
+    TaskStatus,
+    TaskPriority,
+    get_task_manager,
+    reset_task_manager
+)
+
+from .learning import (
+    LearningSystem,
+    get_learning_system,
+    reset_learning_system
+)
+
+__version__ = "2.1.0"
 __all__ = [
     # Types
-    'AgentStatus',
-    'AgentPriority', 
-    'InsightType',
-    'AgentInsight',
-    'AgentProgress',
-    'AgentResult',
-    'AnalysisContext',
-    'OrchestrationResult',
-    'WSMessageType',
-    'WSMessage',
-    
-    # Base
-    'BaseAgent',
+    'AgentStatus', 'AgentPriority', 'InsightType',
+    'AgentInsight', 'AgentProgress', 'AgentResult',
+    'AnalysisContext', 'OrchestrationResult',
+    'SwarmEvent', 'SwarmEventType',
     
     # Agents
-    'ScoutAgent',
-    'AnalystAgent',
-    'GuardianAgent',
-    'ProspectorAgent',
-    'StrategistAgent',
-    'PlannerAgent',
+    'BaseAgent',
+    'ScoutAgent', 'AnalystAgent', 'GuardianAgent',
+    'ProspectorAgent', 'StrategistAgent', 'PlannerAgent',
     
     # Orchestrator
-    'GrowthEngineOrchestrator',
-    'get_orchestrator',
+    'GrowthEngineOrchestrator', 'get_orchestrator', 'reset_orchestrator',
     
-    # Translations
-    't',
-    'AGENT_TRANSLATIONS',
+    # Communication
+    'MessageBus', 'MessageType', 'MessagePriority', 'AgentMessage',
+    'get_message_bus', 'reset_message_bus',
+    
+    # Blackboard
+    'Blackboard', 'BlackboardEntry', 'DataCategory',
+    'get_blackboard', 'reset_blackboard',
+    
+    # Collaboration
+    'CollaborationManager', 'CollaborationResult', 'VoteType',
+    'get_collaboration_manager', 'reset_collaboration_manager',
+    
+    # Tasks
+    'TaskDelegationManager', 'DynamicTask', 'TaskStatus', 'TaskPriority',
+    'get_task_manager', 'reset_task_manager',
+    
+    # Learning
+    'LearningSystem', 'get_learning_system', 'reset_learning_system'
 ]
-
-__version__ = '2.0.0'

@@ -1,604 +1,670 @@
 # -*- coding: utf-8 -*-
 """
-Growth Engine 2.0 - Collaborative Problem Solving
-TRUE SWARM AGENTS - Multi-agent collaboration sessions
+Growth Engine 2.0 - Agent Collaboration Framework
+TRUE SWARM EDITION - Multi-agent problem solving
 
 This enables agents to:
-- Work together on complex problems
-- Share perspectives and expertise
-- Debate solutions
-- Reach consensus
-- Make collective decisions
+- Collaborate on complex problems
+- Share perspectives and vote on solutions
+- Reach consensus through structured dialogue
+- Combine expertise from multiple agents
 
-Think of this as a "meeting room" where agents collaborate.
+This is where the swarm becomes smarter than any individual agent.
 """
 
 import asyncio
 import logging
-from typing import Dict, Any, List, Optional, Set, Callable
-from datetime import datetime
-from dataclasses import dataclass, field
 from enum import Enum
-
-from .communication import (
-    MessageBus,
-    AgentMessage,
-    MessageType,
-    MessagePriority,
-    get_message_bus
-)
-from .blackboard import (
-    Blackboard,
-    get_blackboard
-)
+from typing import Dict, Any, List, Optional, Callable, Set
+from datetime import datetime, timedelta
+from dataclasses import dataclass, field
+from collections import defaultdict
+import statistics
 
 logger = logging.getLogger(__name__)
 
 
 class CollaborationPhase(Enum):
-    """Phases of collaboration"""
-    INITIATED = "initiated"          # Session started
-    GATHERING = "gathering"          # Collecting input
-    BRAINSTORMING = "brainstorming"  # Generating ideas
-    DEBATING = "debating"            # Discussing options
-    VOTING = "voting"                # Voting on solution
-    CONSENSUS = "consensus"          # Agreement reached
-    COMPLETE = "complete"            # Session complete
-    FAILED = "failed"                # Could not reach agreement
+    """Phases of a collaboration session"""
+    INITIATED = "initiated"
+    GATHERING_PERSPECTIVES = "gathering_perspectives"
+    GENERATING_PROPOSALS = "generating_proposals"
+    VOTING = "voting"
+    FINALIZING = "finalizing"
+    COMPLETE = "complete"
+    FAILED = "failed"
+    TIMEOUT = "timeout"
+
+
+class VoteType(Enum):
+    """Types of votes"""
+    APPROVE = "approve"
+    REJECT = "reject"
+    ABSTAIN = "abstain"
+    MODIFY = "modify"
 
 
 @dataclass
-class CollaborationInput:
-    """Input from an agent in collaboration session"""
+class AgentPerspective:
+    """An agent's perspective on a problem"""
     agent_id: str
-    phase: CollaborationPhase
-    content: Any
+    perspective: str
+    confidence: float = 1.0
+    supporting_data: Dict[str, Any] = field(default_factory=dict)
+    concerns: List[str] = field(default_factory=list)
     timestamp: datetime = field(default_factory=datetime.now)
-    confidence: float = 1.0  # 0-1, how confident is agent
-    
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            'agent_id': self.agent_id,
-            'phase': self.phase.value,
-            'content': self.content,
-            'timestamp': self.timestamp.isoformat(),
-            'confidence': self.confidence
-        }
+
+
+@dataclass
+class Proposal:
+    """A proposed solution"""
+    proposal_id: str
+    proposed_by: str
+    content: str
+    rationale: str
+    implementation_steps: List[str] = field(default_factory=list)
+    estimated_impact: Optional[str] = None
+    confidence: float = 1.0
+    supporting_agents: List[str] = field(default_factory=list)
+    timestamp: datetime = field(default_factory=datetime.now)
+
+
+@dataclass
+class Vote:
+    """An agent's vote on a proposal"""
+    agent_id: str
+    proposal_id: str
+    vote_type: VoteType
+    weight: float = 1.0
+    reasoning: str = ""
+    suggested_modifications: Optional[str] = None
+    timestamp: datetime = field(default_factory=datetime.now)
 
 
 @dataclass
 class CollaborationResult:
-    """Result of collaboration session"""
+    """Result of a collaboration session"""
     session_id: str
     problem: str
-    solution: Optional[Any]
     consensus_reached: bool
-    participating_agents: List[str]
-    inputs: List[CollaborationInput]
-    final_votes: Dict[str, Any]
-    duration_seconds: float
-    phase: CollaborationPhase
+    winning_proposal: Optional[Proposal] = None
+    solution: Optional[str] = None
+    confidence: float = 0.0
+    participating_agents: List[str] = field(default_factory=list)
+    perspectives: List[AgentPerspective] = field(default_factory=list)
+    proposals: List[Proposal] = field(default_factory=list)
+    votes: List[Vote] = field(default_factory=list)
+    dissenting_opinions: List[str] = field(default_factory=list)
+    duration_seconds: float = 0.0
+    phase_reached: CollaborationPhase = CollaborationPhase.INITIATED
+    metadata: Dict[str, Any] = field(default_factory=dict)
     
     def to_dict(self) -> Dict[str, Any]:
         return {
             'session_id': self.session_id,
             'problem': self.problem,
-            'solution': self.solution,
             'consensus_reached': self.consensus_reached,
+            'solution': self.solution,
+            'confidence': self.confidence,
             'participating_agents': self.participating_agents,
-            'inputs': [i.to_dict() for i in self.inputs],
-            'final_votes': self.final_votes,
             'duration_seconds': self.duration_seconds,
-            'phase': self.phase.value
+            'dissenting_opinions': self.dissenting_opinions
         }
 
 
+@dataclass
 class CollaborationSession:
-    """
-    Multi-agent collaboration session.
+    """Active collaboration session"""
+    session_id: str
+    problem: str
+    facilitator: str
+    agents: List[str]
+    phase: CollaborationPhase = CollaborationPhase.INITIATED
+    perspectives: Dict[str, AgentPerspective] = field(default_factory=dict)
+    proposals: Dict[str, Proposal] = field(default_factory=dict)
+    votes: Dict[str, List[Vote]] = field(default_factory=lambda: defaultdict(list))
+    created_at: datetime = field(default_factory=datetime.now)
+    timeout: float = 60.0
+    consensus_threshold: float = 0.7
+    min_participation: float = 0.5
     
-    This is where the magic happens - agents work TOGETHER
-    to solve complex problems that require multiple perspectives.
+    # Async coordination
+    perspective_event: asyncio.Event = field(default_factory=asyncio.Event)
+    proposal_event: asyncio.Event = field(default_factory=asyncio.Event)
+    vote_event: asyncio.Event = field(default_factory=asyncio.Event)
     
-    Example use cases:
-    - "Should we enter mobile-first market?"
-    - "What's our biggest competitive threat?"
-    - "How to prioritize Q1 initiatives?"
-    """
+    def is_expired(self) -> bool:
+        elapsed = (datetime.now() - self.created_at).total_seconds()
+        return elapsed > self.timeout
     
-    def __init__(
-        self,
-        session_id: str,
-        problem: str,
-        agents: List[str],
-        facilitator: Optional[str] = None,
-        timeout: float = 30.0
-    ):
-        """
-        Initialize collaboration session.
-        
-        Args:
-            session_id: Unique session identifier
-            problem: Problem to solve
-            agents: List of agent IDs to involve
-            facilitator: Optional agent leading the session
-            timeout: Max time for session (seconds)
-        """
-        self.session_id = session_id
-        self.problem = problem
-        self.agents = set(agents)
-        self.facilitator = facilitator or list(agents)[0]
-        self.timeout = timeout
-        
-        # Session state
-        self.phase = CollaborationPhase.INITIATED
-        self.inputs: List[CollaborationInput] = []
-        self.start_time = datetime.now()
-        self.end_time: Optional[datetime] = None
-        
-        # Communication
-        self.message_bus = get_message_bus()
-        self.blackboard = get_blackboard()
-        
-        # Blackboard key for this session
-        self.bb_key = f"collab.{session_id}"
-        
-        logger.info(
-            f"[Collaboration] 🤝 Session '{session_id}' started: {problem}"
-        )
-        logger.info(
-            f"[Collaboration] 👥 Participants: {', '.join(agents)}"
-        )
+    def participation_rate(self) -> float:
+        total = len(self.agents)
+        participated = len(set(
+            list(self.perspectives.keys()) +
+            [p.proposed_by for p in self.proposals.values()]
+        ))
+        return participated / total if total > 0 else 0
     
-    async def run(self) -> CollaborationResult:
-        """
-        Run the collaboration session through all phases.
-        
-        Returns:
-            CollaborationResult with solution and consensus info
-        """
-        try:
-            # Phase 1: Gather initial perspectives
-            self.phase = CollaborationPhase.GATHERING
-            await self._gather_perspectives()
-            
-            # Phase 2: Brainstorm solutions
-            self.phase = CollaborationPhase.BRAINSTORMING
-            solutions = await self._brainstorm_solutions()
-            
-            # Phase 3: Debate solutions
-            if len(solutions) > 1:
-                self.phase = CollaborationPhase.DEBATING
-                await self._debate_solutions(solutions)
-            
-            # Phase 4: Vote on best solution
-            self.phase = CollaborationPhase.VOTING
-            votes = await self._vote_on_solutions(solutions)
-            
-            # Phase 5: Check consensus
-            self.phase = CollaborationPhase.CONSENSUS
-            solution, consensus = await self._check_consensus(votes)
-            
-            self.phase = CollaborationPhase.COMPLETE
-            
-        except asyncio.TimeoutError:
-            logger.warning(
-                f"[Collaboration] ⏱️ Session '{self.session_id}' timed out"
-            )
-            self.phase = CollaborationPhase.FAILED
-            solution = None
-            consensus = False
-            votes = {}
-        
-        except Exception as e:
-            logger.error(
-                f"[Collaboration] ❌ Session failed: {e}",
-                exc_info=True
-            )
-            self.phase = CollaborationPhase.FAILED
-            solution = None
-            consensus = False
-            votes = {}
-        
-        finally:
-            self.end_time = datetime.now()
-        
-        duration = (self.end_time - self.start_time).total_seconds()
-        
-        result = CollaborationResult(
-            session_id=self.session_id,
-            problem=self.problem,
-            solution=solution,
-            consensus_reached=consensus,
-            participating_agents=list(self.agents),
-            inputs=self.inputs,
-            final_votes=votes,
-            duration_seconds=duration,
-            phase=self.phase
-        )
-        
-        # Publish result to blackboard
-        self.blackboard.publish(
-            key=f"{self.bb_key}.result",
-            value=result.to_dict(),
-            agent_id=self.facilitator
-        )
-        
-        logger.info(
-            f"[Collaboration] ✅ Session complete: "
-            f"consensus={consensus}, solution={solution}"
-        )
-        
-        return result
-    
-    async def _gather_perspectives(self):
-        """Gather initial perspectives from all agents"""
-        logger.info(
-            f"[Collaboration] 📊 Gathering perspectives on: {self.problem}"
-        )
-        
-        # Publish problem to blackboard
-        self.blackboard.publish(
-            key=f"{self.bb_key}.problem",
-            value={
-                'problem': self.problem,
-                'agents': list(self.agents),
-                'phase': 'gathering'
-            },
-            agent_id=self.facilitator,
-            tags={'collaboration', 'active'}
-        )
-        
-        # Request perspectives from all agents
-        for agent_id in self.agents:
-            await self.message_bus.send(
-                AgentMessage(
-                    id=f"{self.session_id}_request_{agent_id}",
-                    from_agent=self.facilitator,
-                    to_agent=agent_id,
-                    type=MessageType.REQUEST,
-                    priority=MessagePriority.HIGH,
-                    subject=f"Collaboration: {self.problem}",
-                    payload={
-                        'session_id': self.session_id,
-                        'action': 'provide_perspective',
-                        'problem': self.problem
-                    },
-                    requires_response=True,
-                    conversation_id=self.session_id
-                )
-            )
-        
-        # Wait for responses (with timeout)
-        await asyncio.sleep(2.0)  # Give agents time to respond
-        
-        # Collect perspectives from blackboard
-        entries = self.blackboard.query(
-            pattern=f"{self.bb_key}.perspective.*"
-        )
-        
-        for entry in entries:
-            self.inputs.append(
-                CollaborationInput(
-                    agent_id=entry.agent_id,
-                    phase=CollaborationPhase.GATHERING,
-                    content=entry.value
-                )
-            )
-        
-        logger.info(
-            f"[Collaboration] 📥 Collected {len(entries)} perspectives"
-        )
-    
-    async def _brainstorm_solutions(self) -> List[Dict[str, Any]]:
-        """Brainstorm potential solutions"""
-        logger.info("[Collaboration] 💡 Brainstorming solutions...")
-        
-        # Request ideas from all agents
-        for agent_id in self.agents:
-            await self.message_bus.send(
-                AgentMessage(
-                    id=f"{self.session_id}_brainstorm_{agent_id}",
-                    from_agent=self.facilitator,
-                    to_agent=agent_id,
-                    type=MessageType.REQUEST,
-                    priority=MessagePriority.MEDIUM,
-                    subject="Propose solutions",
-                    payload={
-                        'session_id': self.session_id,
-                        'action': 'propose_solution',
-                        'problem': self.problem,
-                        'perspectives': [i.to_dict() for i in self.inputs]
-                    },
-                    conversation_id=self.session_id
-                )
-            )
-        
-        # Wait for proposals
-        await asyncio.sleep(2.0)
-        
-        # Collect proposals
-        proposals = self.blackboard.query(
-            pattern=f"{self.bb_key}.proposal.*"
-        )
-        
-        solutions = []
-        for entry in proposals:
-            solutions.append(entry.value)
-            self.inputs.append(
-                CollaborationInput(
-                    agent_id=entry.agent_id,
-                    phase=CollaborationPhase.BRAINSTORMING,
-                    content=entry.value
-                )
-            )
-        
-        logger.info(
-            f"[Collaboration] 💡 Generated {len(solutions)} solution proposals"
-        )
-        
-        return solutions
-    
-    async def _debate_solutions(self, solutions: List[Dict[str, Any]]):
-        """Let agents debate the proposed solutions"""
-        logger.info(
-            f"[Collaboration] 🗣️ Debating {len(solutions)} solutions..."
-        )
-        
-        # Publish solutions for debate
-        self.blackboard.publish(
-            key=f"{self.bb_key}.solutions",
-            value=solutions,
-            agent_id=self.facilitator
-        )
-        
-        # Request opinions from all agents
-        for agent_id in self.agents:
-            await self.message_bus.send(
-                AgentMessage(
-                    id=f"{self.session_id}_debate_{agent_id}",
-                    from_agent=self.facilitator,
-                    to_agent=agent_id,
-                    type=MessageType.REQUEST,
-                    priority=MessagePriority.MEDIUM,
-                    subject="Evaluate solutions",
-                    payload={
-                        'session_id': self.session_id,
-                        'action': 'evaluate_solutions',
-                        'solutions': solutions
-                    },
-                    conversation_id=self.session_id
-                )
-            )
-        
-        # Wait for debate
-        await asyncio.sleep(2.0)
-        
-        # Collect evaluations
-        evaluations = self.blackboard.query(
-            pattern=f"{self.bb_key}.evaluation.*"
-        )
-        
-        for entry in evaluations:
-            self.inputs.append(
-                CollaborationInput(
-                    agent_id=entry.agent_id,
-                    phase=CollaborationPhase.DEBATING,
-                    content=entry.value
-                )
-            )
-        
-        logger.info(
-            f"[Collaboration] 📝 Collected {len(evaluations)} evaluations"
-        )
-    
-    async def _vote_on_solutions(
-        self,
-        solutions: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
-        """
-        Let agents vote on solutions.
-        
-        Each agent can vote with weighted preference.
-        """
-        logger.info("[Collaboration] 🗳️ Voting on solutions...")
-        
-        if not solutions:
-            return {}
-        
-        # Request votes
-        for agent_id in self.agents:
-            await self.message_bus.send(
-                AgentMessage(
-                    id=f"{self.session_id}_vote_{agent_id}",
-                    from_agent=self.facilitator,
-                    to_agent=agent_id,
-                    type=MessageType.REQUEST,
-                    priority=MessagePriority.HIGH,
-                    subject="Vote on solutions",
-                    payload={
-                        'session_id': self.session_id,
-                        'action': 'vote',
-                        'solutions': solutions
-                    },
-                    requires_response=True,
-                    conversation_id=self.session_id
-                )
-            )
-        
-        # Wait for votes
-        await asyncio.sleep(1.5)
-        
-        # Collect votes from blackboard
-        vote_entries = self.blackboard.query(
-            pattern=f"{self.bb_key}.vote.*"
-        )
-        
-        votes = {}
-        for entry in vote_entries:
-            votes[entry.agent_id] = entry.value
-            self.inputs.append(
-                CollaborationInput(
-                    agent_id=entry.agent_id,
-                    phase=CollaborationPhase.VOTING,
-                    content=entry.value,
-                    confidence=entry.value.get('confidence', 1.0)
-                )
-            )
-        
-        logger.info(f"[Collaboration] 📊 Collected {len(votes)} votes")
-        
-        return votes
-    
-    async def _check_consensus(
-        self,
-        votes: Dict[str, Any]
-    ) -> tuple[Optional[Any], bool]:
-        """
-        Check if consensus was reached.
-        
-        Consensus requires:
-        - Majority agreement (>50%)
-        - Or weighted agreement (>60% with confidence)
-        
-        Returns:
-            (solution, consensus_reached)
-        """
-        if not votes:
-            return None, False
-        
-        # Count votes for each solution
-        solution_votes: Dict[str, List[tuple[str, float]]] = {}
-        
-        for agent_id, vote in votes.items():
-            choice = vote.get('choice')
-            confidence = vote.get('confidence', 1.0)
-            
-            if choice not in solution_votes:
-                solution_votes[choice] = []
-            
-            solution_votes[choice].append((agent_id, confidence))
-        
-        # Calculate weighted scores
-        total_agents = len(votes)
-        scores = {}
-        
-        for solution, agent_votes in solution_votes.items():
-            # Simple majority
-            count = len(agent_votes)
-            majority_pct = count / total_agents
-            
-            # Weighted score (with confidence)
-            weighted_score = sum(conf for _, conf in agent_votes) / total_agents
-            
-            scores[solution] = {
-                'count': count,
-                'majority_pct': majority_pct,
-                'weighted_score': weighted_score,
-                'agents': [aid for aid, _ in agent_votes]
-            }
-        
-        # Find best solution
-        best_solution = max(
-            scores.items(),
-            key=lambda x: x[1]['weighted_score']
-        )
-        
-        solution_key = best_solution[0]
-        solution_data = best_solution[1]
-        
-        # Check consensus
-        consensus = (
-            solution_data['majority_pct'] > 0.5
-            or solution_data['weighted_score'] > 0.6
-        )
-        
-        logger.info(
-            f"[Collaboration] 🎯 Best solution: {solution_key} "
-            f"(majority={solution_data['majority_pct']:.1%}, "
-            f"weighted={solution_data['weighted_score']:.1%})"
-        )
-        
-        if consensus:
-            logger.info("[Collaboration] ✅ Consensus reached!")
-        else:
-            logger.warning("[Collaboration] ⚠️ No consensus")
-        
-        return solution_key, consensus
+    def has_quorum(self) -> bool:
+        return self.participation_rate() >= self.min_participation
 
 
 class CollaborationManager:
     """
-    Manager for all collaboration sessions.
+    Manages multi-agent collaboration sessions.
     
-    Tracks active sessions, provides API for creating sessions.
+    Enables agents to work together on complex problems
+    through structured dialogue and consensus building.
     """
     
     def __init__(self):
-        self.sessions: Dict[str, CollaborationSession] = {}
-        self.completed_sessions: List[CollaborationResult] = []
+        # Active sessions
+        self._sessions: Dict[str, CollaborationSession] = {}
         
-        logger.info("[CollaborationManager] 📋 Manager initialized")
+        # Completed sessions
+        self._completed: List[CollaborationResult] = []
+        
+        # Event callbacks
+        self._on_session_start: Optional[Callable] = None
+        self._on_phase_change: Optional[Callable] = None
+        self._on_consensus: Optional[Callable] = None
+        
+        # Statistics
+        self._stats = {
+            'total_sessions': 0,
+            'successful_consensus': 0,
+            'failed_consensus': 0,
+            'timeout_sessions': 0,
+            'avg_duration': 0.0,
+            'avg_participation': 0.0
+        }
+        
+        # Session counter for IDs
+        self._session_counter = 0
+        
+        logger.info("[CollaborationManager] 🤝 Collaboration manager initialized")
+    
+    def set_event_callbacks(
+        self,
+        on_session_start: Optional[Callable] = None,
+        on_phase_change: Optional[Callable] = None,
+        on_consensus: Optional[Callable] = None
+    ):
+        """Set event callbacks"""
+        self._on_session_start = on_session_start
+        self._on_phase_change = on_phase_change
+        self._on_consensus = on_consensus
     
     async def create_session(
         self,
         problem: str,
         agents: List[str],
-        facilitator: Optional[str] = None,
-        timeout: float = 30.0
+        facilitator: str,
+        timeout: float = 60.0,
+        consensus_threshold: float = 0.7,
+        min_participation: float = 0.5
     ) -> CollaborationResult:
         """
-        Create and run a new collaboration session.
+        Create and run a collaboration session.
         
         Args:
             problem: Problem to solve
-            agents: Agent IDs to involve
-            facilitator: Optional facilitator
-            timeout: Max session time
-            
+            agents: List of participating agent IDs
+            facilitator: Agent facilitating the session
+            timeout: Max session duration
+            consensus_threshold: Required agreement level (0-1)
+            min_participation: Min participation rate (0-1)
+        
         Returns:
-            CollaborationResult
+            CollaborationResult with solution (if consensus reached)
         """
-        session_id = f"collab_{int(datetime.now().timestamp() * 1000)}"
+        self._session_counter += 1
+        session_id = f"collab_{self._session_counter}_{int(datetime.now().timestamp())}"
         
         session = CollaborationSession(
             session_id=session_id,
             problem=problem,
-            agents=agents,
             facilitator=facilitator,
-            timeout=timeout
+            agents=agents,
+            timeout=timeout,
+            consensus_threshold=consensus_threshold,
+            min_participation=min_participation
         )
         
-        self.sessions[session_id] = session
+        self._sessions[session_id] = session
+        self._stats['total_sessions'] += 1
         
-        # Run session
-        result = await session.run()
+        logger.info(
+            f"[CollaborationManager] 🎯 Session {session_id} started: "
+            f"'{problem[:50]}...' with {len(agents)} agents"
+        )
         
-        # Store result
-        self.completed_sessions.append(result)
+        # Fire callback
+        if self._on_session_start:
+            try:
+                if asyncio.iscoroutinefunction(self._on_session_start):
+                    await self._on_session_start(session)
+                else:
+                    self._on_session_start(session)
+            except Exception as e:
+                logger.error(f"[CollaborationManager] Callback error: {e}")
         
-        # Clean up
-        del self.sessions[session_id]
+        # Run collaboration phases
+        try:
+            result = await self._run_session(session)
+            self._completed.append(result)
+            return result
+            
+        except asyncio.TimeoutError:
+            logger.warning(f"[CollaborationManager] ⏱️ Session {session_id} timed out")
+            self._stats['timeout_sessions'] += 1
+            
+            result = CollaborationResult(
+                session_id=session_id,
+                problem=problem,
+                consensus_reached=False,
+                participating_agents=agents,
+                phase_reached=session.phase,
+                perspectives=list(session.perspectives.values()),
+                duration_seconds=timeout
+            )
+            self._completed.append(result)
+            return result
+            
+        finally:
+            # Clean up
+            if session_id in self._sessions:
+                del self._sessions[session_id]
+    
+    async def _run_session(self, session: CollaborationSession) -> CollaborationResult:
+        """Run through collaboration phases"""
+        start_time = datetime.now()
         
-        return result
+        try:
+            # Phase 1: Gather perspectives
+            await self._set_phase(session, CollaborationPhase.GATHERING_PERSPECTIVES)
+            await asyncio.wait_for(
+                self._gather_perspectives(session),
+                timeout=session.timeout * 0.3
+            )
+            
+            if not session.has_quorum():
+                return self._create_result(session, start_time, "Insufficient participation")
+            
+            # Phase 2: Generate proposals
+            await self._set_phase(session, CollaborationPhase.GENERATING_PROPOSALS)
+            await asyncio.wait_for(
+                self._generate_proposals(session),
+                timeout=session.timeout * 0.3
+            )
+            
+            if not session.proposals:
+                # Generate default proposal from perspectives
+                await self._synthesize_proposal(session)
+            
+            # Phase 3: Vote on proposals
+            await self._set_phase(session, CollaborationPhase.VOTING)
+            await asyncio.wait_for(
+                self._conduct_voting(session),
+                timeout=session.timeout * 0.3
+            )
+            
+            # Phase 4: Finalize
+            await self._set_phase(session, CollaborationPhase.FINALIZING)
+            result = await self._finalize_consensus(session, start_time)
+            
+            await self._set_phase(session, CollaborationPhase.COMPLETE)
+            return result
+            
+        except Exception as e:
+            logger.error(f"[CollaborationManager] Session error: {e}", exc_info=True)
+            await self._set_phase(session, CollaborationPhase.FAILED)
+            return self._create_result(session, start_time, str(e))
+    
+    async def _set_phase(self, session: CollaborationSession, phase: CollaborationPhase):
+        """Update session phase"""
+        session.phase = phase
+        logger.info(f"[CollaborationManager] 📍 Session {session.session_id}: {phase.value}")
+        
+        if self._on_phase_change:
+            try:
+                if asyncio.iscoroutinefunction(self._on_phase_change):
+                    await self._on_phase_change(session, phase)
+                else:
+                    self._on_phase_change(session, phase)
+            except Exception:
+                pass
+    
+    async def _gather_perspectives(self, session: CollaborationSession):
+        """Wait for perspectives from agents"""
+        # Set a short wait - agents should contribute quickly
+        await asyncio.sleep(0.1)
+        
+        # If perspectives were submitted, continue
+        if session.perspectives:
+            return
+        
+        # Wait for perspective event or timeout
+        try:
+            await asyncio.wait_for(
+                session.perspective_event.wait(),
+                timeout=5.0
+            )
+        except asyncio.TimeoutError:
+            pass
+    
+    async def _generate_proposals(self, session: CollaborationSession):
+        """Wait for proposals"""
+        await asyncio.sleep(0.1)
+        
+        if session.proposals:
+            return
+        
+        try:
+            await asyncio.wait_for(
+                session.proposal_event.wait(),
+                timeout=5.0
+            )
+        except asyncio.TimeoutError:
+            pass
+    
+    async def _synthesize_proposal(self, session: CollaborationSession):
+        """Create proposal from perspectives if none submitted"""
+        if not session.perspectives:
+            return
+        
+        # Combine perspectives into a synthesized proposal
+        perspectives_text = []
+        for p in session.perspectives.values():
+            perspectives_text.append(f"- {p.agent_id}: {p.perspective}")
+        
+        proposal = Proposal(
+            proposal_id=f"{session.session_id}_synthesized",
+            proposed_by=session.facilitator,
+            content=f"Synthesized from {len(session.perspectives)} perspectives",
+            rationale="Combined agent insights",
+            supporting_agents=list(session.perspectives.keys())
+        )
+        
+        session.proposals[proposal.proposal_id] = proposal
+    
+    async def _conduct_voting(self, session: CollaborationSession):
+        """Conduct voting on proposals"""
+        await asyncio.sleep(0.1)
+        
+        # Wait for votes
+        try:
+            await asyncio.wait_for(
+                session.vote_event.wait(),
+                timeout=5.0
+            )
+        except asyncio.TimeoutError:
+            pass
+    
+    async def _finalize_consensus(
+        self,
+        session: CollaborationSession,
+        start_time: datetime
+    ) -> CollaborationResult:
+        """Determine final consensus"""
+        duration = (datetime.now() - start_time).total_seconds()
+        
+        # Calculate vote results for each proposal
+        best_proposal = None
+        best_score = 0.0
+        dissenting = []
+        
+        for proposal_id, proposal in session.proposals.items():
+            votes = session.votes.get(proposal_id, [])
+            
+            if not votes:
+                # No votes = auto-approve if from facilitator
+                if proposal.proposed_by == session.facilitator:
+                    best_proposal = proposal
+                    best_score = 0.6
+                continue
+            
+            # Calculate weighted vote score
+            total_weight = sum(v.weight for v in votes)
+            approve_weight = sum(
+                v.weight for v in votes
+                if v.vote_type == VoteType.APPROVE
+            )
+            
+            score = approve_weight / total_weight if total_weight > 0 else 0
+            
+            # Collect dissenting opinions
+            for v in votes:
+                if v.vote_type == VoteType.REJECT and v.reasoning:
+                    dissenting.append(f"{v.agent_id}: {v.reasoning}")
+            
+            if score > best_score:
+                best_score = score
+                best_proposal = proposal
+        
+        # Determine if consensus reached
+        consensus_reached = best_score >= session.consensus_threshold
+        
+        if consensus_reached:
+            self._stats['successful_consensus'] += 1
+            logger.info(
+                f"[CollaborationManager] ✅ Consensus reached in {session.session_id} "
+                f"(score: {best_score:.2f})"
+            )
+            
+            # Fire consensus callback
+            if self._on_consensus:
+                try:
+                    if asyncio.iscoroutinefunction(self._on_consensus):
+                        await self._on_consensus(session, best_proposal, best_score)
+                    else:
+                        self._on_consensus(session, best_proposal, best_score)
+                except Exception:
+                    pass
+        else:
+            self._stats['failed_consensus'] += 1
+            logger.info(
+                f"[CollaborationManager] ❌ No consensus in {session.session_id} "
+                f"(best score: {best_score:.2f})"
+            )
+        
+        # Update stats
+        self._update_stats(duration, session.participation_rate())
+        
+        return CollaborationResult(
+            session_id=session.session_id,
+            problem=session.problem,
+            consensus_reached=consensus_reached,
+            winning_proposal=best_proposal,
+            solution=best_proposal.content if best_proposal else None,
+            confidence=best_score,
+            participating_agents=session.agents,
+            perspectives=list(session.perspectives.values()),
+            proposals=list(session.proposals.values()),
+            votes=[v for votes in session.votes.values() for v in votes],
+            dissenting_opinions=dissenting,
+            duration_seconds=duration,
+            phase_reached=session.phase
+        )
+    
+    def _create_result(
+        self,
+        session: CollaborationSession,
+        start_time: datetime,
+        error: str
+    ) -> CollaborationResult:
+        """Create result for failed session"""
+        duration = (datetime.now() - start_time).total_seconds()
+        
+        return CollaborationResult(
+            session_id=session.session_id,
+            problem=session.problem,
+            consensus_reached=False,
+            participating_agents=session.agents,
+            perspectives=list(session.perspectives.values()),
+            proposals=list(session.proposals.values()),
+            duration_seconds=duration,
+            phase_reached=session.phase,
+            metadata={'error': error}
+        )
+    
+    def _update_stats(self, duration: float, participation: float):
+        """Update running statistics"""
+        total = self._stats['total_sessions']
+        
+        # Running average for duration
+        old_avg_dur = self._stats['avg_duration']
+        self._stats['avg_duration'] = (old_avg_dur * (total - 1) + duration) / total
+        
+        # Running average for participation
+        old_avg_part = self._stats['avg_participation']
+        self._stats['avg_participation'] = (old_avg_part * (total - 1) + participation) / total
+    
+    # ========================================================================
+    # External API for agents to contribute
+    # ========================================================================
+    
+    def submit_perspective(
+        self,
+        session_id: str,
+        agent_id: str,
+        perspective: str,
+        confidence: float = 1.0,
+        supporting_data: Optional[Dict[str, Any]] = None,
+        concerns: Optional[List[str]] = None
+    ) -> bool:
+        """Agent submits their perspective"""
+        session = self._sessions.get(session_id)
+        if not session:
+            logger.warning(f"[CollaborationManager] Session {session_id} not found")
+            return False
+        
+        if agent_id not in session.agents:
+            logger.warning(f"[CollaborationManager] Agent {agent_id} not in session")
+            return False
+        
+        session.perspectives[agent_id] = AgentPerspective(
+            agent_id=agent_id,
+            perspective=perspective,
+            confidence=confidence,
+            supporting_data=supporting_data or {},
+            concerns=concerns or []
+        )
+        
+        # Signal that perspective received
+        if len(session.perspectives) >= len(session.agents) * session.min_participation:
+            session.perspective_event.set()
+        
+        logger.debug(f"[CollaborationManager] 💭 {agent_id} submitted perspective")
+        return True
+    
+    def submit_proposal(
+        self,
+        session_id: str,
+        agent_id: str,
+        content: str,
+        rationale: str,
+        implementation_steps: Optional[List[str]] = None,
+        estimated_impact: Optional[str] = None,
+        confidence: float = 1.0
+    ) -> Optional[str]:
+        """Agent submits a proposal"""
+        session = self._sessions.get(session_id)
+        if not session:
+            return None
+        
+        proposal_id = f"{session_id}_{agent_id}_{len(session.proposals)}"
+        
+        proposal = Proposal(
+            proposal_id=proposal_id,
+            proposed_by=agent_id,
+            content=content,
+            rationale=rationale,
+            implementation_steps=implementation_steps or [],
+            estimated_impact=estimated_impact,
+            confidence=confidence
+        )
+        
+        session.proposals[proposal_id] = proposal
+        session.proposal_event.set()
+        
+        logger.debug(f"[CollaborationManager] 📝 {agent_id} submitted proposal")
+        return proposal_id
+    
+    def submit_vote(
+        self,
+        session_id: str,
+        agent_id: str,
+        proposal_id: str,
+        vote_type: VoteType,
+        weight: float = 1.0,
+        reasoning: str = "",
+        suggested_modifications: Optional[str] = None
+    ) -> bool:
+        """Agent submits a vote"""
+        session = self._sessions.get(session_id)
+        if not session:
+            return False
+        
+        if proposal_id not in session.proposals:
+            return False
+        
+        vote = Vote(
+            agent_id=agent_id,
+            proposal_id=proposal_id,
+            vote_type=vote_type,
+            weight=weight,
+            reasoning=reasoning,
+            suggested_modifications=suggested_modifications
+        )
+        
+        session.votes[proposal_id].append(vote)
+        
+        # Check if all agents have voted
+        total_votes = sum(len(v) for v in session.votes.values())
+        if total_votes >= len(session.agents) * session.min_participation:
+            session.vote_event.set()
+        
+        logger.debug(f"[CollaborationManager] 🗳️ {agent_id} voted {vote_type.value}")
+        return True
     
     def get_session(self, session_id: str) -> Optional[CollaborationSession]:
-        """Get active session by ID"""
-        return self.sessions.get(session_id)
+        """Get active session"""
+        return self._sessions.get(session_id)
     
     def get_active_sessions(self) -> List[CollaborationSession]:
         """Get all active sessions"""
-        return list(self.sessions.values())
+        return list(self._sessions.values())
     
-    def get_completed_sessions(
-        self,
-        limit: int = 10
-    ) -> List[CollaborationResult]:
-        """Get recent completed sessions"""
-        return self.completed_sessions[-limit:]
+    def get_completed_sessions(self, limit: int = 100) -> List[CollaborationResult]:
+        """Get completed sessions"""
+        return self._completed[-limit:]
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Get statistics"""
+        return {
+            **self._stats,
+            'active_sessions': len(self._sessions),
+            'completed_sessions': len(self._completed)
+        }
+    
+    def reset(self):
+        """Full reset"""
+        self._sessions.clear()
+        self._completed.clear()
+        self._session_counter = 0
+        self._stats = {
+            'total_sessions': 0,
+            'successful_consensus': 0,
+            'failed_consensus': 0,
+            'timeout_sessions': 0,
+            'avg_duration': 0.0,
+            'avg_participation': 0.0
+        }
+        logger.info("[CollaborationManager] 🔄 Collaboration manager reset")
 
 
-# Global manager instance
+# Global instance
 _collaboration_manager: Optional[CollaborationManager] = None
 
 
@@ -611,6 +677,8 @@ def get_collaboration_manager() -> CollaborationManager:
 
 
 def reset_collaboration_manager():
-    """Reset global manager (for testing)"""
+    """Reset global collaboration manager"""
     global _collaboration_manager
+    if _collaboration_manager:
+        _collaboration_manager.reset()
     _collaboration_manager = None

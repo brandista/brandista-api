@@ -1,36 +1,34 @@
 # -*- coding: utf-8 -*-
-# Version: 2025-11-30-1015
-# Changes: Company intel integration, ai_visibility threat, real revenue/employees in threat calc, revenue_data transparency
+# Version: 2.1.0 - TRUE SWARM EDITION
 """
 Growth Engine 2.0 - Guardian Agent
+TRUE SWARM EDITION - Reactively processes Scout alerts
+
 The Risk Manager - RASM, threat analysis and Competitor Threat Assessment
 
-Responsibilities:
-1. Build risk register from analysis data
-2. Calculate realistic revenue impact (revenue_impact_model.py)
-3. Identify threats (SEO, mobile, SSL, performance, competitive, content)
-4. Assess competitor threat levels
-5. Prioritize actions by ROI
-6. Calculate RASM score (Revenue Attack Surface Mapping)
-
-Data flow:
-- Input: AnalysisContext + Scout results + Analyst results
-- Output: threats, risk_register, revenue_impact, priority_actions, rasm_score, competitor_threat_assessment
+SWARM FEATURES:
+- Receives high-threat competitor alerts from Scout
+- Broadcasts critical risks to Strategist immediately
+- Collaborates with Prospector on risk/opportunity balance
+- Publishes threat data to blackboard for Planner
 """
 
 import logging
 import asyncio
 import re
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set
+
 from urllib.parse import urlparse
 
 from .base_agent import BaseAgent
-from .types import (
+from .agent_types import (
     AnalysisContext,
     AgentPriority,
     InsightType
 )
+from .communication import MessageType, MessagePriority, AgentMessage
+from .blackboard import DataCategory
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +80,8 @@ COMPETITOR_INSIGHTS = {
 
 class GuardianAgent(BaseAgent):
     """
-     Guardian Agent - Riskienhallitsija (RASM)
+    🛡️ Guardian Agent - Riskienhallitsija (RASM)
+    TRUE SWARM EDITION
     """
     
     def __init__(self):
@@ -90,10 +89,43 @@ class GuardianAgent(BaseAgent):
             agent_id="guardian",
             name="Guardian",
             role="Riskienhallitsija",
-            avatar="",
+            avatar="🛡️",
             personality="Valpas ja huolellinen turvallisuusasiantuntija"
         )
         self.dependencies = ['scout', 'analyst']
+        self._scout_alerts: List[Dict[str, Any]] = []
+    
+    def _get_subscribed_message_types(self) -> List[MessageType]:
+        """Guardian subscribes to alerts and findings"""
+        return [
+            MessageType.ALERT,
+            MessageType.FINDING,
+            MessageType.DATA,
+            MessageType.REQUEST
+        ]
+    
+    def _get_task_capabilities(self) -> Set[str]:
+        """Tasks Guardian can handle"""
+        return {'risk_assessment', 'threat_analysis', 'competitor_threat'}
+    
+    def _setup_blackboard_subscriptions(self):
+        """Subscribe to competitor data"""
+        if self._blackboard:
+            self._blackboard.subscribe(
+                pattern="scout.competitors.*",
+                agent_id=self.id,
+                callback=self._on_competitor_data
+            )
+    
+    def _on_competitor_data(self, entry):
+        """React to competitor data from Scout"""
+        logger.info(f"[Guardian] 📋 Received competitor data from blackboard: {entry.key}")
+    
+    async def _handle_alert(self, message: AgentMessage):
+        """Handle alerts from Scout about high-threat competitors"""
+        if message.from_agent == 'scout' and 'competitors' in message.payload:
+            self._scout_alerts.append(message.payload)
+            logger.info(f"[Guardian] 🚨 Received Scout alert about {len(message.payload.get('competitors', []))} threats")
     
     def _task(self, key: str) -> str:
         return GUARDIAN_TASKS.get(key, {}).get(self._language, key)
@@ -423,6 +455,69 @@ class GuardianAgent(BaseAgent):
             priority=AgentPriority.MEDIUM,
             insight_type=InsightType.FINDING,
             data={'threat_count': len(threats), 'rasm_score': rasm_score}
+        )
+        
+        # ====================================================================
+        # SWARM: Share risk findings with other agents
+        # ====================================================================
+        
+        # 1. Publish threats to blackboard
+        await self._publish_to_blackboard(
+            key="threats.identified",
+            value={
+                'threats': threats,
+                'rasm_score': rasm_score,
+                'critical_count': len([t for t in threats if t.get('severity') == 'high'])
+            },
+            category=DataCategory.THREAT
+        )
+        
+        # 2. Alert Strategist about critical threats
+        critical_threats = [t for t in threats if t.get('severity') == 'high']
+        if critical_threats:
+            await self._send_message(
+                to_agent='strategist',
+                message_type=MessageType.ALERT,
+                subject=f"Critical threats found: {len(critical_threats)}",
+                payload={
+                    'critical_threats': critical_threats,
+                    'rasm_score': rasm_score,
+                    'priority_actions': priority_actions[:3]  # Top 3
+                },
+                priority=MessagePriority.HIGH
+            )
+            logger.info(f"[Guardian] 🚨 Alerted Strategist about {len(critical_threats)} critical threats")
+        
+        # 3. Share competitor threat assessment with Prospector
+        if competitor_threat_assessment:
+            await self._send_message(
+                to_agent='prospector',
+                message_type=MessageType.DATA,
+                subject="Competitor threat levels",
+                payload={
+                    'assessment': competitor_threat_assessment,
+                    'high_threats': [c for c in competitor_threat_assessment if c.get('threat_level') == 'high']
+                }
+            )
+        
+        # 4. Publish priority actions for Planner
+        await self._publish_to_blackboard(
+            key="actions.priority",
+            value={
+                'actions': priority_actions,
+                'total_impact': sum(a.get('revenue_impact', 0) for a in priority_actions)
+            },
+            category=DataCategory.ACTION
+        )
+        
+        # 5. Broadcast RASM score to all
+        await self._share_finding(
+            f"RASM Score: {rasm_score}/100 with {len(threats)} identified threats",
+            {
+                'rasm_score': rasm_score,
+                'threat_count': len(threats),
+                'critical_count': len(critical_threats)
+            }
         )
         
         return {

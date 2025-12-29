@@ -1,31 +1,29 @@
 # -*- coding: utf-8 -*-
-# Version: 2025-11-30-1055
-# Changes: TOL-code industry detection, skip_domains expanded, company_intel first, company_name from registry, url in return
+# Version: 2.1.0 - TRUE SWARM EDITION
 """
 Growth Engine 2.0 - Scout Agent
+TRUE SWARM EDITION - Actively communicates findings to other agents
+
 "The Market Explorer" - Finds competitors and maps the market
 
-Responsibilities:
-1. Fetch target website content
-2. Detect industry (from HTML keywords + company intel TOL code)
-3. Find competitors (user-provided or auto-discovered)
-4. Score competitors by relevance
-5. Enrich with company data (YTJ, Bronnoysund, CVR, etc.)
-
-Data flow:
-- Input: AnalysisContext (url, industry_context, competitor_urls)
-- Output: company, industry, competitor_urls, competitors_enriched, your_company_intel
+SWARM FEATURES:
+- Broadcasts competitor discoveries to Guardian and Strategist
+- Publishes industry data to blackboard for all agents
+- Alerts on high-threat competitors immediately
+- Shares company intel with Analyst
 """
 
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set
 
 from .base_agent import BaseAgent
-from .types import (
+from .agent_types import (
     AnalysisContext,
     AgentPriority,
     InsightType
 )
+from .communication import MessageType, MessagePriority
+from .blackboard import DataCategory
 
 # Company Intelligence for due diligence
 try:
@@ -53,6 +51,7 @@ SCOUT_TASKS = {
 class ScoutAgent(BaseAgent):
     """
     🔍 Scout Agent - Kilpailijatiedustelija
+    TRUE SWARM EDITION
     """
     
     def __init__(self):
@@ -64,8 +63,23 @@ class ScoutAgent(BaseAgent):
             personality="Utelias ja perusteellinen tutkimusmatkailija"
         )
         self.dependencies = []
-        # DEBUG: Log when Scout is instantiated
         logger.info(f"[Scout] *** ScoutAgent initialized, COMPANY_INTEL_AVAILABLE={COMPANY_INTEL_AVAILABLE} ***")
+    
+    def _get_subscribed_message_types(self) -> List[MessageType]:
+        """Scout subscribes to these message types"""
+        return [
+            MessageType.ALERT,
+            MessageType.REQUEST,
+            MessageType.HELP
+        ]
+    
+    def _get_task_capabilities(self) -> Set[str]:
+        """Tasks Scout can handle"""
+        return {'competitor_scan', 'industry_detection', 'company_lookup'}
+    
+    def _setup_blackboard_subscriptions(self):
+        """Scout doesn't need many subscriptions - it's the first agent"""
+        pass
     
     def _task(self, key: str) -> str:
         """Get task text in current language"""
@@ -307,6 +321,75 @@ class ScoutAgent(BaseAgent):
             # your_company_intel already fetched above
             
             self._update_progress(95, self._task("finalizing"))
+            
+            # ====================================================================
+            # SWARM: Share findings with other agents
+            # ====================================================================
+            
+            # 1. Publish industry to blackboard (all agents can use this)
+            await self._publish_to_blackboard(
+                key="industry",
+                value={
+                    'detected': industry,
+                    'company': company_name,
+                    'confidence': 0.8 if your_company_intel else 0.6
+                },
+                category=DataCategory.ANALYSIS
+            )
+            
+            # 2. Publish competitors to blackboard
+            await self._publish_to_blackboard(
+                key="competitors.discovered",
+                value={
+                    'urls': competitor_urls,
+                    'count': len(competitor_urls),
+                    'enriched': enriched_competitors
+                },
+                category=DataCategory.COMPETITOR
+            )
+            
+            # 3. Alert Guardian about high-threat competitors
+            high_threat_competitors = [
+                c for c in enriched_competitors
+                if c.get('relevance_score', 0) >= 80 or 
+                   (c.get('revenue') and c.get('revenue', 0) > 1000000)
+            ]
+            
+            if high_threat_competitors:
+                await self._send_message(
+                    to_agent='guardian',
+                    message_type=MessageType.ALERT,
+                    subject=f"High-threat competitors found: {len(high_threat_competitors)}",
+                    payload={
+                        'competitors': high_threat_competitors,
+                        'industry': industry
+                    },
+                    priority=MessagePriority.HIGH
+                )
+                logger.info(f"[Scout] 🚨 Alerted Guardian about {len(high_threat_competitors)} high-threat competitors")
+            
+            # 4. Share company intel with Analyst
+            if your_company_intel:
+                await self._send_message(
+                    to_agent='analyst',
+                    message_type=MessageType.DATA,
+                    subject="Target company intel",
+                    payload={
+                        'company_name': company_name,
+                        'company_intel': your_company_intel,
+                        'industry': industry
+                    }
+                )
+            
+            # 5. Broadcast competitor discovery to all
+            await self._share_finding(
+                f"Discovered {len(competitor_urls)} competitors in {industry} industry",
+                {
+                    'competitor_count': len(competitor_urls),
+                    'industry': industry,
+                    'top_competitor': top_competitors[0] if top_competitors else None
+                }
+            )
             
             return {
                 'company': company_name,
