@@ -16,7 +16,9 @@ from .agent_types import (
     AnalysisContext,
     OrchestrationResult,
     SwarmEvent,
-    SwarmEventType
+    SwarmEventType,
+    WSMessageType,
+    WSMessage
 )
 
 from .base_agent import BaseAgent
@@ -81,6 +83,7 @@ __all__ = [
     'AgentInsight', 'AgentProgress', 'AgentResult',
     'AnalysisContext', 'OrchestrationResult',
     'SwarmEvent', 'SwarmEventType',
+    'WSMessageType', 'WSMessage',
     
     # Agents
     'BaseAgent',
