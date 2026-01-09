@@ -326,9 +326,20 @@ class StrategistAgent(BaseAgent):
         # ========================================================================
         # SWARM: Add strategic recommendations to SharedKnowledge
         # ========================================================================
-        for rec in recommendations:
-            rec['source_agent'] = self.id
-            context.add_to_shared('strategic_recommendations', rec, self.id)
+        # recommendations is a dict with keys: 'immediate', 'short_term', 'medium_term'
+        # each containing a list of strings (titles)
+        rec_count = 0
+        for timeframe, rec_list in recommendations.items():
+            if isinstance(rec_list, list):
+                for rec_title in rec_list:
+                    if isinstance(rec_title, str):
+                        rec_dict = {
+                            'title': rec_title,
+                            'timeframe': timeframe,
+                            'source_agent': self.id
+                        }
+                        context.add_to_shared('strategic_recommendations', rec_dict, self.id)
+                        rec_count += 1
 
         # If we got collaboration results, incorporate into summary
         swarm_enhancement = None
@@ -339,7 +350,7 @@ class StrategistAgent(BaseAgent):
             }
             logger.info(f"[Strategist] ✅ Integrated {len(collaboration_results)} collaboration results into strategy")
 
-        logger.info(f"[Strategist] ✅ Added {len(recommendations)} recommendations to SharedKnowledge")
+        logger.info(f"[Strategist] ✅ Added {rec_count} recommendations to SharedKnowledge")
 
         return {
             'executive_summary': executive_summary,

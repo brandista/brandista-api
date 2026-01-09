@@ -622,13 +622,15 @@ class GuardianAgent(BaseAgent):
         
         # 3. Share competitor threat assessment with Prospector
         if competitor_threat_assessment:
+            # Extract assessments list from the result dict
+            assessments_list = competitor_threat_assessment.get('assessments', [])
             await self._send_message(
                 to_agent='prospector',
                 message_type=MessageType.DATA,
                 subject="Competitor threat levels",
                 payload={
                     'assessment': competitor_threat_assessment,
-                    'high_threats': [c for c in competitor_threat_assessment if c.get('threat_level') == 'high']
+                    'high_threats': [c for c in assessments_list if isinstance(c, dict) and c.get('threat_level') == 'high']
                 }
             )
         
