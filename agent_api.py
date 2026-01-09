@@ -834,7 +834,7 @@ async def websocket_agent_analysis(
                     # Send notification to user's dashboard (if connected)
                     try:
                         from notification_ws import notify_analysis_complete
-                        import asyncio
+                        # asyncio is already imported at module level
                         asyncio.create_task(notify_analysis_complete(
                             user_id=user_id,
                             analysis_result={
