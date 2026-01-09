@@ -184,7 +184,7 @@ class ProspectorAgent(BaseAgent):
             logger.info(f"[Prospector] 🧠 UNIFIED CONTEXT AVAILABLE - Checking opportunity history")
             
             # Get historical opportunities to avoid duplicates
-            hist_insights = context.unified_context.get('historical_insights', [])
+            hist_insights = context.unified_context.get('historical_insights') or []
             historical_opportunities = [
                 i for i in hist_insights 
                 if i.get('insight_type') == 'opportunity' or i.get('type') == 'opportunity'
@@ -215,7 +215,7 @@ class ProspectorAgent(BaseAgent):
                 )
             
             # Check score trend for market positioning
-            trends = context.unified_context.get('trends', {})
+            trends = context.unified_context.get('trends') or {}
             if trends and 'score_change' in trends:
                 score_change = trends['score_change']
                 if score_change > 0:

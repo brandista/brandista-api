@@ -172,7 +172,7 @@ class StrategistAgent(BaseAgent):
             logger.info(f"[Strategist] 🧠 UNIFIED CONTEXT AVAILABLE - Analyzing strategic trends")
             
             # Get score history for trend analysis
-            recent_analyses = context.unified_context.get('recent_analyses', [])
+            recent_analyses = context.unified_context.get('recent_analyses') or []
             if len(recent_analyses) >= 2:
                 score_history = [a.get('score', 0) for a in recent_analyses[:5]]
                 logger.info(f"[Strategist] Score history: {score_history}")
@@ -200,7 +200,7 @@ class StrategistAgent(BaseAgent):
                         competitive_trend = "stable"
             
             # Analyze persistent patterns from historical insights
-            hist_insights = context.unified_context.get('historical_insights', [])
+            hist_insights = context.unified_context.get('historical_insights') or []
             if hist_insights:
                 # Find consistent strengths (opportunities mentioned multiple times)
                 opportunity_titles = [

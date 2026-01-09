@@ -273,7 +273,7 @@ class GuardianAgent(BaseAgent):
             logger.info(f"[Guardian] 🧠 UNIFIED CONTEXT AVAILABLE - Checking threat history")
             
             # Get previous RASM score for trend analysis
-            recent_analyses = context.unified_context.get('recent_analyses', [])
+            recent_analyses = context.unified_context.get('recent_analyses') or []
             if recent_analyses:
                 for analysis in recent_analyses:
                     if 'rasm_score' in analysis:
@@ -282,7 +282,7 @@ class GuardianAgent(BaseAgent):
                         break
             
             # Get historical threat insights
-            hist_insights = context.unified_context.get('historical_insights', [])
+            hist_insights = context.unified_context.get('historical_insights') or []
             historical_threats = [
                 i for i in hist_insights 
                 if i.get('insight_type') == 'threat' or i.get('type') == 'threat'
@@ -303,7 +303,7 @@ class GuardianAgent(BaseAgent):
                     )
             
             # Check if threats are getting better or worse
-            trends = context.unified_context.get('trends', {})
+            trends = context.unified_context.get('trends') or {}
             if trends and 'top_threat' in trends:
                 top_threat = trends['top_threat']
                 logger.info(f"[Guardian] Previous top threat: {top_threat}")

@@ -961,7 +961,7 @@ class PlannerAgent(BaseAgent):
             logger.info(f"[Planner] 🧠 UNIFIED CONTEXT AVAILABLE - Checking action history")
             
             # Get historical action insights
-            hist_insights = context.unified_context.get('historical_insights', [])
+            hist_insights = context.unified_context.get('historical_insights') or []
             action_insights = [
                 i for i in hist_insights 
                 if i.get('insight_type') == 'action' or i.get('type') == 'action'
@@ -1007,7 +1007,7 @@ class PlannerAgent(BaseAgent):
                     )
             
             # Get last plan date
-            recent_analyses = context.unified_context.get('recent_analyses', [])
+            recent_analyses = context.unified_context.get('recent_analyses') or []
             if recent_analyses:
                 previous_plan_date = recent_analyses[0].get('created_at', '')[:10]
                 logger.info(f"[Planner] Previous plan from: {previous_plan_date}")

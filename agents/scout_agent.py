@@ -108,7 +108,7 @@ class ScoutAgent(BaseAgent):
             logger.info(f"[Scout] 🧠 UNIFIED CONTEXT AVAILABLE - Using historical data!")
             
             # Get tracked competitors from Radar
-            tracked = context.unified_context.get('tracked_competitors', [])
+            tracked = context.unified_context.get('tracked_competitors') or []
             if tracked:
                 tracked_competitor_domains = [c.get('domain') for c in tracked if c.get('domain')]
                 logger.info(f"[Scout] Found {len(tracked_competitor_domains)} tracked competitors in Radar")
@@ -121,13 +121,13 @@ class ScoutAgent(BaseAgent):
                 )
             
             # Get previously discovered competitors
-            discovered = context.unified_context.get('discovered_competitors', [])
+            discovered = context.unified_context.get('discovered_competitors') or []
             if discovered:
                 discovered_competitor_domains = [c.get('domain') for c in discovered if c.get('domain')]
                 logger.info(f"[Scout] Found {len(discovered_competitor_domains)} previously discovered competitors")
             
             # Get previous industry detection
-            profile = context.unified_context.get('profile', {})
+            profile = context.unified_context.get('profile') or {}
             previous_industry = profile.get('industry')
             if previous_industry:
                 logger.info(f"[Scout] Previous industry: {previous_industry}")

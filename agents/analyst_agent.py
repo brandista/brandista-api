@@ -135,7 +135,7 @@ class AnalystAgent(BaseAgent):
         if context.unified_context:
             logger.info(f"[Analyst] 🧠 UNIFIED CONTEXT AVAILABLE - Checking score history")
             
-            recent_analyses = context.unified_context.get('recent_analyses', [])
+            recent_analyses = context.unified_context.get('recent_analyses') or []
             if recent_analyses and len(recent_analyses) > 0:
                 last_analysis = recent_analyses[0]
                 previous_score = last_analysis.get('score', 0)
@@ -151,7 +151,7 @@ class AnalystAgent(BaseAgent):
                 )
             
             # Get overall trend from trends
-            trends = context.unified_context.get('trends', {})
+            trends = context.unified_context.get('trends') or {}
             if trends and 'score_change' in trends:
                 score_trend = trends['score_change']
                 logger.info(f"[Analyst] Overall score trend: {score_trend:+.1f} points")
