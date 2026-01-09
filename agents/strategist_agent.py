@@ -57,8 +57,9 @@ POSITIONS = {
 class StrategistAgent(BaseAgent):
     """
     🎯 Strategist Agent - Strateginen neuvonantaja
+    TRUE SWARM EDITION - Receives alerts from Guardian, uses SharedKnowledge
     """
-    
+
     def __init__(self):
         super().__init__(
             agent_id="strategist",
@@ -68,7 +69,65 @@ class StrategistAgent(BaseAgent):
             personality="Viisas ja kauaskatseinen strategi"
         )
         self.dependencies = ['scout', 'analyst', 'guardian', 'prospector']
-    
+
+        # ========================================================================
+        # SWARM STATE - Active message handling
+        # ========================================================================
+        self._critical_alerts: List[Dict[str, Any]] = []  # Alerts from Guardian
+        self._guardian_insights: List[Dict[str, Any]] = []  # Insights from Guardian
+
+    def _get_subscribed_message_types(self):
+        """Subscribe to alerts and data"""
+        from .communication import MessageType
+        return [
+            MessageType.ALERT,
+            MessageType.DATA,
+            MessageType.FINDING,
+            MessageType.INSIGHT
+        ]
+
+    async def _handle_alert(self, message):
+        """
+        Handle critical alerts from Guardian.
+        ACTIVE HANDLING - data is stored and influences strategy.
+        """
+        from datetime import datetime
+
+        alert_data = {
+            'from': message.from_agent,
+            'subject': message.subject,
+            'payload': message.payload,
+            'timestamp': datetime.now().isoformat(),
+            'priority': getattr(message, 'priority', 'medium')
+        }
+
+        self._critical_alerts.append(alert_data)
+
+        # Log receipt
+        logger.info(f"[Strategist] 🚨 Received CRITICAL alert from {message.from_agent}: {message.subject}")
+
+        # If from Guardian, extract key data for strategy
+        if message.from_agent == 'guardian':
+            critical_threats = message.payload.get('critical_threats', [])
+            rasm_score = message.payload.get('rasm_score', 0)
+
+            if critical_threats:
+                self._guardian_insights.append({
+                    'type': 'critical_threats',
+                    'count': len(critical_threats),
+                    'rasm_score': rasm_score,
+                    'categories': [t.get('category') for t in critical_threats[:5]]
+                })
+
+            # Emit insight immediately for critical alerts
+            if len(critical_threats) >= 3:
+                self._emit_insight(
+                    f"⚡ KRIITTINEN: {len(critical_threats)} uhkaa vaatii välitöntä huomiota (RASM: {rasm_score}/100)",
+                    priority=AgentPriority.CRITICAL,
+                    insight_type=InsightType.THREAT,
+                    data={'source': 'guardian_alert', 'threats': len(critical_threats)}
+                )
+
     def _task(self, key: str) -> str:
         return STRATEGIST_TASKS.get(key, {}).get(self._language, key)
     
@@ -82,7 +141,26 @@ class StrategistAgent(BaseAgent):
         analyst_results = self.get_dependency_results(context, 'analyst')
         guardian_results = self.get_dependency_results(context, 'guardian')
         prospector_results = self.get_dependency_results(context, 'prospector')
-        
+
+        # ========================================================================
+        # SWARM: Use SharedKnowledge from other agents
+        # ========================================================================
+        shared_threats = context.get_from_shared('detected_threats', [])
+        shared_opportunities = context.get_from_shared('detected_opportunities', [])
+        shared_actions = context.get_from_shared('priority_actions', [])
+        collaboration_results = context.get_from_shared('collaboration_results', [])
+
+        if shared_threats:
+            logger.info(f"[Strategist] 📋 Using {len(shared_threats)} threats from SharedKnowledge")
+        if shared_opportunities:
+            logger.info(f"[Strategist] 📋 Using {len(shared_opportunities)} opportunities from SharedKnowledge")
+        if collaboration_results:
+            logger.info(f"[Strategist] 🤝 Found {len(collaboration_results)} collaboration results")
+
+        # Process alerts received during execution
+        if self._critical_alerts:
+            logger.info(f"[Strategist] 🚨 Processing {len(self._critical_alerts)} critical alerts")
+
         # 🧠 UNIFIED CONTEXT: Strategic trend analysis and historical positioning
         score_history = []
         competitive_trend = "stable"  # stable, improving, declining
@@ -244,7 +322,25 @@ class StrategistAgent(BaseAgent):
             priority=AgentPriority.MEDIUM,
             insight_type=InsightType.FINDING
         )
-        
+
+        # ========================================================================
+        # SWARM: Add strategic recommendations to SharedKnowledge
+        # ========================================================================
+        for rec in recommendations:
+            rec['source_agent'] = self.id
+            context.add_to_shared('strategic_recommendations', rec, self.id)
+
+        # If we got collaboration results, incorporate into summary
+        swarm_enhancement = None
+        if collaboration_results:
+            swarm_enhancement = {
+                'collaboration_count': len(collaboration_results),
+                'insights_integrated': len(shared_threats) + len(shared_opportunities)
+            }
+            logger.info(f"[Strategist] ✅ Integrated {len(collaboration_results)} collaboration results into strategy")
+
+        logger.info(f"[Strategist] ✅ Added {len(recommendations)} recommendations to SharedKnowledge")
+
         return {
             'executive_summary': executive_summary,
             'overall_score': overall_score,
@@ -253,7 +349,15 @@ class StrategistAgent(BaseAgent):
             'strategic_priorities': strategic_priorities,
             'key_insights': key_insights,
             'competitive_position': competitive_position,
-            'recommendations': recommendations
+            'recommendations': recommendations,
+            # NEW: Swarm data
+            'swarm_enhancement': swarm_enhancement,
+            'alerts_processed': len(self._critical_alerts),
+            'shared_data_used': {
+                'threats': len(shared_threats),
+                'opportunities': len(shared_opportunities),
+                'collaborations': len(collaboration_results)
+            }
         }
     
     def _calculate_composite_scores(

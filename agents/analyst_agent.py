@@ -32,8 +32,9 @@ ANALYST_TASKS = {
 class AnalystAgent(BaseAgent):
     """
     📊 Analyst Agent - Data-analyytikko
+    TRUE SWARM EDITION - Responds to analysis requests from other agents
     """
-    
+
     def __init__(self):
         super().__init__(
             agent_id="analyst",
@@ -43,7 +44,80 @@ class AnalystAgent(BaseAgent):
             personality="Tarkka ja datavetoinen analyytikko"
         )
         self.dependencies = ['scout']
-    
+
+        # ========================================================================
+        # SWARM STATE - Active message handling
+        # ========================================================================
+        self._analysis_requests: List[Dict[str, Any]] = []
+
+    def _get_subscribed_message_types(self):
+        """Subscribe to requests"""
+        from .communication import MessageType
+        return [
+            MessageType.REQUEST,
+            MessageType.DATA
+        ]
+
+    async def _handle_request(self, message):
+        """
+        Handle analysis requests from other agents.
+        ACTIVE HANDLING - provide on-demand analysis.
+        """
+        from .communication import MessageType
+        from datetime import datetime
+
+        request_type = message.payload.get('request_type', '')
+
+        self._analysis_requests.append({
+            'from': message.from_agent,
+            'type': request_type,
+            'timestamp': datetime.now().isoformat()
+        })
+
+        if request_type == 'category_detail':
+            # Another agent wants detailed category analysis
+            category = message.payload.get('category', '')
+            url = message.payload.get('url', '')
+
+            detail = self._get_category_detail(category, url)
+
+            await self._send_message(
+                to_agent=message.from_agent,
+                message_type=MessageType.DATA,
+                subject=f"Category detail: {category}",
+                payload={'category': category, 'detail': detail}
+            )
+            logger.info(f"[Analyst] 📊 Sent category detail to {message.from_agent}")
+
+        elif request_type == 'quick_benchmark':
+            # Quick benchmark request
+            url = message.payload.get('url', '')
+            benchmark = await self._quick_benchmark(url)
+
+            await self._send_message(
+                to_agent=message.from_agent,
+                message_type=MessageType.DATA,
+                subject=f"Quick benchmark: {url[:30]}",
+                payload={'benchmark': benchmark}
+            )
+            logger.info(f"[Analyst] 📊 Sent quick benchmark to {message.from_agent}")
+
+    def _get_category_detail(self, category: str, url: str = '') -> Dict[str, Any]:
+        """Get detailed analysis for a specific category"""
+        return {
+            'category': category,
+            'analysis_available': True,
+            'note': f"Detailed {category} analysis for {url or 'target'}"
+        }
+
+    async def _quick_benchmark(self, url: str) -> Dict[str, Any]:
+        """Quick benchmark analysis"""
+        return {
+            'url': url,
+            'quick_score': 50,
+            'note': 'Quick benchmark - full analysis in execute()'
+        }
+
     def _task(self, key: str) -> str:
         return ANALYST_TASKS.get(key, {}).get(self._language, key)
     

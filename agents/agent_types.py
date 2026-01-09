@@ -138,34 +138,90 @@ class AnalysisContext(BaseModel):
     language: str = "fi"
     industry_context: Optional[str] = None
     user_id: Optional[str] = None
-    
+
     # Revenue input
     revenue_input: Optional[Dict[str, Any]] = None
-    
+
     # Shared state (updates as agents progress)
     agent_results: Dict[str, AgentResult] = {}
-    
+
     # Raw data
     html_content: Optional[str] = None
     website_data: Optional[Dict[str, Any]] = None
     competitor_data: List[Dict[str, Any]] = []
-    
+
     # Unified Context (historical data)
     unified_context: Optional[Dict[str, Any]] = None
-    
+
     # NEW: Real-time swarm state
     swarm_events: List[SwarmEvent] = []
     active_collaborations: Dict[str, Any] = {}
-    
+
+    # ========================================================================
+    # SHARED KNOWLEDGE - Bemufix-style real-time knowledge sharing
+    # ========================================================================
+    shared_knowledge: Dict[str, Any] = Field(default_factory=lambda: {
+        'detected_threats': [],           # Guardian löytämät uhat
+        'detected_opportunities': [],     # Prospector löytämät mahdollisuudet
+        'competitor_insights': [],        # Scout kilpailijainsightit
+        'priority_actions': [],           # Guardianin priorisoidut toimenpiteet
+        'strategic_recommendations': [],  # Strategist suositukset
+        'collaboration_results': [],      # Yhteistyön tulokset
+        'predictions': [],                # LearningSystem ennusteet
+        'agent_contributions': {}         # Kuka lisäsi mitäkin
+    })
+
     class Config:
         arbitrary_types_allowed = True
-    
+
     def add_swarm_event(self, event: SwarmEvent):
         """Add swarm event to context (for monitoring)"""
         self.swarm_events.append(event)
         # Keep only last 100 events
         if len(self.swarm_events) > 100:
             self.swarm_events = self.swarm_events[-100:]
+
+    def add_to_shared(self, key: str, value: Any, agent_id: str):
+        """
+        Add data to shared knowledge (Bemufix-style).
+        All agents can see this data immediately.
+        """
+        if key not in self.shared_knowledge:
+            self.shared_knowledge[key] = []
+
+        # Add to list or replace value
+        if isinstance(self.shared_knowledge[key], list):
+            self.shared_knowledge[key].append(value)
+        else:
+            self.shared_knowledge[key] = value
+
+        # Track who contributed what
+        if 'agent_contributions' not in self.shared_knowledge:
+            self.shared_knowledge['agent_contributions'] = {}
+        if agent_id not in self.shared_knowledge['agent_contributions']:
+            self.shared_knowledge['agent_contributions'][agent_id] = []
+        self.shared_knowledge['agent_contributions'][agent_id].append({
+            'key': key,
+            'timestamp': datetime.now().isoformat()
+        })
+
+    def get_from_shared(self, key: str, default: Any = None) -> Any:
+        """Get data from shared knowledge"""
+        return self.shared_knowledge.get(key, default)
+
+    def get_threats_from_agents(self, agent_ids: Optional[List[str]] = None) -> List[Dict]:
+        """Get threats, optionally filtered by agent"""
+        threats = self.shared_knowledge.get('detected_threats', [])
+        if agent_ids:
+            return [t for t in threats if t.get('source_agent') in agent_ids]
+        return threats
+
+    def get_opportunities_from_agents(self, agent_ids: Optional[List[str]] = None) -> List[Dict]:
+        """Get opportunities, optionally filtered by agent"""
+        opps = self.shared_knowledge.get('detected_opportunities', [])
+        if agent_ids:
+            return [o for o in opps if o.get('source_agent') in agent_ids]
+        return opps
 
 
 class OrchestrationResult(BaseModel):

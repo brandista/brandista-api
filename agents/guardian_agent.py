@@ -81,9 +81,9 @@ COMPETITOR_INSIGHTS = {
 class GuardianAgent(BaseAgent):
     """
     🛡️ Guardian Agent - Riskienhallitsija (RASM)
-    TRUE SWARM EDITION
+    TRUE SWARM EDITION - Now with ACTIVE message handling and collaboration
     """
-    
+
     def __init__(self):
         super().__init__(
             agent_id="guardian",
@@ -93,7 +93,16 @@ class GuardianAgent(BaseAgent):
             personality="Valpas ja huolellinen turvallisuusasiantuntija"
         )
         self.dependencies = ['scout', 'analyst']
+
+        # ========================================================================
+        # SWARM STATE - Active message handling (Bemufix-style)
+        # ========================================================================
         self._scout_alerts: List[Dict[str, Any]] = []
+        self._external_alerts: List[Dict[str, Any]] = []  # All received alerts
+        self._received_competitor_data: Optional[Dict[str, Any]] = None
+        self._has_new_competitor_data: bool = False
+        self._collaboration_results: List[Dict[str, Any]] = []  # Results from collaborations
+        self._predictions_made: List[str] = []  # Track prediction IDs for verification
     
     def _get_subscribed_message_types(self) -> List[MessageType]:
         """Guardian subscribes to alerts and findings"""
@@ -109,23 +118,104 @@ class GuardianAgent(BaseAgent):
         return {'risk_assessment', 'threat_analysis', 'competitor_threat'}
     
     def _setup_blackboard_subscriptions(self):
-        """Subscribe to competitor data"""
+        """Subscribe to competitor data and other relevant updates"""
+        super()._setup_blackboard_subscriptions()
+
         if self._blackboard:
+            # Scout competitor data
             self._blackboard.subscribe(
                 pattern="scout.competitors.*",
                 agent_id=self.id,
                 callback=self._on_competitor_data
             )
-    
+            # Scout industry data
+            self._blackboard.subscribe(
+                pattern="scout.industry",
+                agent_id=self.id,
+                callback=self._on_industry_data
+            )
+
     def _on_competitor_data(self, entry):
-        """React to competitor data from Scout"""
-        logger.info(f"[Guardian] 📋 Received competitor data from blackboard: {entry.key}")
-    
+        """
+        React to competitor data from Scout - ACTUALLY USE IT!
+        This data will enrich our threat analysis.
+        """
+        self._received_competitor_data = entry.value
+        self._has_new_competitor_data = True
+        competitor_count = entry.value.get('count', 0) if isinstance(entry.value, dict) else 0
+        logger.info(f"[Guardian] 📋 RECEIVED competitor data from Blackboard: {competitor_count} competitors - WILL USE IN ANALYSIS")
+
+    def _on_industry_data(self, entry):
+        """React to industry detection from Scout"""
+        industry = entry.value.get('detected', 'unknown') if isinstance(entry.value, dict) else 'unknown'
+        logger.info(f"[Guardian] 🏭 Received industry data: {industry}")
+
     async def _handle_alert(self, message: AgentMessage):
-        """Handle alerts from Scout about high-threat competitors"""
-        if message.from_agent == 'scout' and 'competitors' in message.payload:
-            self._scout_alerts.append(message.payload)
-            logger.info(f"[Guardian] 🚨 Received Scout alert about {len(message.payload.get('competitors', []))} threats")
+        """
+        Handle alerts from Scout about high-threat competitors.
+        ACTIVE HANDLING - data is stored and used in execute().
+        """
+        alert_data = message.payload
+
+        # Store for later use in execute()
+        self._external_alerts.append({
+            'from': message.from_agent,
+            'subject': message.subject,
+            'payload': alert_data,
+            'timestamp': datetime.now().isoformat(),
+            'priority': getattr(message, 'priority', 'medium')
+        })
+
+        # Scout-specific handling
+        if message.from_agent == 'scout' and 'competitors' in alert_data:
+            self._scout_alerts.append(alert_data)
+            high_threat_count = len(alert_data.get('competitors', []))
+            logger.info(f"[Guardian] 🚨 Received Scout alert: {high_threat_count} high-threat competitors")
+
+            # If critical, forward immediately to Strategist
+            if high_threat_count >= 3 or alert_data.get('severity') == 'critical':
+                await self._send_message(
+                    to_agent='strategist',
+                    message_type=MessageType.ALERT,
+                    subject=f"URGENT: {high_threat_count} high-threat competitors detected",
+                    payload={
+                        'source': 'guardian_forward',
+                        'original_from': 'scout',
+                        'competitors': alert_data.get('competitors', []),
+                        'industry': alert_data.get('industry', 'unknown')
+                    },
+                    priority=MessagePriority.CRITICAL
+                )
+                logger.info(f"[Guardian] ⚡ Forwarded critical alert to Strategist")
+
+        logger.info(f"[Guardian] ✅ Processed alert from {message.from_agent}: {message.subject}")
+
+    async def _handle_request(self, message: AgentMessage):
+        """Handle requests from other agents (e.g., risk assessment requests)"""
+        request_type = message.payload.get('request_type', '')
+
+        if request_type == 'risk_assessment':
+            # Another agent wants a quick risk assessment
+            target = message.payload.get('target', {})
+            quick_assessment = self._quick_risk_assessment(target)
+
+            # Send response back
+            await self._send_message(
+                to_agent=message.from_agent,
+                message_type=MessageType.DATA,
+                subject=f"Risk assessment for {target.get('name', 'unknown')}",
+                payload={'assessment': quick_assessment}
+            )
+            logger.info(f"[Guardian] Sent risk assessment to {message.from_agent}")
+
+    def _quick_risk_assessment(self, target: Dict[str, Any]) -> Dict[str, Any]:
+        """Quick risk assessment for on-demand requests"""
+        score = target.get('score', 50)
+        return {
+            'risk_level': 'high' if score < 40 else 'medium' if score < 70 else 'low',
+            'score': score,
+            'quick_analysis': True
+        }
     
     def _task(self, key: str) -> str:
         return GUARDIAN_TASKS.get(key, {}).get(self._language, key)
@@ -135,10 +225,45 @@ class GuardianAgent(BaseAgent):
     
     async def execute(self, context: AnalysisContext) -> Dict[str, Any]:
         from main import build_risk_register
-        
+
         analyst_results = self.get_dependency_results(context, 'analyst')
         scout_results = self.get_dependency_results(context, 'scout')
-        
+
+        # ========================================================================
+        # SWARM: Process external alerts received during execution
+        # ========================================================================
+        external_threat_boost = []
+        if self._external_alerts:
+            logger.info(f"[Guardian] 🔔 Processing {len(self._external_alerts)} external alerts")
+            for alert in self._external_alerts:
+                # Convert alerts to threat format for inclusion
+                if alert.get('payload', {}).get('competitors'):
+                    for comp in alert['payload']['competitors']:
+                        external_threat_boost.append({
+                            'category': 'external_competitor',
+                            'title': f"High-threat competitor: {comp.get('name', comp.get('domain', 'Unknown'))}",
+                            'severity': 'high',
+                            'source': 'scout_alert',
+                            'data': comp
+                        })
+
+        # ========================================================================
+        # SWARM: Use Blackboard competitor data
+        # ========================================================================
+        if self._has_new_competitor_data and self._received_competitor_data:
+            logger.info(f"[Guardian] 📋 Using Blackboard competitor data in analysis")
+            bb_competitors = self._received_competitor_data.get('enriched', [])
+            for comp in bb_competitors[:5]:  # Top 5 from blackboard
+                if comp.get('relevance_score', 0) >= 70:
+                    external_threat_boost.append({
+                        'category': 'blackboard_competitor',
+                        'title': f"Relevant competitor: {comp.get('name', 'Unknown')}",
+                        'severity': 'medium',
+                        'source': 'blackboard',
+                        'relevance_score': comp.get('relevance_score'),
+                        'data': comp
+                    })
+
         # 🧠 UNIFIED CONTEXT: Track historical threats and revenue trends
         historical_threats = []
         previous_rasm_score = None
@@ -392,10 +517,17 @@ class GuardianAgent(BaseAgent):
             )
         
         self._update_progress(45, self._task("identifying_threats"))
-        
+
         # 3. Tunnista uhkat
         threats = self._identify_threats(your_analysis, benchmark, category_comparison)
-        
+
+        # ========================================================================
+        # SWARM: Merge external threats from alerts and blackboard
+        # ========================================================================
+        if external_threat_boost:
+            logger.info(f"[Guardian] 🔗 Adding {len(external_threat_boost)} external threats from swarm")
+            threats = threats + external_threat_boost
+
         # Emit threat insights
         for threat in threats[:5]:
             severity = threat.get('severity', 'medium')
@@ -519,7 +651,70 @@ class GuardianAgent(BaseAgent):
                 'critical_count': len(critical_threats)
             }
         )
-        
+
+        # ====================================================================
+        # SWARM: CollaborationManager - Guardian+Prospector joint analysis
+        # ====================================================================
+        collaboration_insight = None
+        if len(critical_threats) >= 2:
+            logger.info(f"[Guardian] 🤝 Initiating collaboration with Prospector on {len(critical_threats)} critical threats")
+            collaboration_insight = await self._collaborate_with_prospector(
+                critical_threats, priority_actions
+            )
+
+        # ====================================================================
+        # SWARM: LearningSystem - Log predictions for later verification
+        # ====================================================================
+        for threat in threats[:10]:  # Top 10 threats
+            pred_id = self._log_prediction(
+                prediction_type='threat_impact',
+                predicted_value=threat.get('severity', 'medium'),
+                confidence=0.75 if threat.get('source') == 'scout_alert' else 0.85,
+                context={
+                    'category': threat.get('category', 'unknown'),
+                    'url': context.url,
+                    'rasm_score': rasm_score
+                }
+            )
+            threat['prediction_id'] = pred_id
+            self._predictions_made.append(pred_id)
+
+        # Log RASM prediction
+        rasm_pred_id = self._log_prediction(
+            prediction_type='rasm_improvement',
+            predicted_value='improve' if rasm_score < 70 else 'maintain',
+            confidence=0.7,
+            context={'current_score': rasm_score, 'threat_count': len(threats)}
+        )
+
+        # ====================================================================
+        # SWARM: SharedKnowledge - Add findings to shared context
+        # ====================================================================
+        for threat in threats:
+            threat['source_agent'] = self.id
+            context.add_to_shared('detected_threats', threat, self.id)
+
+        for action in priority_actions:
+            action['source_agent'] = self.id
+            context.add_to_shared('priority_actions', action, self.id)
+
+        if collaboration_insight:
+            context.add_to_shared('collaboration_results', {
+                'type': 'guardian_prospector',
+                'result': collaboration_insight,
+                'timestamp': datetime.now().isoformat()
+            }, self.id)
+
+        # Add RASM prediction to shared
+        context.add_to_shared('predictions', {
+            'prediction_id': rasm_pred_id,
+            'type': 'rasm_improvement',
+            'agent': self.id,
+            'value': 'improve' if rasm_score < 70 else 'maintain'
+        }, self.id)
+
+        logger.info(f"[Guardian] ✅ Added {len(threats)} threats and {len(priority_actions)} actions to SharedKnowledge")
+
         return {
             'threats': threats,
             'risk_register': risk_register,
@@ -533,8 +728,70 @@ class GuardianAgent(BaseAgent):
                 'source': revenue_source,
                 'warning': revenue_warning,
                 'company_name': company_name
+            },
+            # NEW: Swarm collaboration results
+            'collaboration_insight': collaboration_insight,
+            'predictions_logged': len(self._predictions_made),
+            'swarm_contributions': {
+                'external_alerts_processed': len(self._external_alerts),
+                'blackboard_data_used': self._has_new_competitor_data
             }
         }
+
+    async def _collaborate_with_prospector(
+        self,
+        critical_threats: List[Dict[str, Any]],
+        priority_actions: List[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Collaborate with Prospector to balance risk vs opportunity.
+        Uses CollaborationManager for structured decision-making.
+        """
+        try:
+            problem = (
+                f"Prioritize response to {len(critical_threats)} critical threats. "
+                f"Top threats: {', '.join([t.get('category', 'unknown') for t in critical_threats[:3]])}. "
+                f"Consider opportunity cost vs risk mitigation."
+            )
+
+            result = await self._start_collaboration(
+                problem=problem,
+                with_agents=['prospector'],
+                timeout=15.0
+            )
+
+            if result and result.consensus_reached:
+                logger.info(f"[Guardian] 🤝 Consensus reached with Prospector: {result.solution[:100] if result.solution else 'No solution'}")
+
+                self._emit_insight(
+                    f"🤝 Guardian+Prospector: {result.solution[:150] if result.solution else 'Yhteisymmärrys saavutettu'}",
+                    priority=AgentPriority.HIGH,
+                    insight_type=InsightType.CONSENSUS,
+                    from_collaboration=True,
+                    contributing_agents=['guardian', 'prospector'],
+                    data={
+                        'consensus': result.solution,
+                        'confidence': result.confidence,
+                        'threats_discussed': len(critical_threats)
+                    }
+                )
+
+                return {
+                    'consensus_reached': True,
+                    'solution': result.solution,
+                    'confidence': result.confidence,
+                    'participating_agents': ['guardian', 'prospector']
+                }
+            else:
+                logger.info(f"[Guardian] No consensus with Prospector - proceeding with Guardian assessment")
+                return {
+                    'consensus_reached': False,
+                    'reason': 'timeout_or_no_agreement'
+                }
+
+        except Exception as e:
+            logger.warning(f"[Guardian] Collaboration failed: {e}")
+            return {'consensus_reached': False, 'error': str(e)}
     
     def _identify_threats(
         self,

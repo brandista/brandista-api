@@ -18,7 +18,7 @@ Data flow:
 """
 
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from .base_agent import BaseAgent
 from .agent_types import (
@@ -42,8 +42,9 @@ PROSPECTOR_TASKS = {
 class ProspectorAgent(BaseAgent):
     """
     💎 Prospector Agent - Kasvuhakkeri
+    TRUE SWARM EDITION - Collaborates with Guardian, finds opportunities in threats
     """
-    
+
     def __init__(self):
         super().__init__(
             agent_id="prospector",
@@ -53,7 +54,121 @@ class ProspectorAgent(BaseAgent):
             personality="Optimistinen ja luova visionääri"
         )
         self.dependencies = ['scout', 'analyst']
-    
+
+        # ========================================================================
+        # SWARM STATE - Active message handling
+        # ========================================================================
+        self._guardian_data: List[Dict[str, Any]] = []  # Threat data from Guardian
+        self._threat_opportunities: List[Dict[str, Any]] = []  # Opportunities found in threats
+        self._collaboration_pending: bool = False
+
+    def _get_subscribed_message_types(self):
+        """Subscribe to data and collaboration messages"""
+        from .communication import MessageType
+        return [
+            MessageType.DATA,
+            MessageType.REQUEST,
+            MessageType.CONSENSUS,
+            MessageType.PROPOSAL
+        ]
+
+    async def _handle_request(self, message):
+        """
+        Handle requests from Guardian - opportunity assessment.
+        ACTIVE HANDLING - evaluate threats for hidden opportunities.
+        """
+        from .communication import MessageType
+        from datetime import datetime
+
+        request_type = message.payload.get('request_type', '')
+
+        if request_type == 'opportunity_assessment':
+            # Guardian asking if there's opportunity in a threat
+            threat = message.payload.get('threat', {})
+            opportunity = self._assess_opportunity_in_threat(threat)
+
+            # Store for later use
+            if opportunity:
+                self._threat_opportunities.append(opportunity)
+
+            # Send response back
+            await self._send_message(
+                to_agent=message.from_agent,
+                message_type=MessageType.DATA,
+                subject=f"Opportunity assessment: {threat.get('title', 'unknown')[:50]}",
+                payload={
+                    'opportunity': opportunity,
+                    'assessed_threat': threat.get('title'),
+                    'has_opportunity': opportunity is not None
+                }
+            )
+            logger.info(f"[Prospector] 💎 Sent opportunity assessment to {message.from_agent}")
+
+    async def _handle_data(self, message):
+        """Handle data messages from Guardian"""
+        if message.from_agent == 'guardian':
+            self._guardian_data.append(message.payload)
+            logger.info(f"[Prospector] 📊 Received Guardian data: {message.subject}")
+
+            # If receiving threat assessment, look for opportunities
+            assessment = message.payload.get('assessment', {})
+            high_threats = message.payload.get('high_threats', [])
+
+            for threat_comp in high_threats:
+                opp = self._assess_opportunity_in_threat(threat_comp)
+                if opp:
+                    self._threat_opportunities.append(opp)
+
+    def _assess_opportunity_in_threat(self, threat: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Find the opportunity hidden in a threat.
+        This is the Prospector's core skill - seeing silver linings.
+        """
+        category = threat.get('category', '').lower()
+        severity = threat.get('severity', 'medium')
+        title = threat.get('title', '')
+
+        # Competitor weakness = our opportunity
+        if 'competitor' in category or 'competitive' in category:
+            return {
+                'type': 'competitive_advantage',
+                'title': f"Capitalize on competitor gap: {title[:50]}",
+                'description': f"Competitor showing weakness in {category} - opportunity to differentiate",
+                'related_threat': title,
+                'impact': 'high',
+                'effort': 'medium',
+                'confidence': 0.7,
+                'source': 'threat_analysis'
+            }
+
+        # Market gap = positioning opportunity
+        if 'market' in category or 'gap' in category:
+            return {
+                'type': 'market_positioning',
+                'title': f"Market gap opportunity: {title[:50]}",
+                'description': f"Identified market gap in {category}",
+                'related_threat': title,
+                'impact': 'high',
+                'effort': 'high',
+                'confidence': 0.6,
+                'source': 'threat_analysis'
+            }
+
+        # SEO/content weakness = quick win
+        if category in ['seo', 'content', 'ai_visibility']:
+            return {
+                'type': 'quick_win',
+                'title': f"Quick improvement: {category.upper()}",
+                'description': f"Address {category} weakness before competitors",
+                'related_threat': title,
+                'impact': 'medium',
+                'effort': 'low',
+                'confidence': 0.8,
+                'source': 'threat_analysis'
+            }
+
+        return None
+
     def _task(self, key: str) -> str:
         return PROSPECTOR_TASKS.get(key, {}).get(self._language, key)
     
@@ -220,20 +335,58 @@ class ProspectorAgent(BaseAgent):
         high_impact = len([o for o in growth_opportunities if o.get('impact') == 'high'])
         
         self._emit_insight(
-            self._t("prospector.complete", 
+            self._t("prospector.complete",
                    total=len(growth_opportunities),
                    high_impact=high_impact),
             priority=AgentPriority.MEDIUM,
             insight_type=InsightType.FINDING,
             data={'total': len(growth_opportunities), 'high_impact': high_impact}
         )
-        
+
+        # ========================================================================
+        # SWARM: Merge threat-based opportunities from Guardian collaboration
+        # ========================================================================
+        if self._threat_opportunities:
+            logger.info(f"[Prospector] 💎 Adding {len(self._threat_opportunities)} opportunities from threat analysis")
+            for threat_opp in self._threat_opportunities:
+                threat_opp['source_agent'] = self.id
+                threat_opp['from_collaboration'] = True
+                growth_opportunities.append(threat_opp)
+
+        # ========================================================================
+        # SWARM: Add opportunities to SharedKnowledge
+        # ========================================================================
+        for opp in growth_opportunities:
+            opp['source_agent'] = self.id
+            context.add_to_shared('detected_opportunities', opp, self.id)
+
+        # Also read threats from shared knowledge and find more opportunities
+        shared_threats = context.get_from_shared('detected_threats', [])
+        if shared_threats:
+            logger.info(f"[Prospector] 🔍 Analyzing {len(shared_threats)} shared threats for opportunities")
+            for threat in shared_threats[:5]:  # Check top 5 threats
+                if threat.get('source_agent') != self.id:  # Don't duplicate our own
+                    additional_opp = self._assess_opportunity_in_threat(threat)
+                    if additional_opp:
+                        additional_opp['from_shared_knowledge'] = True
+                        growth_opportunities.append(additional_opp)
+                        context.add_to_shared('detected_opportunities', additional_opp, self.id)
+
+        logger.info(f"[Prospector] ✅ Added {len(growth_opportunities)} opportunities to SharedKnowledge")
+
         return {
             'market_gaps': market_gaps,
             'quick_wins': quick_wins,
             'competitive_advantages': competitive_advantages,
             'growth_opportunities': growth_opportunities,
-            'swot': swot
+            'swot': swot,
+            # NEW: Swarm data
+            'threat_opportunities': len(self._threat_opportunities),
+            'guardian_data_received': len(self._guardian_data),
+            'swarm_contributions': {
+                'opportunities_from_threats': len(self._threat_opportunities),
+                'shared_threats_analyzed': len(shared_threats)
+            }
         }
     
     def _find_market_gaps(

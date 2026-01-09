@@ -885,8 +885,9 @@ TASK_MAPPING = {
 class PlannerAgent(BaseAgent):
     """
     📋 Planner Agent V2 - Enhanced with rich action items
+    TRUE SWARM EDITION - Uses SharedKnowledge from all agents
     """
-    
+
     def __init__(self):
         super().__init__(
             agent_id="planner",
@@ -896,7 +897,12 @@ class PlannerAgent(BaseAgent):
             personality="Käytännöllinen ja järjestelmällinen organisoija"
         )
         self.dependencies = ['scout', 'analyst', 'guardian', 'prospector', 'strategist']
-    
+
+        # ========================================================================
+        # SWARM STATE
+        # ========================================================================
+        self._swarm_data_used: Dict[str, int] = {}
+
     def _get_action(self, key: str) -> Dict[str, Any]:
         """Get rich action item from library"""
         action = ACTION_LIBRARY.get(key, {})
@@ -904,13 +910,47 @@ class PlannerAgent(BaseAgent):
     
     async def execute(self, context: AnalysisContext) -> Dict[str, Any]:
         self._context = context
-        
+
         # Get dependency results
         strategist_results = self.get_dependency_results(context, 'strategist')
         guardian_results = self.get_dependency_results(context, 'guardian')
         prospector_results = self.get_dependency_results(context, 'prospector')
         analyst_results = self.get_dependency_results(context, 'analyst')
-        
+
+        # ========================================================================
+        # SWARM: Use SharedKnowledge from all agents
+        # ========================================================================
+        shared_threats = context.get_from_shared('detected_threats', [])
+        shared_opportunities = context.get_from_shared('detected_opportunities', [])
+        shared_actions = context.get_from_shared('priority_actions', [])
+        collaboration_results = context.get_from_shared('collaboration_results', [])
+        strategic_recs = context.get_from_shared('strategic_recommendations', [])
+        predictions = context.get_from_shared('predictions', [])
+
+        self._swarm_data_used = {
+            'threats': len(shared_threats),
+            'opportunities': len(shared_opportunities),
+            'priority_actions': len(shared_actions),
+            'collaborations': len(collaboration_results),
+            'strategic_recommendations': len(strategic_recs),
+            'predictions': len(predictions)
+        }
+
+        if any(self._swarm_data_used.values()):
+            logger.info(f"[Planner] 📋 Using SharedKnowledge: {self._swarm_data_used}")
+            self._emit_insight(
+                f"📊 Swarm data: {sum(self._swarm_data_used.values())} items from {len([v for v in self._swarm_data_used.values() if v > 0])} sources",
+                priority=AgentPriority.MEDIUM,
+                insight_type=InsightType.FINDING,
+                data={'swarm_data': self._swarm_data_used}
+            )
+
+        # If we have collaboration results, prioritize those insights
+        if collaboration_results:
+            for collab in collaboration_results:
+                if collab.get('result', {}).get('consensus_reached'):
+                    logger.info(f"[Planner] 🤝 Using collaboration insight: {collab.get('type')}")
+
         # 🧠 UNIFIED CONTEXT: Track completed actions and avoid duplicates
         previously_planned_actions = []
         completed_actions = []
@@ -1067,6 +1107,8 @@ class PlannerAgent(BaseAgent):
             insight_type=InsightType.FINDING
         )
         
+        logger.info(f"[Planner] ✅ Plan complete. Swarm data used: {self._swarm_data_used}")
+
         return {
             'roadmap': {
                 'total_duration_days': 90,
@@ -1079,7 +1121,10 @@ class PlannerAgent(BaseAgent):
             'resource_estimate': resource_estimate,
             'roi_projection': roi_projection,
             'quick_start_guide': quick_start_guide,
-            'projected_improvement': roi_projection.get('potential_score_gain', 15)
+            'projected_improvement': roi_projection.get('potential_score_gain', 15),
+            # NEW: Swarm data
+            'swarm_data_used': self._swarm_data_used,
+            'swarm_enhanced': any(self._swarm_data_used.values())
         }
     
     def _detect_issues(self, analyst_results: Dict[str, Any]) -> List[str]:
