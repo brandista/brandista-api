@@ -56,6 +56,12 @@ class SwarmEventType(str, Enum):
     TASK_COMPLETED = "task_completed"
     AGENT_ALERT = "agent_alert"
     LEARNING_UPDATE = "learning_update"
+    # NEW: Real-time agent conversation events for frontend visualization
+    AGENT_CONVERSATION = "agent_conversation"
+    COLLABORATION_STARTED = "collaboration_started"
+    COLLABORATION_COMPLETE = "collaboration_complete"
+    COLLABORATION_ENDED = "collaboration_ended"
+    PLAN_VALIDATED = "plan_validated"
 
 
 class AgentInsight(BaseModel):

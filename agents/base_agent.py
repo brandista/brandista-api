@@ -14,7 +14,7 @@ import asyncio
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Dict, Any, List, Optional, Callable, Set, Tuple
+from typing import Dict, Any, List, Optional, Callable, Set, Tuple, Union
 
 from .agent_types import (
     AgentStatus,
@@ -715,27 +715,54 @@ class BaseAgent(ABC):
     
     def _emit_swarm_event(
         self,
-        event_type: SwarmEventType,
-        from_agent: str,
-        subject: str,
-        data: Dict[str, Any]
+        event_type: Union[SwarmEventType, str],
+        data_or_from_agent: Union[Dict[str, Any], str] = None,
+        subject: str = None,
+        data: Dict[str, Any] = None
     ):
-        """Emit swarm event for monitoring"""
+        """
+        Emit swarm event for monitoring.
+
+        Supports two call signatures:
+        1. Simple: _emit_swarm_event('event_type', {data_dict})
+        2. Full: _emit_swarm_event(SwarmEventType.X, 'from_agent', 'subject', {data})
+        """
         if not self._on_swarm_event:
             return
-        
-        event = SwarmEvent(
-            event_type=event_type,
-            from_agent=from_agent,
-            subject=subject,
-            data=data
-        )
-        
+
+        # Handle simple signature: _emit_swarm_event('type', {data})
+        if isinstance(data_or_from_agent, dict):
+            event_data = data_or_from_agent
+            # Convert string to enum if needed
+            if isinstance(event_type, str):
+                try:
+                    event_type = SwarmEventType(event_type)
+                except ValueError:
+                    # Unknown event type - still emit it
+                    pass
+
+            event = SwarmEvent(
+                event_type=event_type,
+                from_agent=event_data.get('from', self.id),
+                to_agent=event_data.get('to'),
+                subject=event_data.get('message', '')[:100] if event_data.get('message') else '',
+                data=event_data
+            )
+        else:
+            # Handle full signature: _emit_swarm_event(type, from_agent, subject, data)
+            event = SwarmEvent(
+                event_type=event_type,
+                from_agent=data_or_from_agent or self.id,
+                subject=subject or '',
+                data=data or {}
+            )
+
         try:
             self._on_swarm_event(event)
-        except Exception:
-            pass
-        
+            logger.debug(f"[{self.name}] 🐝 Swarm event emitted: {event.event_type}")
+        except Exception as e:
+            logger.warning(f"[{self.name}] Swarm event callback error: {e}")
+
         # Also add to context if available
         if self._context:
             self._context.add_swarm_event(event)
