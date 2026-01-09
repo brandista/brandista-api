@@ -95,7 +95,8 @@ from agents import (
     AgentProgress,
     AgentResult,
     WSMessageType,
-    WSMessage
+    WSMessage,
+    SwarmEvent  # For agent communication events
 )
 
 logger = logging.getLogger(__name__)
@@ -451,12 +452,34 @@ async def websocket_agent_analysis(
                         logger.info(f"[WS] Agent {agent_name} started - status sent")
                     except Exception as e:
                         logger.error(f"[WS] Failed to queue start status: {e}")
-                
+
+                def sync_swarm_event(event: SwarmEvent):
+                    """Callback for agent-to-agent communication events"""
+                    try:
+                        msg = {
+                            "type": "swarm_event",
+                            "data": {
+                                "event_type": event.event_type.value if hasattr(event.event_type, 'value') else event.event_type,
+                                "from_agent": event.from_agent,
+                                "to_agent": event.to_agent,
+                                "subject": event.subject,
+                                "timestamp": event.timestamp.isoformat() if hasattr(event.timestamp, 'isoformat') else str(event.timestamp),
+                                "data": event.data
+                            },
+                            "timestamp": datetime.now().isoformat()
+                        }
+                        message_queue.put_nowait(msg)
+                        pending_messages.append(msg)
+                        logger.info(f"[WS] 🐝 Swarm event: {event.from_agent} -> {event.to_agent or 'blackboard'}: {event.subject}")
+                    except Exception as e:
+                        logger.error(f"[WS] Failed to queue swarm event: {e}")
+
                 orchestrator.set_callbacks(
                     on_insight=sync_insight,
                     on_progress=sync_progress,
                     on_agent_complete=sync_complete,
-                    on_agent_start=sync_start  # NEW
+                    on_agent_start=sync_start,
+                    on_swarm_event=sync_swarm_event  # NEW: Agent communication events
                 )
                 
                 # Suorita analyysi
