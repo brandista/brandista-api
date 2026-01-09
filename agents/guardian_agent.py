@@ -748,12 +748,53 @@ class GuardianAgent(BaseAgent):
         """
         Collaborate with Prospector to balance risk vs opportunity.
         Uses CollaborationManager for structured decision-making.
+
+        TRUE SWARM: Active conversation with real-time events to frontend.
         """
         try:
             problem = (
                 f"Prioritize response to {len(critical_threats)} critical threats. "
                 f"Top threats: {', '.join([t.get('category', 'unknown') for t in critical_threats[:3]])}. "
                 f"Consider opportunity cost vs risk mitigation."
+            )
+
+            # ========================================================================
+            # EMIT SWARM EVENT: Collaboration starting
+            # ========================================================================
+            self._emit_swarm_event(
+                'collaboration_started',
+                {
+                    'session_type': 'threat_opportunity_analysis',
+                    'participants': ['guardian', 'prospector'],
+                    'topic': problem[:100],
+                    'threats_count': len(critical_threats)
+                }
+            )
+
+            # Emit conversation message - Guardian initiates
+            self._emit_swarm_event(
+                'agent_conversation',
+                {
+                    'from': 'guardian',
+                    'from_avatar': '🛡️',
+                    'to': 'prospector',
+                    'to_avatar': '💎',
+                    'message': f"Hei Prospector! Löysin {len(critical_threats)} kriittistä uhkaa. Näetkö näissä mahdollisuuksia?",
+                    'message_en': f"Hey Prospector! Found {len(critical_threats)} critical threats. See any opportunities here?",
+                    'timestamp': datetime.now().isoformat()
+                }
+            )
+
+            # Send request to Prospector for opportunity assessment
+            await self._send_message(
+                to_agent='prospector',
+                message_type=MessageType.REQUEST,
+                subject='Collaboration: Find opportunities in threats',
+                payload={
+                    'request_type': 'opportunity_assessment',
+                    'threats': critical_threats[:5],  # Top 5 threats
+                    'problem': problem
+                }
             )
 
             result = await self._start_collaboration(
@@ -764,6 +805,32 @@ class GuardianAgent(BaseAgent):
 
             if result and result.consensus_reached:
                 logger.info(f"[Guardian] 🤝 Consensus reached with Prospector: {result.solution[:100] if result.solution else 'No solution'}")
+
+                # Emit conversation - Prospector responds
+                self._emit_swarm_event(
+                    'agent_conversation',
+                    {
+                        'from': 'prospector',
+                        'from_avatar': '💎',
+                        'to': 'guardian',
+                        'to_avatar': '🛡️',
+                        'message': f"Näen mahdollisuuksia! {result.solution[:100] if result.solution else 'Yhteisymmärrys saavutettu'}",
+                        'message_en': f"I see opportunities! {result.solution[:100] if result.solution else 'Consensus reached'}",
+                        'timestamp': datetime.now().isoformat()
+                    }
+                )
+
+                # Emit collaboration complete
+                self._emit_swarm_event(
+                    'collaboration_complete',
+                    {
+                        'session_type': 'threat_opportunity_analysis',
+                        'participants': ['guardian', 'prospector'],
+                        'consensus_reached': True,
+                        'solution_preview': result.solution[:200] if result.solution else None,
+                        'confidence': result.confidence
+                    }
+                )
 
                 self._emit_insight(
                     f"🤝 Guardian+Prospector: {result.solution[:150] if result.solution else 'Yhteisymmärrys saavutettu'}",
@@ -782,9 +849,24 @@ class GuardianAgent(BaseAgent):
                     'consensus_reached': True,
                     'solution': result.solution,
                     'confidence': result.confidence,
-                    'participating_agents': ['guardian', 'prospector']
+                    'participating_agents': ['guardian', 'prospector'],
+                    'conversation': [
+                        {'from': 'guardian', 'message': f"Found {len(critical_threats)} critical threats"},
+                        {'from': 'prospector', 'message': result.solution[:100] if result.solution else 'Opportunities identified'}
+                    ]
                 }
             else:
+                # Emit no consensus event
+                self._emit_swarm_event(
+                    'collaboration_complete',
+                    {
+                        'session_type': 'threat_opportunity_analysis',
+                        'participants': ['guardian', 'prospector'],
+                        'consensus_reached': False,
+                        'reason': 'timeout_or_different_views'
+                    }
+                )
+
                 logger.info(f"[Guardian] No consensus with Prospector - proceeding with Guardian assessment")
                 return {
                     'consensus_reached': False,

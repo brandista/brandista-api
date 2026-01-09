@@ -91,6 +91,20 @@ class ProspectorAgent(BaseAgent):
             if opportunity:
                 self._threat_opportunities.append(opportunity)
 
+            # Emit swarm event for frontend visualization
+            self._emit_swarm_event(
+                'agent_conversation',
+                {
+                    'from': 'prospector',
+                    'from_avatar': '💎',
+                    'to': message.from_agent,
+                    'to_avatar': '🛡️' if message.from_agent == 'guardian' else '🤖',
+                    'message': f"Löysin mahdollisuuden! {opportunity.get('title', 'Uusi kasvupolku')[:60]}" if opportunity else "Tämä uhka on liian vakava - ei selkeää mahdollisuutta.",
+                    'message_en': f"Found opportunity! {opportunity.get('title', 'New growth path')[:60]}" if opportunity else "This threat is too severe - no clear opportunity.",
+                    'timestamp': datetime.now().isoformat()
+                }
+            )
+
             # Send response back
             await self._send_message(
                 to_agent=message.from_agent,

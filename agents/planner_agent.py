@@ -1109,6 +1109,38 @@ class PlannerAgent(BaseAgent):
         
         logger.info(f"[Planner] ✅ Plan complete. Swarm data used: {self._swarm_data_used}")
 
+        # ========================================================================
+        # SWARM: Planner validates plan with other agents and contributes back
+        # ========================================================================
+        validation_result = await self._validate_plan_with_agents(
+            phases, quick_start_guide, context
+        )
+
+        # Add validated plan to SharedKnowledge
+        plan_summary = {
+            'phases_count': len(phases),
+            'total_tasks': sum(len(p.get('tasks', [])) for p in phases),
+            'estimated_investment': resource_estimate.get('total_cost', 0),
+            'projected_roi': roi_projection.get('roi_percentage', 0),
+            'quick_start_tasks': [t.get('title') for t in quick_start_guide[:3]],
+            'validation': validation_result
+        }
+        context.add_to_shared('validated_plan', plan_summary, self.id)
+
+        # Contribute strategic recommendations back to SharedKnowledge
+        for phase in phases:
+            for task in phase.get('tasks', []):
+                context.add_to_shared('strategic_recommendations', {
+                    'source_agent': self.id,
+                    'phase': phase.get('phase'),
+                    'task': task.get('title'),
+                    'category': task.get('category'),
+                    'priority': task.get('priority', 'Medium'),
+                    'estimated_hours': self._parse_hours(task.get('time_estimate', '8 hours'))
+                }, self.id)
+
+        logger.info(f"[Planner] 📋 Added validated plan and {sum(len(p.get('tasks', [])) for p in phases)} recommendations to SharedKnowledge")
+
         return {
             'roadmap': {
                 'total_duration_days': 90,
@@ -1124,8 +1156,132 @@ class PlannerAgent(BaseAgent):
             'projected_improvement': roi_projection.get('potential_score_gain', 15),
             # NEW: Swarm data
             'swarm_data_used': self._swarm_data_used,
-            'swarm_enhanced': any(self._swarm_data_used.values())
+            'swarm_enhanced': any(self._swarm_data_used.values()),
+            'validation_result': validation_result
         }
+
+    async def _validate_plan_with_agents(
+        self,
+        phases: List[Dict[str, Any]],
+        quick_start: List[Dict[str, Any]],
+        context: AnalysisContext
+    ) -> Dict[str, Any]:
+        """
+        Validate the action plan by checking with other agents.
+        Planner is no longer lonely - it actively seeks feedback.
+        """
+        from .communication import MessageType
+
+        validation = {
+            'validated': True,
+            'feedback': [],
+            'agents_consulted': []
+        }
+
+        try:
+            # 1. Check with Guardian if security tasks are prioritized correctly
+            security_tasks = [
+                t for p in phases for t in p.get('tasks', [])
+                if t.get('category') in ['security', 'ssl']
+            ]
+
+            if security_tasks:
+                # Emit swarm event for frontend
+                self._emit_swarm_event(
+                    'agent_conversation',
+                    {
+                        'from': 'planner',
+                        'from_avatar': '📋',
+                        'to': 'guardian',
+                        'to_avatar': '🛡️',
+                        'message': f"Hei Guardian! Priorisoinko turvallisuustoimenpiteet oikein? ({len(security_tasks)} tehtävää)",
+                        'message_en': f"Hey Guardian! Did I prioritize security tasks correctly? ({len(security_tasks)} tasks)",
+                        'timestamp': datetime.now().isoformat()
+                    }
+                )
+
+                # Send validation request
+                await self._send_message(
+                    to_agent='guardian',
+                    message_type=MessageType.REQUEST,
+                    subject='Plan validation: Security priorities',
+                    payload={
+                        'request_type': 'plan_validation',
+                        'security_tasks': security_tasks,
+                        'phase_placement': [t.get('category') for t in security_tasks]
+                    }
+                )
+                validation['agents_consulted'].append('guardian')
+                validation['feedback'].append({
+                    'agent': 'guardian',
+                    'topic': 'security_priorities',
+                    'status': 'consulted'
+                })
+
+            # 2. Check with Prospector if growth opportunities are captured
+            growth_tasks = [
+                t for p in phases for t in p.get('tasks', [])
+                if t.get('category') in ['content', 'conversion', 'growth']
+            ]
+
+            if growth_tasks:
+                self._emit_swarm_event(
+                    'agent_conversation',
+                    {
+                        'from': 'planner',
+                        'from_avatar': '📋',
+                        'to': 'prospector',
+                        'to_avatar': '💎',
+                        'message': f"Hei Prospector! Onko kasvusuunnitelma kattava? ({len(growth_tasks)} tehtävää)",
+                        'message_en': f"Hey Prospector! Is the growth plan comprehensive? ({len(growth_tasks)} tasks)",
+                        'timestamp': datetime.now().isoformat()
+                    }
+                )
+
+                await self._send_message(
+                    to_agent='prospector',
+                    message_type=MessageType.REQUEST,
+                    subject='Plan validation: Growth opportunities',
+                    payload={
+                        'request_type': 'plan_validation',
+                        'growth_tasks': growth_tasks
+                    }
+                )
+                validation['agents_consulted'].append('prospector')
+                validation['feedback'].append({
+                    'agent': 'prospector',
+                    'topic': 'growth_opportunities',
+                    'status': 'consulted'
+                })
+
+            # 3. Emit insight about validation
+            self._emit_insight(
+                f"📋 Suunnitelma validoitu {len(validation['agents_consulted'])} agentin kanssa",
+                priority=AgentPriority.MEDIUM,
+                insight_type=InsightType.FINDING,
+                data={
+                    'agents_consulted': validation['agents_consulted'],
+                    'feedback_count': len(validation['feedback'])
+                }
+            )
+
+            # Emit completion event
+            self._emit_swarm_event(
+                'plan_validated',
+                {
+                    'planner': 'planner',
+                    'agents_consulted': validation['agents_consulted'],
+                    'phases_count': len(phases),
+                    'tasks_count': sum(len(p.get('tasks', [])) for p in phases)
+                }
+            )
+
+        except Exception as e:
+            logger.warning(f"[Planner] Validation error: {e}")
+            validation['validated'] = False
+            validation['error'] = str(e)
+
+        return validation
     
     def _detect_issues(self, analyst_results: Dict[str, Any]) -> List[str]:
         """Detect issues from analyst results"""
