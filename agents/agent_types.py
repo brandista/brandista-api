@@ -138,6 +138,9 @@ class AgentResult(BaseModel):
 
 class AnalysisContext(BaseModel):
     """Context shared between agents"""
+    # Run tracking (NEW)
+    run_id: Optional[str] = None  # Links to RunContext
+
     # Input
     url: str
     competitor_urls: List[str] = []
@@ -232,6 +235,9 @@ class AnalysisContext(BaseModel):
 
 class OrchestrationResult(BaseModel):
     """Full analysis result"""
+    # Run tracking (NEW)
+    run_id: Optional[str] = None  # Links to RunContext
+
     success: bool
     execution_time_ms: int = 0
     duration_seconds: float = 0.0

@@ -4,6 +4,7 @@ Growth Engine 2.0 - Agent System
 TRUE SWARM EDITION
 
 A complete multi-agent system with real inter-agent communication.
+Now with RunContext for per-request isolation in concurrent environments.
 """
 
 from .agent_types import (
@@ -19,6 +20,16 @@ from .agent_types import (
     SwarmEventType,
     WSMessageType,
     WSMessage
+)
+
+# NEW: RunContext for per-request isolation
+from .run_context import (
+    RunContext,
+    RunLimits,
+    RunStatus,
+    RunTrace,
+    create_run_context,
+    get_run_context
 )
 
 from .base_agent import BaseAgent
@@ -76,7 +87,7 @@ from .learning import (
     reset_learning_system
 )
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 __all__ = [
     # Types
     'AgentStatus', 'AgentPriority', 'InsightType',
@@ -84,31 +95,35 @@ __all__ = [
     'AnalysisContext', 'OrchestrationResult',
     'SwarmEvent', 'SwarmEventType',
     'WSMessageType', 'WSMessage',
-    
+
+    # RunContext (NEW in 2.2.0)
+    'RunContext', 'RunLimits', 'RunStatus', 'RunTrace',
+    'create_run_context', 'get_run_context',
+
     # Agents
     'BaseAgent',
     'ScoutAgent', 'AnalystAgent', 'GuardianAgent',
     'ProspectorAgent', 'StrategistAgent', 'PlannerAgent',
-    
+
     # Orchestrator
     'GrowthEngineOrchestrator', 'get_orchestrator', 'reset_orchestrator',
-    
+
     # Communication
     'MessageBus', 'MessageType', 'MessagePriority', 'AgentMessage',
     'get_message_bus', 'reset_message_bus',
-    
+
     # Blackboard
     'Blackboard', 'BlackboardEntry', 'DataCategory',
     'get_blackboard', 'reset_blackboard',
-    
+
     # Collaboration
     'CollaborationManager', 'CollaborationResult', 'VoteType',
     'get_collaboration_manager', 'reset_collaboration_manager',
-    
+
     # Tasks
     'TaskDelegationManager', 'DynamicTask', 'TaskStatus', 'TaskPriority',
     'get_task_manager', 'reset_task_manager',
-    
+
     # Learning
     'LearningSystem', 'get_learning_system', 'reset_learning_system'
 ]

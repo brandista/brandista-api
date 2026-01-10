@@ -8,13 +8,18 @@ This is the foundation for all agents with REAL swarm capabilities:
 - Reactive blackboard subscriptions
 - Collaborative problem solving
 - Continuous learning
+
+Now with RunContext support for per-request isolation.
 """
 
 import asyncio
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Dict, Any, List, Optional, Callable, Set, Tuple, Union
+from typing import Dict, Any, List, Optional, Callable, Set, Tuple, Union, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .run_context import RunContext
 
 from .agent_types import (
     AgentStatus,
@@ -118,7 +123,10 @@ class BaseAgent(ABC):
         self._task_manager: Optional[TaskDelegationManager] = None
         self._learning_system: Optional[LearningSystem] = None
         self._swarm_initialized = False
-        
+
+        # RunContext for per-request isolation (NEW)
+        self._run_context: Optional['RunContext'] = None
+
         # Context reference
         self._context: Optional[AnalysisContext] = None
         
@@ -152,21 +160,41 @@ class BaseAgent(ABC):
         self._on_insight = on_insight
         self._on_progress = on_progress
         self._on_swarm_event = on_swarm_event
-    
+
+    def set_run_context(self, run_context: 'RunContext'):
+        """
+        Set RunContext for per-request isolation.
+        This injects isolated swarm systems instead of globals.
+        """
+        self._run_context = run_context
+        self._swarm_initialized = False  # Force re-init with new context
+        logger.debug(f"[{self.name}] RunContext set: {run_context.run_id}")
+
     # ========================================================================
     # SWARM INITIALIZATION
     # ========================================================================
-    
+
     def _init_swarm(self):
-        """Initialize swarm capabilities"""
+        """Initialize swarm capabilities - uses RunContext if available, else globals"""
         if self._swarm_initialized:
             return
-        
-        self._message_bus = get_message_bus()
-        self._blackboard = get_blackboard()
-        self._collaboration_manager = get_collaboration_manager()
-        self._task_manager = get_task_manager()
-        self._learning_system = get_learning_system()
+
+        # Use RunContext systems if available (per-request isolation)
+        if self._run_context:
+            self._message_bus = self._run_context.message_bus
+            self._blackboard = self._run_context.blackboard
+            self._collaboration_manager = self._run_context.collaboration_manager
+            self._task_manager = self._run_context.task_manager
+            self._learning_system = self._run_context.learning_system
+            logger.debug(f"[{self.name}] Using RunContext systems (run_id={self._run_context.run_id})")
+        else:
+            # Fallback to global singletons (backwards compatibility)
+            self._message_bus = get_message_bus()
+            self._blackboard = get_blackboard()
+            self._collaboration_manager = get_collaboration_manager()
+            self._task_manager = get_task_manager()
+            self._learning_system = get_learning_system()
+            logger.debug(f"[{self.name}] Using global singletons")
         
         # Register with message bus
         self._message_bus.register_agent(

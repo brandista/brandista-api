@@ -96,7 +96,12 @@ from agents import (
     AgentResult,
     WSMessageType,
     WSMessage,
-    SwarmEvent  # For agent communication events
+    SwarmEvent,  # For agent communication events
+    # NEW: RunContext for per-request isolation
+    RunContext,
+    RunStatus,
+    create_run_context,
+    get_run_context
 )
 
 logger = logging.getLogger(__name__)
@@ -225,7 +230,7 @@ async def run_agent_analysis(request: AgentAnalysisRequest):
 async def get_orchestrator_status():
     """Palauta orchestratorin tila"""
     orchestrator = get_orchestrator()
-    
+
     return {
         "is_running": orchestrator.is_running,
         "agents_registered": len(orchestrator.agents),
@@ -234,23 +239,84 @@ async def get_orchestrator_status():
 
 
 # ============================================================================
+# RUN CONTEXT ENDPOINTS (NEW in 2.2.0)
+# ============================================================================
+
+@router.get("/run/{run_id}")
+async def get_run_status(run_id: str):
+    """
+    Get status of a specific analysis run.
+    Useful for debugging and monitoring concurrent runs.
+    """
+    run_ctx = get_run_context(run_id)
+    if not run_ctx:
+        raise HTTPException(404, f"Run {run_id} not found")
+
+    return run_ctx.get_state()
+
+
+@router.get("/runs")
+async def list_active_runs():
+    """
+    List all active analysis runs.
+    Useful for monitoring system load and debugging.
+    """
+    runs = RunContext.get_active_runs()
+    return {
+        "count": len(runs),
+        "runs": [
+            {
+                "run_id": r.run_id,
+                "user_id": r.user_id,
+                "status": r.status.value,
+                "duration": r.duration,
+                "created_at": r.created_at.isoformat()
+            }
+            for r in runs
+        ]
+    }
+
+
+@router.post("/run/{run_id}/cancel")
+async def cancel_run(run_id: str, reason: str = "User cancelled"):
+    """
+    Cancel a running analysis.
+    """
+    run_ctx = get_run_context(run_id)
+    if not run_ctx:
+        raise HTTPException(404, f"Run {run_id} not found")
+
+    if run_ctx.status != RunStatus.RUNNING:
+        raise HTTPException(400, f"Run {run_id} is not running (status: {run_ctx.status.value})")
+
+    run_ctx.cancel(reason)
+    return {"success": True, "run_id": run_id, "status": run_ctx.status.value}
+
+
+# ============================================================================
 # WEBSOCKET ENDPOINT
 # ============================================================================
 
 class ConnectionManager:
-    """Hallitse WebSocket-yhteyksiä"""
-    
+    """Hallitse WebSocket-yhteyksiä with run_id routing"""
+
     def __init__(self):
         self.active_connections: List[WebSocket] = []
-    
-    async def connect(self, websocket: WebSocket):
+        # NEW: Track connections by run_id for targeted messaging
+        self.run_connections: Dict[str, WebSocket] = {}
+
+    async def connect(self, websocket: WebSocket, run_id: str = None):
         await websocket.accept()
         self.active_connections.append(websocket)
-        logger.info(f"[WS] Client connected. Total: {len(self.active_connections)}")
-    
-    def disconnect(self, websocket: WebSocket):
+        if run_id:
+            self.run_connections[run_id] = websocket
+        logger.info(f"[WS] Client connected. Total: {len(self.active_connections)}, run_id: {run_id}")
+
+    def disconnect(self, websocket: WebSocket, run_id: str = None):
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
+        if run_id and run_id in self.run_connections:
+            del self.run_connections[run_id]
         logger.info(f"[WS] Client disconnected. Total: {len(self.active_connections)}")
     
     async def send_json(self, websocket: WebSocket, data: dict):
@@ -323,31 +389,40 @@ async def websocket_agent_analysis(
         return
     
     logger.info(f"[WS] Authenticated: {user.get('sub', 'unknown')}")
-    
+
+    # Track current run_id for this connection
+    current_run_id = None
+
     await manager.connect(websocket)
-    
+
     try:
         while True:
             # Odota viestiä clientiltä
             data = await websocket.receive_json()
-            
+
             action = data.get("action")
-            
+
             if action == "start":
                 # Aloita analyysi
                 url = data.get("url")
                 competitor_urls = data.get("competitor_urls", [])
                 language = data.get("language", "fi")
                 industry_context = data.get("industry_context")
-                
+
                 if not url:
                     await manager.send_json(websocket, {
                         "type": WSMessageType.ERROR.value,
                         "data": {"error": "URL is required"}
                     })
                     continue
-                
-                logger.info(f"[WS] Starting analysis for {url}")
+
+                # NEW: Create RunContext for this analysis
+                user_id = user.get('sub')
+                run_context = create_run_context(user_id=user_id, url=url)
+                current_run_id = run_context.run_id
+                manager.run_connections[current_run_id] = websocket
+
+                logger.info(f"[WS] Starting analysis for {url} (run_id={current_run_id})")
                 
                 # Luo orchestrator
                 orchestrator = get_orchestrator()
@@ -374,11 +449,20 @@ async def websocket_agent_analysis(
                 # List to also collect messages for final processing
                 pending_messages = []
                 
-                # Callbackit jotka lähettävät viestit HETI
+                # Send run_started message immediately
+                await manager.send_json(websocket, {
+                    "type": "run_started",
+                    "run_id": current_run_id,
+                    "data": {"url": url, "status": "started"},
+                    "timestamp": datetime.now().isoformat()
+                })
+
+                # Callbackit jotka lähettävät viestit HETI (include run_id in ALL messages)
                 def sync_insight(insight: AgentInsight):
                     try:
                         msg = {
                             "type": WSMessageType.AGENT_INSIGHT.value,
+                            "run_id": current_run_id,  # NEW: Include run_id
                             "data": {
                                 "agent_id": insight.agent_id,
                                 "agent_name": insight.agent_name,
@@ -402,6 +486,7 @@ async def websocket_agent_analysis(
                     try:
                         msg = {
                             "type": WSMessageType.AGENT_PROGRESS.value,
+                            "run_id": current_run_id,  # NEW: Include run_id
                             "data": {
                                 "agent_id": progress.agent_id,
                                 "status": progress.status.value if hasattr(progress.status, 'value') else progress.status,
@@ -420,6 +505,7 @@ async def websocket_agent_analysis(
                     try:
                         msg = {
                             "type": WSMessageType.AGENT_STATUS.value,
+                            "run_id": current_run_id,  # NEW: Include run_id
                             "data": {
                                 "agent_id": agent_id,
                                 "status": result.status.value if hasattr(result.status, 'value') else result.status,
@@ -440,6 +526,7 @@ async def websocket_agent_analysis(
                     try:
                         msg = {
                             "type": WSMessageType.AGENT_STATUS.value,
+                            "run_id": current_run_id,  # NEW: Include run_id
                             "data": {
                                 "agent_id": agent_id,
                                 "status": "running",
@@ -458,6 +545,7 @@ async def websocket_agent_analysis(
                     try:
                         msg = {
                             "type": "swarm_event",
+                            "run_id": current_run_id,  # NEW: Include run_id
                             "data": {
                                 "event_type": event.event_type.value if hasattr(event.event_type, 'value') else event.event_type,
                                 "from_agent": event.from_agent,
@@ -484,15 +572,13 @@ async def websocket_agent_analysis(
                 
                 # Suorita analyysi
                 try:
-                    # Get user_id from token
-                    user_id = user.get('sub')
-                    
                     result = await orchestrator.run_analysis(
                         url=url,
                         competitor_urls=competitor_urls,
                         language=language,
                         industry_context=industry_context,
-                        user_id=user_id  # Pass user_id for unified context
+                        user_id=user_id,  # Pass user_id for unified context
+                        run_context=run_context  # NEW: Pass RunContext for isolation
                     )
                     
                     # Stop the sender task and wait for remaining messages
@@ -740,6 +826,7 @@ async def websocket_agent_analysis(
                     # Lähetä lopputulos with all mapped data
                     await manager.send_json(websocket, {
                         "type": WSMessageType.ANALYSIS_COMPLETE.value,
+                        "run_id": current_run_id,  # NEW: Include run_id
                         "data": {
                             "success": result.success,
                             "duration_seconds": result.execution_time_ms / 1000,
@@ -894,12 +981,12 @@ async def websocket_agent_analysis(
                 })
     
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
-        logger.info("[WS] Client disconnected")
-    
+        manager.disconnect(websocket, current_run_id)
+        logger.info(f"[WS] Client disconnected (run_id={current_run_id})")
+
     except Exception as e:
         logger.error(f"[WS] Error: {e}", exc_info=True)
-        manager.disconnect(websocket)
+        manager.disconnect(websocket, current_run_id)
 
 
 # ============================================================================

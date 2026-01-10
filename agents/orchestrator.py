@@ -2,12 +2,15 @@
 """
 Growth Engine 2.0 - Orchestrator
 TRUE SWARM EDITION - Clean, production-ready orchestration
+
+Now with RunContext support for concurrent execution isolation.
+Each analysis run gets its own isolated context.
 """
 
 import asyncio
 import logging
 from datetime import datetime
-from typing import Dict, Any, List, Optional, Callable
+from typing import Dict, Any, List, Optional, Callable, TYPE_CHECKING
 
 from .agent_types import (
     AgentStatus,
@@ -31,12 +34,15 @@ from .blackboard import get_blackboard, reset_blackboard
 from .collaboration import reset_collaboration_manager
 from .task_delegation import reset_task_manager
 
+if TYPE_CHECKING:
+    from .run_context import RunContext
+
 logger = logging.getLogger(__name__)
 
 
 class GrowthEngineOrchestrator:
-    """TRUE SWARM Orchestrator"""
-    
+    """TRUE SWARM Orchestrator with RunContext support"""
+
     EXECUTION_PLAN = [
         ['scout'],
         ['analyst'],
@@ -44,7 +50,7 @@ class GrowthEngineOrchestrator:
         ['strategist'],
         ['planner']
     ]
-    
+
     def __init__(self):
         self.agents: Dict[str, BaseAgent] = {}
         self._register_agents()
@@ -56,6 +62,7 @@ class GrowthEngineOrchestrator:
         self.is_running = False
         self.start_time = None
         self.context = None
+        self._run_context: Optional['RunContext'] = None  # Per-run isolation
         logger.info("[Orchestrator] ✅ TRUE SWARM initialized")
     
     def _register_agents(self):
@@ -72,24 +79,38 @@ class GrowthEngineOrchestrator:
         self._on_agent_start = on_agent_start
         self._on_swarm_event = on_swarm_event
     
-    async def run_analysis(self, url: str, competitor_urls: List[str] = None,
-                           language: str = "fi", industry_context: str = None,
-                           user_id: str = None) -> OrchestrationResult:
+    async def run_analysis(
+        self,
+        url: str,
+        competitor_urls: List[str] = None,
+        language: str = "fi",
+        industry_context: str = None,
+        user_id: str = None,
+        run_context: Optional['RunContext'] = None  # NEW: Optional RunContext for isolation
+    ) -> OrchestrationResult:
         self.is_running = True
         self.start_time = datetime.now()
-        
+        self._run_context = run_context
+
         logger.info("=" * 60)
         logger.info("🚀 TRUE SWARM ANALYSIS STARTING")
+        if run_context:
+            logger.info(f"   Run ID: {run_context.run_id}")
+            run_context.start()
         logger.info("=" * 60)
-        
-        # Reset swarm systems
-        reset_message_bus()
-        reset_blackboard()
-        reset_collaboration_manager()
-        reset_task_manager()
-        
-        message_bus = get_message_bus()
-        blackboard = get_blackboard()
+
+        # Use RunContext systems if provided, else reset globals (backwards compatible)
+        if run_context:
+            message_bus = run_context.message_bus
+            blackboard = run_context.blackboard
+        else:
+            # Legacy: reset globals
+            reset_message_bus()
+            reset_blackboard()
+            reset_collaboration_manager()
+            reset_task_manager()
+            message_bus = get_message_bus()
+            blackboard = get_blackboard()
         
         # Load unified context
         unified_context_data = None
@@ -103,21 +124,25 @@ class GrowthEngineOrchestrator:
         self.context = AnalysisContext(
             url=url, competitor_urls=competitor_urls or [], language=language,
             industry_context=industry_context, user_id=user_id,
-            unified_context=unified_context_data
+            unified_context=unified_context_data,
+            run_id=run_context.run_id if run_context else None  # NEW: track run_id
         )
-        
+
         logger.info(f"[Orchestrator] 🎯 Target: {url}")
-        
+
         errors = []
-        
+
         try:
-            # Set callbacks
+            # Set callbacks and RunContext for each agent
             for agent in self.agents.values():
                 agent.set_callbacks(
                     on_insight=self._on_insight,
                     on_progress=self._on_progress,
                     on_swarm_event=self._on_swarm_event
                 )
+                # NEW: Inject RunContext if provided
+                if run_context:
+                    agent.set_run_context(run_context)
             
             # Execute phases
             for phase_idx, phase_agents in enumerate(self.EXECUTION_PLAN, 1):
@@ -141,20 +166,24 @@ class GrowthEngineOrchestrator:
         except Exception as e:
             logger.error(f"[Orchestrator] Fatal error: {e}", exc_info=True)
             errors.append(str(e))
-        
+
         finally:
             self.is_running = False
-        
+            # Mark RunContext as complete
+            if run_context:
+                run_context.complete(success=len(errors) == 0, error=errors[0] if errors else None)
+
         duration = (datetime.now() - self.start_time).total_seconds()
-        
+
         swarm_summary = {
             'total_messages': message_bus.get_stats()['total_sent'],
-            'blackboard_entries': len(blackboard.get_all_keys())
+            'blackboard_entries': len(blackboard.get_all_keys()),
+            'run_id': run_context.run_id if run_context else None  # NEW: include run_id
         }
-        
+
         logger.info(f"📊 Swarm: {swarm_summary['total_messages']} messages, {swarm_summary['blackboard_entries']} blackboard entries")
-        
-        return self._build_result(int(duration * 1000), duration, errors, swarm_summary)
+
+        return self._build_result(int(duration * 1000), duration, errors, swarm_summary, run_context)
     
     async def _run_agent(self, agent_id: str) -> Optional[AgentResult]:
         agent = self.agents.get(agent_id)
@@ -200,8 +229,14 @@ class GrowthEngineOrchestrator:
                     logger.warning(f"[Orchestrator] Missing dep {dep_id} for {agent_id}")
         return True
     
-    def _build_result(self, exec_ms: int, duration: float, 
-                      errors: List[str], swarm: Dict) -> OrchestrationResult:
+    def _build_result(
+        self,
+        exec_ms: int,
+        duration: float,
+        errors: List[str],
+        swarm: Dict,
+        run_context: Optional['RunContext'] = None
+    ) -> OrchestrationResult:
         all_insights = []
         for r in self.context.agent_results.values():
             all_insights.extend(r.insights)
@@ -232,7 +267,8 @@ class GrowthEngineOrchestrator:
             high_insights=high,
             action_plan=action_plan,
             errors=errors,
-            swarm_summary=swarm
+            swarm_summary=swarm,
+            run_id=run_context.run_id if run_context else None  # NEW: include run_id
         )
     
     def get_agent_info(self) -> List[Dict[str, Any]]:
