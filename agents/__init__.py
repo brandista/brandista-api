@@ -29,7 +29,21 @@ from .run_context import (
     RunStatus,
     RunTrace,
     create_run_context,
-    get_run_context
+    create_run_context_sync,
+    get_run_context,
+    get_run_from_store,
+    list_runs_from_store,
+    cancel_run
+)
+
+# NEW: RunStore for Redis-backed persistence
+from .run_store import (
+    RunStore,
+    RunMeta,
+    RunEvent,
+    InMemoryRunStore,
+    RedisRunStore,
+    get_run_store
 )
 
 from .base_agent import BaseAgent
@@ -87,7 +101,7 @@ from .learning import (
     reset_learning_system
 )
 
-__version__ = "2.2.0"
+__version__ = "2.2.1"
 __all__ = [
     # Types
     'AgentStatus', 'AgentPriority', 'InsightType',
@@ -98,7 +112,12 @@ __all__ = [
 
     # RunContext (NEW in 2.2.0)
     'RunContext', 'RunLimits', 'RunStatus', 'RunTrace',
-    'create_run_context', 'get_run_context',
+    'create_run_context', 'create_run_context_sync', 'get_run_context',
+    'get_run_from_store', 'list_runs_from_store', 'cancel_run',
+
+    # RunStore (NEW in 2.2.1)
+    'RunStore', 'RunMeta', 'RunEvent',
+    'InMemoryRunStore', 'RedisRunStore', 'get_run_store',
 
     # Agents
     'BaseAgent',

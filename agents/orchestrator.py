@@ -96,7 +96,7 @@ class GrowthEngineOrchestrator:
         logger.info("🚀 TRUE SWARM ANALYSIS STARTING")
         if run_context:
             logger.info(f"   Run ID: {run_context.run_id}")
-            run_context.start()
+            await run_context.start()  # Now async for RunStore persistence
         logger.info("=" * 60)
 
         # Use RunContext systems if provided, else reset globals (backwards compatible)
@@ -146,15 +146,21 @@ class GrowthEngineOrchestrator:
             
             # Execute phases
             for phase_idx, phase_agents in enumerate(self.EXECUTION_PLAN, 1):
+                # Check for cancellation before each phase
+                if run_context and await run_context.check_cancelled():
+                    logger.info(f"[Orchestrator] Run cancelled before phase {phase_idx}")
+                    errors.append("Run cancelled by user")
+                    break
+
                 logger.info(f"[Orchestrator] === PHASE {phase_idx}: {phase_agents} ===")
-                
+
                 self._check_dependencies(phase_agents)
-                
+
                 if len(phase_agents) > 1:
                     results = await self._run_parallel(phase_agents)
                 else:
                     results = [await self._run_agent(phase_agents[0])]
-                
+
                 for result in results:
                     if result:
                         self.context.agent_results[result.agent_id] = result
@@ -169,9 +175,12 @@ class GrowthEngineOrchestrator:
 
         finally:
             self.is_running = False
-            # Mark RunContext as complete
+            # Mark RunContext as complete (async for RunStore persistence)
             if run_context:
-                run_context.complete(success=len(errors) == 0, error=errors[0] if errors else None)
+                await run_context.complete(
+                    success=len(errors) == 0,
+                    error=errors[0] if errors else None
+                )
 
         duration = (datetime.now() - self.start_time).total_seconds()
 
@@ -189,15 +198,42 @@ class GrowthEngineOrchestrator:
         agent = self.agents.get(agent_id)
         if not agent:
             return None
-        
+
+        # Check for cancellation before starting agent
+        if self._run_context and await self._run_context.check_cancelled():
+            logger.info(f"[Orchestrator] ⏹️ {agent.name} skipped (run cancelled)")
+            return AgentResult(agent_id=agent_id, agent_name=agent.name,
+                              status=AgentStatus.ERROR, execution_time_ms=0,
+                              error="Run cancelled")
+
         logger.info(f"[Orchestrator] ▶️ {agent.name}")
         if self._on_agent_start:
             self._on_agent_start(agent_id, agent.name)
-        
+
+        # Get per-agent timeout from RunContext or use default
+        timeout = 90.0  # Default fallback
+        if self._run_context and self._run_context.limits:
+            timeout = self._run_context.limits.get_agent_timeout(agent_id)
+            logger.debug(f"[Orchestrator] Agent {agent_id} timeout: {timeout}s")
+
         try:
-            result = await agent.run(self.context)
+            result = await asyncio.wait_for(
+                agent.run(self.context),
+                timeout=timeout
+            )
             logger.info(f"[Orchestrator] ✅ {agent.name}: {result.status.value}")
             return result
+        except asyncio.TimeoutError:
+            error_msg = f"Agent timeout after {timeout}s"
+            logger.error(f"[Orchestrator] ⏱️ {agent_id}: {error_msg}")
+            return AgentResult(agent_id=agent_id, agent_name=agent.name,
+                              status=AgentStatus.ERROR, execution_time_ms=int(timeout * 1000),
+                              error=error_msg)
+        except asyncio.CancelledError:
+            logger.info(f"[Orchestrator] ⏹️ {agent_id} cancelled")
+            return AgentResult(agent_id=agent_id, agent_name=agent.name,
+                              status=AgentStatus.ERROR, execution_time_ms=0,
+                              error="Run cancelled")
         except Exception as e:
             logger.error(f"[Orchestrator] ❌ {agent_id}: {e}")
             return AgentResult(agent_id=agent_id, agent_name=agent.name,

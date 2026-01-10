@@ -14,12 +14,18 @@ Now with RunContext support for per-request isolation.
 
 import asyncio
 import logging
+import os
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Callable, Set, Tuple, Union, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .run_context import RunContext
+
+# Production safety: Disallow global singleton fallback by default
+ALLOW_GLOBAL_SINGLETON_FALLBACK = os.environ.get(
+    'ALLOW_GLOBAL_SINGLETON_FALLBACK', 'false'
+).lower() in ('true', '1', 'yes')
 
 from .agent_types import (
     AgentStatus,
@@ -188,13 +194,25 @@ class BaseAgent(ABC):
             self._learning_system = self._run_context.learning_system
             logger.debug(f"[{self.name}] Using RunContext systems (run_id={self._run_context.run_id})")
         else:
-            # Fallback to global singletons (backwards compatibility)
+            # Production safety check
+            if not ALLOW_GLOBAL_SINGLETON_FALLBACK:
+                raise RuntimeError(
+                    f"[{self.name}] No RunContext provided and ALLOW_GLOBAL_SINGLETON_FALLBACK=false. "
+                    "In production, all agents must receive a RunContext for isolation. "
+                    "Set ALLOW_GLOBAL_SINGLETON_FALLBACK=true for development/testing."
+                )
+
+            # Fallback to global singletons (backwards compatibility - dev only)
+            logger.warning(
+                f"[{self.name}] ⚠️ FALLBACK: Using global singletons instead of RunContext. "
+                "This can cause cross-contamination in concurrent requests. "
+                "Set ALLOW_GLOBAL_SINGLETON_FALLBACK=false in production."
+            )
             self._message_bus = get_message_bus()
             self._blackboard = get_blackboard()
             self._collaboration_manager = get_collaboration_manager()
             self._task_manager = get_task_manager()
             self._learning_system = get_learning_system()
-            logger.debug(f"[{self.name}] Using global singletons")
         
         # Register with message bus
         self._message_bus.register_agent(

@@ -97,11 +97,16 @@ from agents import (
     WSMessageType,
     WSMessage,
     SwarmEvent,  # For agent communication events
-    # NEW: RunContext for per-request isolation
+    # RunContext for per-request isolation
     RunContext,
     RunStatus,
     create_run_context,
-    get_run_context
+    create_run_context_sync,
+    get_run_context,
+    # NEW: RunStore functions for Redis-backed persistence
+    get_run_from_store,
+    list_runs_from_store,
+    cancel_run
 )
 
 logger = logging.getLogger(__name__)
@@ -246,31 +251,69 @@ async def get_orchestrator_status():
 async def get_run_status(run_id: str):
     """
     Get status of a specific analysis run.
-    Useful for debugging and monitoring concurrent runs.
+    Reads from RunStore (Redis) so works across workers.
     """
+    # First try local context (faster for active runs on this worker)
     run_ctx = get_run_context(run_id)
-    if not run_ctx:
+    if run_ctx:
+        return run_ctx.get_state()
+
+    # Otherwise fetch from RunStore (Redis)
+    run_data = await get_run_from_store(run_id)
+    if not run_data:
         raise HTTPException(404, f"Run {run_id} not found")
 
-    return run_ctx.get_state()
+    return {
+        "run_id": run_id,
+        "user_id": run_data.get('meta', {}).get('user_id'),
+        "url": run_data.get('meta', {}).get('url'),
+        "status": run_data.get('status', 'unknown'),
+        "created_at": run_data.get('meta', {}).get('created_at'),
+        "started_at": run_data.get('meta', {}).get('started_at'),
+        "completed_at": run_data.get('meta', {}).get('completed_at'),
+        "error": run_data.get('result', {}).get('error') if run_data.get('result') else None,
+        "metadata": run_data.get('meta', {}).get('metadata', {}),
+        "has_result": run_data.get('result') is not None
+    }
 
 
 @router.get("/runs")
-async def list_active_runs():
+async def list_runs(
+    limit: int = 50,
+    offset: int = 0,
+    status: Optional[str] = None,
+    user_id: Optional[str] = None
+):
     """
-    List all active analysis runs.
-    Useful for monitoring system load and debugging.
+    List analysis runs with filtering.
+    Reads from RunStore (Redis) so works across workers.
+
+    Query params:
+    - limit: Max results (default 50)
+    - offset: Skip N results (for pagination)
+    - status: Filter by status (pending/running/completed/failed/cancelled)
+    - user_id: Filter by user
     """
-    runs = RunContext.get_active_runs()
+    runs = await list_runs_from_store(
+        limit=limit,
+        offset=offset,
+        status=status,
+        user_id=user_id
+    )
+
     return {
         "count": len(runs),
+        "limit": limit,
+        "offset": offset,
+        "filters": {"status": status, "user_id": user_id},
         "runs": [
             {
-                "run_id": r.run_id,
-                "user_id": r.user_id,
-                "status": r.status.value,
-                "duration": r.duration,
-                "created_at": r.created_at.isoformat()
+                "run_id": r.get('run_id') or r.get('meta', {}).get('run_id'),
+                "user_id": r.get('meta', {}).get('user_id'),
+                "url": r.get('meta', {}).get('url'),
+                "status": r.get('status', 'unknown'),
+                "created_at": r.get('meta', {}).get('created_at'),
+                "has_result": r.get('result') is not None
             }
             for r in runs
         ]
@@ -278,19 +321,62 @@ async def list_active_runs():
 
 
 @router.post("/run/{run_id}/cancel")
-async def cancel_run(run_id: str, reason: str = "User cancelled"):
+async def cancel_run_endpoint(run_id: str, reason: str = "User cancelled"):
     """
     Cancel a running analysis.
+
+    Idempotent - safe to call multiple times.
+    Works across workers via Redis.
     """
-    run_ctx = get_run_context(run_id)
-    if not run_ctx:
-        raise HTTPException(404, f"Run {run_id} not found")
+    # Check if already cancelled or completed
+    run_data = await get_run_from_store(run_id)
+    if not run_data:
+        # Also check local context
+        run_ctx = get_run_context(run_id)
+        if not run_ctx:
+            raise HTTPException(404, f"Run {run_id} not found")
 
-    if run_ctx.status != RunStatus.RUNNING:
-        raise HTTPException(400, f"Run {run_id} is not running (status: {run_ctx.status.value})")
+    current_status = run_data.get('status') if run_data else None
 
-    run_ctx.cancel(reason)
-    return {"success": True, "run_id": run_id, "status": run_ctx.status.value}
+    # Idempotent: if already cancelled, return success
+    if current_status == 'cancelled':
+        return {
+            "success": True,
+            "run_id": run_id,
+            "status": "cancelled",
+            "message": "Already cancelled"
+        }
+
+    # Cannot cancel completed/failed runs
+    if current_status in ('completed', 'failed'):
+        return {
+            "success": False,
+            "run_id": run_id,
+            "status": current_status,
+            "message": f"Cannot cancel - run is already {current_status}"
+        }
+
+    # Cancel via RunStore (works across workers)
+    success = await cancel_run(run_id, reason)
+
+    # Also emit a final WS event if we have a local connection
+    if run_id in manager.run_connections:
+        try:
+            await manager.send_json(manager.run_connections[run_id], {
+                "type": "run_cancelled",
+                "run_id": run_id,
+                "data": {"reason": reason, "status": "cancelled"},
+                "timestamp": datetime.now().isoformat()
+            })
+        except Exception as e:
+            logger.warning(f"[Cancel] Could not send WS cancel event: {e}")
+
+    return {
+        "success": success,
+        "run_id": run_id,
+        "status": "cancelled",
+        "message": f"Cancelled: {reason}"
+    }
 
 
 # ============================================================================
@@ -416,9 +502,9 @@ async def websocket_agent_analysis(
                     })
                     continue
 
-                # NEW: Create RunContext for this analysis
+                # Create RunContext for this analysis (async for RunStore persistence)
                 user_id = user.get('sub')
-                run_context = create_run_context(user_id=user_id, url=url)
+                run_context = await create_run_context(user_id=user_id, url=url)
                 current_run_id = run_context.run_id
                 manager.run_connections[current_run_id] = websocket
 

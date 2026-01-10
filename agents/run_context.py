@@ -9,6 +9,9 @@ This is the KEY to safe concurrent execution:
 - No global state = no cross-contamination between runs
 - 10 users can run analyses simultaneously without interference
 
+Now with RunStore integration for Redis-backed state persistence.
+Works across multiple workers in production.
+
 Usage:
     ctx = RunContext.create()
     result = await orchestrator.run_analysis(ctx, url="...")
@@ -22,7 +25,7 @@ import asyncio
 import logging
 import uuid
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional, List, Callable
+from typing import Dict, Any, Optional, List, Callable, TYPE_CHECKING
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -31,6 +34,7 @@ from .blackboard import Blackboard
 from .collaboration import CollaborationManager
 from .task_delegation import TaskDelegationManager
 from .learning import LearningSystem
+from .run_store import RunStore, RunMeta, RunEvent, get_run_store, InMemoryRunStore
 
 logger = logging.getLogger(__name__)
 
@@ -57,14 +61,29 @@ class RunLimits:
 
     # Timeouts (seconds) - generous for analysis tasks
     total_timeout: float = 180.0      # 3 min total run timeout
-    agent_timeout: float = 90.0       # 90s per agent (analysis takes time)
+    agent_timeout: float = 90.0       # 90s default per agent (analysis takes time)
     llm_timeout: float = 60.0         # 60s LLM call timeout
     scrape_timeout: float = 30.0      # 30s web scrape timeout
+
+    # Per-agent timeout overrides (agent_id -> timeout_seconds)
+    # Use this for agents that need more/less time than the default
+    agent_timeouts: Dict[str, float] = field(default_factory=lambda: {
+        'scout': 120.0,      # Scout may need to scrape multiple pages
+        'analyst': 90.0,     # Standard analysis
+        'guardian': 60.0,    # Threat detection is faster
+        'prospector': 90.0,  # Opportunity analysis
+        'strategist': 120.0, # Strategy synthesis takes longer
+        'planner': 90.0,     # Action plan generation
+    })
 
     def __post_init__(self):
         """Create semaphores"""
         self._llm_semaphore: Optional[asyncio.Semaphore] = None
         self._scrape_semaphore: Optional[asyncio.Semaphore] = None
+
+    def get_agent_timeout(self, agent_id: str) -> float:
+        """Get timeout for specific agent, or default"""
+        return self.agent_timeouts.get(agent_id, self.agent_timeout)
 
     @property
     def llm_semaphore(self) -> asyncio.Semaphore:
@@ -133,14 +152,23 @@ class RunContext:
     - Collaboration manager (consensus building)
     - Limits (semaphores, timeouts)
     - Trace (logging/debugging)
+    - RunStore (Redis-backed persistence for multi-worker)
 
     KEY PRINCIPLE: Agents NEVER access global singletons.
     They receive RunContext and use ctx.message_bus, ctx.blackboard, etc.
+
+    In multi-worker production:
+    - Status/result/cancel are persisted to Redis via RunStore
+    - In-memory state (semaphores, bus) is local to this worker
+    - Cancel checks poll Redis so any worker can cancel
     """
 
-    # Registry of active runs (for debugging)
+    # Registry of active runs (for debugging - local to this worker)
     _active_runs: Dict[str, 'RunContext'] = {}
     _registry_lock = asyncio.Lock()
+
+    # Shared RunStore (Redis or InMemory)
+    _run_store: Optional[RunStore] = None
 
     def __init__(
         self,
@@ -148,11 +176,14 @@ class RunContext:
         limits: RunLimits = None,
         trace_enabled: bool = True,
         user_id: str = None,
-        metadata: Dict[str, Any] = None
+        url: str = None,
+        metadata: Dict[str, Any] = None,
+        run_store: RunStore = None
     ):
         # Identity
         self.run_id = run_id or str(uuid.uuid4())[:12]
         self.user_id = user_id
+        self.url = url
         self.metadata = metadata or {}
 
         # Timestamps
@@ -160,11 +191,12 @@ class RunContext:
         self.started_at: Optional[datetime] = None
         self.completed_at: Optional[datetime] = None
 
-        # Status
+        # Status (local cache, truth is in RunStore)
         self.status = RunStatus.PENDING
         self.error: Optional[str] = None
 
         # Isolated instances (NOT global singletons!)
+        # These remain in-memory for this worker
         self.message_bus = MessageBus()
         self.blackboard = Blackboard()
         self.task_manager = TaskDelegationManager()
@@ -177,7 +209,10 @@ class RunContext:
         # Trace
         self.trace = RunTrace(enabled=trace_enabled)
 
-        # Cancellation
+        # RunStore for persistence (Redis in prod, InMemory in dev)
+        self.run_store = run_store or self._get_shared_store()
+
+        # Cancellation (local event + RunStore for cross-worker)
         self._cancelled = False
         self._cancel_event = asyncio.Event()
 
@@ -190,25 +225,80 @@ class RunContext:
         logger.info(f"[RunContext] Created run_id={self.run_id}")
 
     @classmethod
-    def create(
+    def _get_shared_store(cls) -> RunStore:
+        """Get or create shared RunStore"""
+        if cls._run_store is None:
+            cls._run_store = get_run_store()
+        return cls._run_store
+
+    @classmethod
+    def set_run_store(cls, store: RunStore):
+        """Set shared RunStore (call at startup)"""
+        cls._run_store = store
+        logger.info(f"[RunContext] RunStore set: {type(store).__name__}")
+
+    @classmethod
+    async def create(
         cls,
         user_id: str = None,
+        url: str = None,
         limits: RunLimits = None,
         trace_enabled: bool = True,
+        run_store: RunStore = None,
         **metadata
     ) -> 'RunContext':
         """
         Factory method to create a new RunContext.
-        Automatically registers in active runs.
+        Automatically registers in active runs and RunStore.
         """
         ctx = cls(
             limits=limits,
             trace_enabled=trace_enabled,
             user_id=user_id,
-            metadata=metadata
+            url=url,
+            metadata=metadata,
+            run_store=run_store
         )
 
-        # Register
+        # Register locally (for this worker)
+        cls._active_runs[ctx.run_id] = ctx
+
+        # Persist to RunStore (Redis)
+        run_meta = RunMeta(
+            run_id=ctx.run_id,
+            user_id=user_id,
+            url=url,
+            created_at=ctx.created_at.isoformat(),
+            metadata=metadata
+        )
+        await ctx.run_store.create_run(ctx.run_id, run_meta)
+
+        return ctx
+
+    @classmethod
+    def create_sync(
+        cls,
+        user_id: str = None,
+        url: str = None,
+        limits: RunLimits = None,
+        trace_enabled: bool = True,
+        run_store: RunStore = None,
+        **metadata
+    ) -> 'RunContext':
+        """
+        Synchronous factory for backwards compatibility.
+        Use create() (async) in new code.
+        """
+        ctx = cls(
+            limits=limits,
+            trace_enabled=trace_enabled,
+            user_id=user_id,
+            url=url,
+            metadata=metadata,
+            run_store=run_store
+        )
+
+        # Register locally only (RunStore will be updated on start())
         cls._active_runs[ctx.run_id] = ctx
 
         return ctx
@@ -254,36 +344,94 @@ class RunContext:
         self._on_agent_complete = on_agent_complete
         self._on_insight = on_insight
 
-    def start(self):
-        """Mark run as started"""
+    async def start(self):
+        """Mark run as started (persists to RunStore)"""
         self.status = RunStatus.RUNNING
         self.started_at = datetime.now()
         self.trace.log('run_started')
+
+        # Persist to RunStore
+        await self.run_store.set_status(self.run_id, 'running')
+        await self.run_store.append_trace(self.run_id, RunEvent(
+            event_type='run_started',
+            data={'started_at': self.started_at.isoformat()}
+        ))
+
         logger.info(f"[RunContext] Run {self.run_id} started")
 
-    def complete(self, success: bool = True, error: str = None):
-        """Mark run as completed"""
+    async def complete(self, success: bool = True, error: str = None, result: Dict[str, Any] = None):
+        """Mark run as completed (persists to RunStore)"""
         self.status = RunStatus.COMPLETED if success else RunStatus.FAILED
         self.error = error
         self.completed_at = datetime.now()
         self.trace.log('run_completed', data={'success': success, 'error': error})
 
+        # Persist to RunStore
+        status_str = 'completed' if success else 'failed'
+        await self.run_store.set_status(self.run_id, status_str)
+
+        if result:
+            await self.run_store.set_result(self.run_id, result)
+
+        await self.run_store.append_trace(self.run_id, RunEvent(
+            event_type='run_completed',
+            data={
+                'success': success,
+                'error': error,
+                'completed_at': self.completed_at.isoformat(),
+                'duration': self.duration
+            }
+        ))
+
         duration = self.duration
         logger.info(f"[RunContext] Run {self.run_id} completed in {duration:.2f}s (success={success})")
 
-    def cancel(self, reason: str = "User cancelled"):
-        """Cancel the run"""
+    async def cancel(self, reason: str = "User cancelled"):
+        """
+        Cancel the run (persists to RunStore).
+        Idempotent - safe to call multiple times.
+        """
+        if self._cancelled:
+            logger.debug(f"[RunContext] Run {self.run_id} already cancelled (idempotent)")
+            return
+
         self._cancelled = True
         self._cancel_event.set()
         self.status = RunStatus.CANCELLED
         self.error = reason
         self.completed_at = datetime.now()
         self.trace.log('run_cancelled', data={'reason': reason})
+
+        # Persist to RunStore (sets cancel flag that other workers can poll)
+        await self.run_store.cancel(self.run_id)
+        await self.run_store.append_trace(self.run_id, RunEvent(
+            event_type='run_cancelled',
+            data={'reason': reason, 'cancelled_at': self.completed_at.isoformat()}
+        ))
+
         logger.info(f"[RunContext] Run {self.run_id} cancelled: {reason}")
 
     @property
     def is_cancelled(self) -> bool:
-        """Check if run is cancelled"""
+        """Check if run is cancelled (local cache)"""
+        return self._cancelled
+
+    async def check_cancelled(self) -> bool:
+        """
+        Check if run is cancelled (polls RunStore for cross-worker cancel).
+        Call this in long-running loops to respect cancel from other workers.
+        """
+        if self._cancelled:
+            return True
+
+        # Poll RunStore (Redis) for cancel from another worker
+        cancelled = await self.run_store.is_cancelled(self.run_id)
+        if cancelled:
+            self._cancelled = True
+            self._cancel_event.set()
+            self.status = RunStatus.CANCELLED
+            logger.info(f"[RunContext] Run {self.run_id} cancelled (detected from RunStore)")
+
         return self._cancelled
 
     @property
@@ -303,9 +451,16 @@ class RunContext:
         except asyncio.TimeoutError:
             return False
 
-    def emit_progress(self, agent_id: str, progress: float, message: str = None):
-        """Emit progress update (thread-safe)"""
+    async def emit_progress(self, agent_id: str, progress: float, message: str = None):
+        """Emit progress update (persists to RunStore stream)"""
         self.trace.log('progress', agent_id=agent_id, data={'progress': progress, 'message': message})
+
+        # Emit to RunStore stream (for cross-worker WS forwarding)
+        await self.run_store.emit_event(self.run_id, RunEvent(
+            event_type='agent.progress',
+            agent_id=agent_id,
+            data={'progress': progress, 'message': message}
+        ))
 
         if self._on_progress:
             try:
@@ -313,9 +468,15 @@ class RunContext:
             except Exception as e:
                 logger.error(f"[RunContext] Progress callback error: {e}")
 
-    def emit_agent_start(self, agent_id: str, agent_name: str):
-        """Emit agent start event"""
+    async def emit_agent_start(self, agent_id: str, agent_name: str):
+        """Emit agent start event (persists to RunStore stream)"""
         self.trace.log('agent_start', agent_id=agent_id, data={'name': agent_name})
+
+        await self.run_store.emit_event(self.run_id, RunEvent(
+            event_type='agent.start',
+            agent_id=agent_id,
+            data={'name': agent_name}
+        ))
 
         if self._on_agent_start:
             try:
@@ -323,9 +484,16 @@ class RunContext:
             except Exception as e:
                 logger.error(f"[RunContext] Agent start callback error: {e}")
 
-    def emit_agent_complete(self, agent_id: str, result: Any):
-        """Emit agent complete event"""
-        self.trace.log('agent_complete', agent_id=agent_id, data={'status': str(result.status) if hasattr(result, 'status') else 'unknown'})
+    async def emit_agent_complete(self, agent_id: str, result: Any):
+        """Emit agent complete event (persists to RunStore stream)"""
+        status_str = str(result.status) if hasattr(result, 'status') else 'unknown'
+        self.trace.log('agent_complete', agent_id=agent_id, data={'status': status_str})
+
+        await self.run_store.emit_event(self.run_id, RunEvent(
+            event_type='agent.complete',
+            agent_id=agent_id,
+            data={'status': status_str}
+        ))
 
         if self._on_agent_complete:
             try:
@@ -333,15 +501,43 @@ class RunContext:
             except Exception as e:
                 logger.error(f"[RunContext] Agent complete callback error: {e}")
 
-    def emit_insight(self, agent_id: str, insight: Any):
-        """Emit insight event"""
-        self.trace.log('insight', agent_id=agent_id, data={'type': str(insight.type) if hasattr(insight, 'type') else 'unknown'})
+    async def emit_insight(self, agent_id: str, insight: Any):
+        """Emit insight event (persists to RunStore stream)"""
+        insight_type = str(insight.insight_type) if hasattr(insight, 'insight_type') else 'unknown'
+        self.trace.log('insight', agent_id=agent_id, data={'type': insight_type})
+
+        # Serialize insight for Redis
+        insight_data = {
+            'type': insight_type,
+            'message': str(insight.message) if hasattr(insight, 'message') else '',
+            'priority': str(insight.priority) if hasattr(insight, 'priority') else 'medium'
+        }
+
+        await self.run_store.emit_event(self.run_id, RunEvent(
+            event_type='agent.insight',
+            agent_id=agent_id,
+            data=insight_data
+        ))
 
         if self._on_insight:
             try:
                 self._on_insight(self.run_id, agent_id, insight)
             except Exception as e:
                 logger.error(f"[RunContext] Insight callback error: {e}")
+
+    async def emit_swarm_event(self, event_type: str, data: Dict[str, Any]):
+        """Emit generic swarm event (persists to RunStore stream)"""
+        self.trace.log(event_type, data=data)
+
+        await self.run_store.emit_event(self.run_id, RunEvent(
+            event_type=event_type,
+            agent_id=data.get('from_agent'),
+            data=data
+        ))
+
+    async def read_events(self, last_id: str = "0", count: int = 100, block_ms: int = 0) -> List[RunEvent]:
+        """Read events from stream (for WS forwarding)"""
+        return await self.run_store.read_events(self.run_id, last_id, count, block_ms)
 
     def get_state(self) -> Dict[str, Any]:
         """Get complete run state (for debugging)"""
@@ -366,15 +562,59 @@ class RunContext:
 
 # Convenience functions (for backwards compatibility during migration)
 
-def create_run_context(
+async def create_run_context(
     user_id: str = None,
+    url: str = None,
     limits: RunLimits = None,
     **kwargs
 ) -> RunContext:
-    """Create a new RunContext"""
-    return RunContext.create(user_id=user_id, limits=limits, **kwargs)
+    """Create a new RunContext (async)"""
+    return await RunContext.create(user_id=user_id, url=url, limits=limits, **kwargs)
+
+
+def create_run_context_sync(
+    user_id: str = None,
+    url: str = None,
+    limits: RunLimits = None,
+    **kwargs
+) -> RunContext:
+    """Create a new RunContext (sync, for backwards compat)"""
+    return RunContext.create_sync(user_id=user_id, url=url, limits=limits, **kwargs)
 
 
 def get_run_context(run_id: str) -> Optional[RunContext]:
-    """Get RunContext by ID"""
+    """Get RunContext by ID (local worker only)"""
     return RunContext.get_by_id(run_id)
+
+
+async def get_run_from_store(run_id: str) -> Optional[Dict[str, Any]]:
+    """Get run data from RunStore (Redis - works across workers)"""
+    store = RunContext._get_shared_store()
+    return await store.get_run(run_id)
+
+
+async def list_runs_from_store(
+    limit: int = 50,
+    offset: int = 0,
+    status: str = None,
+    user_id: str = None
+) -> List[Dict[str, Any]]:
+    """List runs from RunStore (Redis - works across workers)"""
+    store = RunContext._get_shared_store()
+    return await store.list_runs(limit=limit, offset=offset, status=status, user_id=user_id)
+
+
+async def cancel_run(run_id: str, reason: str = "User cancelled") -> bool:
+    """
+    Cancel a run by ID (works across workers via Redis).
+    Returns True if cancelled, False if run not found.
+    """
+    # Try local context first
+    ctx = RunContext.get_by_id(run_id)
+    if ctx:
+        await ctx.cancel(reason)
+        return True
+
+    # Otherwise cancel via RunStore directly
+    store = RunContext._get_shared_store()
+    return await store.cancel(run_id)
