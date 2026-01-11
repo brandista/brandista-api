@@ -24,7 +24,7 @@ Usage:
 import asyncio
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, Any, Optional, List, Callable, TYPE_CHECKING
 from dataclasses import dataclass, field
 from enum import Enum
@@ -54,6 +54,17 @@ class RunLimits:
     """
     Concurrency and timeout limits for a run.
     Prevents resource exhaustion.
+
+    NOTE: llm_semaphore and scrape_semaphore are available for controlling
+    concurrent LLM/scrape operations. To use them, wrap LLM/scrape calls:
+
+        async with run_context.limits.llm_semaphore:
+            response = await openai.chat.completions.create(...)
+
+        async with run_context.limits.scrape_semaphore:
+            result = await scraper.fetch(url)
+
+    TODO: Implement semaphore usage in actual LLM and scraping code.
     """
     # Semaphores
     llm_concurrency: int = 5          # Max concurrent LLM calls
@@ -165,7 +176,15 @@ class RunContext:
 
     # Registry of active runs (for debugging - local to this worker)
     _active_runs: Dict[str, 'RunContext'] = {}
-    _registry_lock = asyncio.Lock()
+    # Lock is created lazily to avoid asyncio issues at import time
+    _registry_lock: Optional[asyncio.Lock] = None
+
+    @classmethod
+    def _get_lock(cls) -> asyncio.Lock:
+        """Get or create the registry lock (lazy init for asyncio safety)."""
+        if cls._registry_lock is None:
+            cls._registry_lock = asyncio.Lock()
+        return cls._registry_lock
 
     # Shared RunStore (Redis or InMemory)
     _run_store: Optional[RunStore] = None
@@ -214,7 +233,8 @@ class RunContext:
 
         # Cancellation (local event + RunStore for cross-worker)
         self._cancelled = False
-        self._cancel_event = asyncio.Event()
+        # Event is created lazily to avoid asyncio issues when instantiating outside async context
+        self._cancel_event: Optional[asyncio.Event] = None
 
         # Callbacks for progress updates
         self._on_progress: Optional[Callable] = None
@@ -223,6 +243,12 @@ class RunContext:
         self._on_insight: Optional[Callable] = None
 
         logger.info(f"[RunContext] Created run_id={self.run_id}")
+
+    def _get_cancel_event(self) -> asyncio.Event:
+        """Get or create the cancel event (lazy init for asyncio safety)."""
+        if self._cancel_event is None:
+            self._cancel_event = asyncio.Event()
+        return self._cancel_event
 
     @classmethod
     def _get_shared_store(cls) -> RunStore:
@@ -260,8 +286,9 @@ class RunContext:
             run_store=run_store
         )
 
-        # Register locally (for this worker)
-        cls._active_runs[ctx.run_id] = ctx
+        # Register locally with lock protection
+        async with cls._get_lock():
+            cls._active_runs[ctx.run_id] = ctx
 
         # Persist to RunStore (Redis)
         run_meta = RunMeta(
@@ -314,19 +341,20 @@ class RunContext:
         return list(cls._active_runs.values())
 
     @classmethod
-    def cleanup_old_runs(cls, max_age_seconds: float = 3600):
-        """Remove old completed runs from registry"""
+    async def cleanup_old_runs(cls, max_age_seconds: float = 3600):
+        """Remove old completed runs from registry (async for lock safety)."""
         now = datetime.now()
         to_remove = []
 
-        for run_id, ctx in cls._active_runs.items():
-            if ctx.status in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED):
-                age = (now - ctx.created_at).total_seconds()
-                if age > max_age_seconds:
-                    to_remove.append(run_id)
+        async with cls._get_lock():
+            for run_id, ctx in cls._active_runs.items():
+                if ctx.status in (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED):
+                    age = (now - ctx.created_at).total_seconds()
+                    if age > max_age_seconds:
+                        to_remove.append(run_id)
 
-        for run_id in to_remove:
-            del cls._active_runs[run_id]
+            for run_id in to_remove:
+                del cls._active_runs[run_id]
 
         if to_remove:
             logger.info(f"[RunContext] Cleaned up {len(to_remove)} old runs")
@@ -396,7 +424,7 @@ class RunContext:
             return
 
         self._cancelled = True
-        self._cancel_event.set()
+        self._get_cancel_event().set()
         self.status = RunStatus.CANCELLED
         self.error = reason
         self.completed_at = datetime.now()
@@ -428,7 +456,7 @@ class RunContext:
         cancelled = await self.run_store.is_cancelled(self.run_id)
         if cancelled:
             self._cancelled = True
-            self._cancel_event.set()
+            self._get_cancel_event().set()
             self.status = RunStatus.CANCELLED
             logger.info(f"[RunContext] Run {self.run_id} cancelled (detected from RunStore)")
 
@@ -446,7 +474,7 @@ class RunContext:
     async def wait_for_cancel(self, timeout: float = None) -> bool:
         """Wait for cancellation event"""
         try:
-            await asyncio.wait_for(self._cancel_event.wait(), timeout=timeout)
+            await asyncio.wait_for(self._get_cancel_event().wait(), timeout=timeout)
             return True
         except asyncio.TimeoutError:
             return False

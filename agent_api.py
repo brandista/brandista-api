@@ -388,22 +388,38 @@ class ConnectionManager:
 
     def __init__(self):
         self.active_connections: List[WebSocket] = []
-        # NEW: Track connections by run_id for targeted messaging
+        # Track connections by run_id for targeted messaging
         self.run_connections: Dict[str, WebSocket] = {}
+        # Lock for thread-safe dict access
+        self._lock = asyncio.Lock()
 
     async def connect(self, websocket: WebSocket, run_id: str = None):
         await websocket.accept()
-        self.active_connections.append(websocket)
-        if run_id:
-            self.run_connections[run_id] = websocket
+        async with self._lock:
+            self.active_connections.append(websocket)
+            if run_id:
+                self.run_connections[run_id] = websocket
         logger.info(f"[WS] Client connected. Total: {len(self.active_connections)}, run_id: {run_id}")
 
-    def disconnect(self, websocket: WebSocket, run_id: str = None):
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
-        if run_id and run_id in self.run_connections:
-            del self.run_connections[run_id]
+    async def disconnect(self, websocket: WebSocket, run_id: str = None):
+        async with self._lock:
+            if websocket in self.active_connections:
+                self.active_connections.remove(websocket)
+            if run_id and run_id in self.run_connections:
+                del self.run_connections[run_id]
         logger.info(f"[WS] Client disconnected. Total: {len(self.active_connections)}")
+
+    async def register_run(self, run_id: str, websocket: WebSocket):
+        """Register a run_id to websocket mapping."""
+        async with self._lock:
+            self.run_connections[run_id] = websocket
+
+    async def unregister_run(self, run_id: str):
+        """Remove a run_id mapping (call after analysis completes)."""
+        async with self._lock:
+            if run_id in self.run_connections:
+                del self.run_connections[run_id]
+        logger.debug(f"[WS] Run {run_id} unregistered")
     
     async def send_json(self, websocket: WebSocket, data: dict):
         """Send JSON with proper datetime serialization"""
@@ -506,7 +522,7 @@ async def websocket_agent_analysis(
                 user_id = user.get('sub')
                 run_context = await create_run_context(user_id=user_id, url=url)
                 current_run_id = run_context.run_id
-                manager.run_connections[current_run_id] = websocket
+                await manager.register_run(current_run_id, websocket)
 
                 logger.info(f"[WS] Starting analysis for {url} (run_id={current_run_id})")
                 
@@ -1045,7 +1061,10 @@ async def websocket_agent_analysis(
                         logger.info(f"[WS] Notification sent to user {user_id}")
                     except Exception as notify_error:
                         logger.debug(f"[WS] Notification not sent (user may not have dashboard open): {notify_error}")
-                    
+
+                    # Clean up run_id mapping after analysis completes
+                    await manager.unregister_run(current_run_id)
+
                 except Exception as e:
                     logger.error(f"[WS] Analysis error: {e}", exc_info=True)
                     await manager.send_json(websocket, {
@@ -1067,12 +1086,12 @@ async def websocket_agent_analysis(
                 })
     
     except WebSocketDisconnect:
-        manager.disconnect(websocket, current_run_id)
+        await manager.disconnect(websocket, current_run_id)
         logger.info(f"[WS] Client disconnected (run_id={current_run_id})")
 
     except Exception as e:
         logger.error(f"[WS] Error: {e}", exc_info=True)
-        manager.disconnect(websocket, current_run_id)
+        await manager.disconnect(websocket, current_run_id)
 
 
 # ============================================================================

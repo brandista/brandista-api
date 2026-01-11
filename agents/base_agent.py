@@ -17,7 +17,7 @@ import logging
 import os
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Dict, Any, List, Optional, Callable, Set, Tuple, Union, TYPE_CHECKING
+from typing import Dict, Any, List, Optional, Callable, Set, Union, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .run_context import RunContext
@@ -171,8 +171,27 @@ class BaseAgent(ABC):
         """
         Set RunContext for per-request isolation.
         This injects isolated swarm systems instead of globals.
+
+        IMPORTANT:
+        A single BaseAgent instance must not be used for multiple concurrent runs.
+        We detect unsafe concurrent reuse: if we're already initialized for a
+        different run_id, switching contexts would corrupt shared state.
         """
+        # Detect unsafe concurrent reuse
+        current_run_id = getattr(self, "_active_run_id", None)
+        if (
+            current_run_id is not None
+            and current_run_id != run_context.run_id
+            and getattr(self, "_swarm_initialized", False)
+        ):
+            # Log a warning - in practice, orchestrator resets between runs
+            logger.warning(
+                f"[{self.name}] Switching RunContext (was={current_run_id}, "
+                f"new={run_context.run_id}). Ensure no concurrent runs share this agent."
+            )
+
         self._run_context = run_context
+        self._active_run_id = run_context.run_id
         self._swarm_initialized = False  # Force re-init with new context
         logger.debug(f"[{self.name}] RunContext set: {run_context.run_id}")
 
