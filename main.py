@@ -1660,7 +1660,19 @@ async def lifespan(app: FastAPI):
         logger.error(f"❌ Google OAuth initialization failed: {e}")
         oauth = None
 
-    # 5. Log startup summary
+    # 5. Initialize Scheduled Analysis Manager
+    scheduled_manager = None
+    try:
+        from scheduled_analysis import startup_scheduled_manager, shutdown_scheduled_manager, scheduled_router
+        await startup_scheduled_manager()
+        scheduled_manager = True
+        logger.info("✅ Scheduled analysis manager initialized")
+    except ImportError as e:
+        logger.warning(f"⚠️ Scheduled analysis module not available: {e}")
+    except Exception as e:
+        logger.error(f"❌ Scheduled analysis initialization failed: {e}")
+
+    # 6. Log startup summary
     logger.info(f"🚀 {APP_NAME} v{APP_VERSION} started")
     logger.info(f"📊 Scoring weights: {SCORING_CONFIG.weights}")
     logger.info(f"🎭 Playwright: {'enabled' if PLAYWRIGHT_AVAILABLE and PLAYWRIGHT_ENABLED else 'disabled'}")
@@ -1672,6 +1684,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"🤖 Agent System: {'enabled (6 agents)' if AGENT_SYSTEM_AVAILABLE else 'disabled'}")
     logger.info(f"💬 Agent Chat V2: {'enabled (full context + history)' if AGENT_CHAT_V2_AVAILABLE else 'disabled'}")
     logger.info(f"📧 AI Reports: {'enabled (email reports)' if AI_REPORTS_AVAILABLE else 'disabled'}")
+    logger.info(f"⏰ Scheduled Analysis: {'enabled' if scheduled_manager else 'disabled'}")
     
     # 6. Environment warnings
     
@@ -1688,7 +1701,15 @@ async def lifespan(app: FastAPI):
             logger.info("🗄️ Analysis history database closed")
         except Exception as e:
             logger.error(f"❌ Error closing history DB: {e}")
-    
+
+    # Shutdown scheduled analysis manager
+    try:
+        from scheduled_analysis import shutdown_scheduled_manager
+        await shutdown_scheduled_manager()
+        logger.info("⏰ Scheduled analysis manager stopped")
+    except Exception as e:
+        logger.error(f"❌ Error shutting down scheduled manager: {e}")
+
     logger.info("🛑 Shutting down application")
 
 # Now recreate app WITH lifespan
@@ -1805,6 +1826,26 @@ if UNIFIED_CONTEXT_AVAILABLE and context_router:
         logger.info("✅ Unified Context routes registered: /api/v1/context/*")
     except Exception as e:
         logger.warning(f"⚠️ Could not initialize unified context tables: {e}")
+
+# ============================================================================
+# SCHEDULED ANALYSIS ROUTES
+# ============================================================================
+try:
+    from scheduled_analysis import scheduled_router
+    app.include_router(scheduled_router)
+    logger.info("✅ Scheduled Analysis routes registered: /api/v1/scheduled/*")
+except ImportError:
+    logger.warning("⚠️ Scheduled analysis routes not available")
+
+# ============================================================================
+# HISTORY API ROUTES
+# ============================================================================
+try:
+    from history_api import history_router
+    app.include_router(history_router)
+    logger.info("✅ History API routes registered: /api/v1/history/*")
+except ImportError:
+    logger.warning("⚠️ History API routes not available")
 
 @app.options("/{full_path:path}")
 async def options_handler():
