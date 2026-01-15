@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Email Notification System for Brandista - SendGrid Version
+Email Notification System for Brandista
 Sends admin notifications on new user registrations
-Fixed: Uses SendGrid API instead of SMTP (Railway compatible)
+Supports: SMTP (Gmail/Google Workspace) and SendGrid
 """
 
 import os
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 from typing import Optional
 import logging
@@ -20,60 +23,127 @@ logger = logging.getLogger(__name__)
 # Admin email settings (from environment)
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "tuukka@brandista.eu")
 FROM_EMAIL = os.getenv("FROM_EMAIL", "tuukka@brandista.eu")
+FROM_NAME = os.getenv("EMAIL_FROM_NAME", "Brandista")
+
+# Email provider: "smtp" or "sendgrid"
+EMAIL_PROVIDER = os.getenv("EMAIL_PROVIDER", "smtp")
+
+# SMTP settings (Gmail / Google Workspace)
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASS = os.getenv("SMTP_PASS", "")
+
+# SendGrid settings
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY", "")
 
 # Import SendGrid if available
+SENDGRID_AVAILABLE = False
 try:
     from sendgrid import SendGridAPIClient
     from sendgrid.helpers.mail import Mail, Email, To, Content
     SENDGRID_AVAILABLE = True
 except ImportError:
-    SENDGRID_AVAILABLE = False
-    logger.warning("SendGrid not installed. Install with: pip install sendgrid")
+    pass
 
 # ============================================================================
 # EMAIL FUNCTIONS
 # ============================================================================
 
-def send_email(to_email: str, subject: str, html_body: str, text_body: str = "") -> bool:
+def send_email_smtp(to_email: str, subject: str, html_body: str, text_body: str = "") -> bool:
     """
-    Send email via SendGrid API (Railway compatible)
-    
-    Args:
-        to_email: Recipient email
-        subject: Email subject
-        html_body: HTML email body
-        text_body: Plain text fallback (optional)
-    
-    Returns:
-        bool: True if sent successfully
+    Send email via SMTP (Gmail / Google Workspace)
+    """
+    if not SMTP_USER or not SMTP_PASS:
+        logger.warning("SMTP credentials not configured, skipping email")
+        return False
+
+    try:
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = subject
+        msg['From'] = f"{FROM_NAME} <{FROM_EMAIL}>"
+        msg['To'] = to_email
+
+        # Attach plain text and HTML versions
+        if text_body:
+            part1 = MIMEText(text_body, 'plain', 'utf-8')
+            msg.attach(part1)
+
+        part2 = MIMEText(html_body, 'html', 'utf-8')
+        msg.attach(part2)
+
+        # Send via SMTP
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASS)
+            server.sendmail(FROM_EMAIL, to_email, msg.as_string())
+
+        logger.info(f"✅ Email sent via SMTP to {to_email}")
+        return True
+
+    except Exception as e:
+        logger.error(f"❌ SMTP email failed to {to_email}: {e}")
+        return False
+
+
+def send_email_sendgrid(to_email: str, subject: str, html_body: str, text_body: str = "") -> bool:
+    """
+    Send email via SendGrid API
     """
     if not SENDGRID_AVAILABLE:
-        logger.warning("SendGrid not available, skipping email")
+        logger.warning("SendGrid not installed")
         return False
-    
+
     if not SENDGRID_API_KEY:
-        logger.warning("SENDGRID_API_KEY not configured, skipping email")
+        logger.warning("SENDGRID_API_KEY not configured")
         return False
-    
+
     try:
         message = Mail(
-            from_email=Email(FROM_EMAIL),
+            from_email=Email(FROM_EMAIL, FROM_NAME),
             to_emails=To(to_email),
             subject=subject,
             plain_text_content=Content("text/plain", text_body) if text_body else None,
             html_content=Content("text/html", html_body)
         )
-        
+
         sg = SendGridAPIClient(SENDGRID_API_KEY)
         response = sg.send(message)
-        
-        logger.info(f"✅ Email sent successfully to {to_email} (status: {response.status_code})")
+
+        logger.info(f"✅ Email sent via SendGrid to {to_email} (status: {response.status_code})")
         return True
-        
+
     except Exception as e:
-        logger.error(f"❌ Failed to send email to {to_email}: {e}")
+        logger.error(f"❌ SendGrid email failed to {to_email}: {e}")
         return False
+
+
+def send_email(to_email: str, subject: str, html_body: str, text_body: str = "") -> bool:
+    """
+    Send email using configured provider (SMTP or SendGrid)
+
+    Args:
+        to_email: Recipient email
+        subject: Email subject
+        html_body: HTML email body
+        text_body: Plain text fallback (optional)
+
+    Returns:
+        bool: True if sent successfully
+    """
+    if EMAIL_PROVIDER == "sendgrid" and SENDGRID_API_KEY:
+        return send_email_sendgrid(to_email, subject, html_body, text_body)
+    elif EMAIL_PROVIDER == "smtp" and SMTP_USER and SMTP_PASS:
+        return send_email_smtp(to_email, subject, html_body, text_body)
+    else:
+        # Fallback: try SMTP first, then SendGrid
+        if SMTP_USER and SMTP_PASS:
+            return send_email_smtp(to_email, subject, html_body, text_body)
+        elif SENDGRID_API_KEY and SENDGRID_AVAILABLE:
+            return send_email_sendgrid(to_email, subject, html_body, text_body)
+        else:
+            logger.warning("No email provider configured (set EMAIL_PROVIDER=smtp with SMTP_USER/SMTP_PASS, or EMAIL_PROVIDER=sendgrid with SENDGRID_API_KEY)")
+            return False
 
 
 def send_new_user_notification(
