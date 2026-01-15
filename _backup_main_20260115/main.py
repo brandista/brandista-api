@@ -369,10 +369,6 @@ DEFAULT_USER_LIMIT = int(os.getenv("DEFAULT_USER_LIMIT", "1"))
 SPA_CACHE_TTL = int(os.getenv("SPA_CACHE_TTL", "3600"))
 content_cache: Dict[str, Dict[str, Any]] = {}
 
-# PageSpeed Insights API (Core Web Vitals)
-PAGESPEED_API_KEY = os.getenv("PAGESPEED_API_KEY", "")
-PAGESPEED_API_ENABLED = bool(PAGESPEED_API_KEY)
-
 # Content Fetch Configuration
 CONTENT_FETCH_MODE = os.getenv("CONTENT_FETCH_MODE", "aggressive")
 CAPTURE_XHR = os.getenv("CAPTURE_XHR", "1") == "1"
@@ -3164,151 +3160,6 @@ async def analyze_basic_metrics_enhanced(
             'technology_description': 'Analysis failed'
         }
 
-# ============================================================================
-# CORE WEB VITALS ANALYSIS (PageSpeed Insights API)
-# ============================================================================
-
-async def analyze_core_web_vitals(url: str) -> Dict[str, Any]:
-    """
-    Fetch Core Web Vitals from Google PageSpeed Insights API.
-
-    Metrics:
-    - LCP (Largest Contentful Paint): < 2.5s good, < 4s needs improvement
-    - FID (First Input Delay): < 100ms good, < 300ms needs improvement (deprecated, use INP)
-    - INP (Interaction to Next Paint): < 200ms good, < 500ms needs improvement
-    - CLS (Cumulative Layout Shift): < 0.1 good, < 0.25 needs improvement
-    - TTFB (Time to First Byte): < 800ms good
-    - FCP (First Contentful Paint): < 1.8s good, < 3s needs improvement
-
-    Returns:
-        Dict with CWV scores, ratings, and improvement suggestions
-    """
-    result = {
-        'source': 'pagespeed_api' if PAGESPEED_API_ENABLED else 'html_estimate',
-        'lcp': {'value': None, 'rating': 'unknown', 'unit': 'ms'},
-        'fid': {'value': None, 'rating': 'unknown', 'unit': 'ms'},
-        'inp': {'value': None, 'rating': 'unknown', 'unit': 'ms'},
-        'cls': {'value': None, 'rating': 'unknown', 'unit': ''},
-        'ttfb': {'value': None, 'rating': 'unknown', 'unit': 'ms'},
-        'fcp': {'value': None, 'rating': 'unknown', 'unit': 'ms'},
-        'overall_score': 0,
-        'overall_rating': 'unknown',
-        'opportunities': [],
-        'diagnostics': []
-    }
-
-    if not PAGESPEED_API_ENABLED:
-        logger.info(f"[CWV] PageSpeed API not configured, returning estimates")
-        return result
-
-    try:
-        api_url = (
-            f"https://www.googleapis.com/pagespeedonline/v5/runPagespeed"
-            f"?url={url}&key={PAGESPEED_API_KEY}&category=performance&strategy=mobile"
-        )
-
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.get(api_url)
-
-            if response.status_code != 200:
-                logger.warning(f"[CWV] PageSpeed API error: {response.status_code}")
-                return result
-
-            data = response.json()
-
-            # Extract Lighthouse score
-            lighthouse = data.get('lighthouseResult', {})
-            categories = lighthouse.get('categories', {})
-            performance = categories.get('performance', {})
-            result['overall_score'] = int((performance.get('score', 0) or 0) * 100)
-
-            # Rating based on score
-            if result['overall_score'] >= 90:
-                result['overall_rating'] = 'good'
-            elif result['overall_score'] >= 50:
-                result['overall_rating'] = 'needs_improvement'
-            else:
-                result['overall_rating'] = 'poor'
-
-            # Extract Core Web Vitals from audits
-            audits = lighthouse.get('audits', {})
-
-            # LCP (Largest Contentful Paint)
-            lcp_audit = audits.get('largest-contentful-paint', {})
-            if lcp_audit.get('numericValue'):
-                lcp_ms = lcp_audit['numericValue']
-                result['lcp']['value'] = round(lcp_ms)
-                result['lcp']['rating'] = 'good' if lcp_ms < 2500 else ('needs_improvement' if lcp_ms < 4000 else 'poor')
-
-            # FID (First Input Delay) - from field data if available
-            fid_data = data.get('loadingExperience', {}).get('metrics', {}).get('FIRST_INPUT_DELAY_MS', {})
-            if fid_data.get('percentile'):
-                result['fid']['value'] = fid_data['percentile']
-                result['fid']['rating'] = fid_data.get('category', 'unknown').lower()
-
-            # INP (Interaction to Next Paint) - newer metric
-            inp_data = data.get('loadingExperience', {}).get('metrics', {}).get('INTERACTION_TO_NEXT_PAINT', {})
-            if inp_data.get('percentile'):
-                result['inp']['value'] = inp_data['percentile']
-                result['inp']['rating'] = inp_data.get('category', 'unknown').lower()
-
-            # CLS (Cumulative Layout Shift)
-            cls_audit = audits.get('cumulative-layout-shift', {})
-            if cls_audit.get('numericValue') is not None:
-                cls_val = cls_audit['numericValue']
-                result['cls']['value'] = round(cls_val, 3)
-                result['cls']['rating'] = 'good' if cls_val < 0.1 else ('needs_improvement' if cls_val < 0.25 else 'poor')
-
-            # TTFB (Time to First Byte)
-            ttfb_audit = audits.get('server-response-time', {})
-            if ttfb_audit.get('numericValue'):
-                ttfb_ms = ttfb_audit['numericValue']
-                result['ttfb']['value'] = round(ttfb_ms)
-                result['ttfb']['rating'] = 'good' if ttfb_ms < 800 else ('needs_improvement' if ttfb_ms < 1800 else 'poor')
-
-            # FCP (First Contentful Paint)
-            fcp_audit = audits.get('first-contentful-paint', {})
-            if fcp_audit.get('numericValue'):
-                fcp_ms = fcp_audit['numericValue']
-                result['fcp']['value'] = round(fcp_ms)
-                result['fcp']['rating'] = 'good' if fcp_ms < 1800 else ('needs_improvement' if fcp_ms < 3000 else 'poor')
-
-            # Extract opportunities for improvement
-            for key, audit in audits.items():
-                if audit.get('details', {}).get('type') == 'opportunity':
-                    savings = audit.get('details', {}).get('overallSavingsMs', 0)
-                    if savings > 100:  # Only include significant opportunities
-                        result['opportunities'].append({
-                            'id': key,
-                            'title': audit.get('title', key),
-                            'savings_ms': round(savings),
-                            'description': audit.get('description', '')[:200]
-                        })
-
-            # Sort opportunities by potential savings
-            result['opportunities'] = sorted(
-                result['opportunities'],
-                key=lambda x: x['savings_ms'],
-                reverse=True
-            )[:5]  # Top 5
-
-            # Extract diagnostics
-            for key in ['dom-size', 'mainthread-work-breakdown', 'bootup-time', 'third-party-summary']:
-                if key in audits and audits[key].get('score', 1) < 0.9:
-                    result['diagnostics'].append({
-                        'id': key,
-                        'title': audits[key].get('title', key),
-                        'displayValue': audits[key].get('displayValue', '')
-                    })
-
-            logger.info(f"[CWV] PageSpeed score for {url}: {result['overall_score']}/100")
-
-    except Exception as e:
-        logger.error(f"[CWV] PageSpeed API error: {e}")
-
-    return result
-
-
 async def analyze_technical_aspects(url: str, html: str, headers: Optional[httpx.Headers] = None) -> Dict[str, Any]:
     """Complete technical analysis"""
     soup = BeautifulSoup(html, 'html.parser')
@@ -3856,256 +3707,81 @@ async def analyze_content_quality(html: str) -> Dict[str, Any]:
     }
 
 async def analyze_ux_elements(html: str) -> Dict[str, Any]:
-    """
-    Complete UX analysis with enhanced WCAG 2.1 accessibility checks.
-
-    WCAG 2.1 categories covered:
-    - Perceivable: Alt text, color contrast, text alternatives
-    - Operable: Keyboard navigation, focus indicators, skip links
-    - Understandable: Lang attribute, form labels, error identification
-    - Robust: Valid HTML, ARIA usage
-    """
+    """Complete UX analysis"""
     soup = BeautifulSoup(html, 'html.parser')
-    hl = html.lower()
-
+    
     # Navigation scoring
     nav_score = 0
     nav_elements = []
-    if soup.find('nav'):
+    if soup.find('nav'): 
         nav_score += 20
         nav_elements.append('nav element')
-    if soup.find('header'):
+    if soup.find('header'): 
         nav_score += 10
         nav_elements.append('header')
-    if soup.find_all(['ul','ol'], class_=re.compile('nav|menu', re.I)):
+    if soup.find_all(['ul','ol'], class_=re.compile('nav|menu', re.I)): 
         nav_score += 20
         nav_elements.append('navigation lists')
     nav_score = min(100, nav_score)
-
+    
     # Design framework detection
     design_score = 0
     design_frameworks = []
+    hl = html.lower()
     for fw, pts in {'tailwind':25,'bootstrap':20,'foundation':15}.items():
-        if fw in hl:
+        if fw in hl: 
             design_score += pts
             design_frameworks.append(fw)
             break
-    if 'display: flex' in hl:
+    if 'display: flex' in hl: 
         design_score += 10
         design_frameworks.append('flexbox')
-    if '@media' in hl:
+    if '@media' in hl: 
         design_score += 10
     design_score = min(100, design_score)
-
-    # =========================================================================
-    # ENHANCED ACCESSIBILITY ANALYSIS (WCAG 2.1)
-    # =========================================================================
+    
+    # Accessibility scoring
     a11y_score = 0
     accessibility_issues = []
-    accessibility_features = {}
-
-    # --- WCAG 3.1.1: Language of Page (Level A) ---
-    html_tag = soup.find('html')
-    has_lang = html_tag and html_tag.get('lang')
-    if has_lang:
-        a11y_score += 8
-        accessibility_features['has_lang'] = True
-        accessibility_features['lang_value'] = html_tag.get('lang')
-    else:
-        accessibility_issues.append('Missing lang attribute on <html> (WCAG 3.1.1)')
-        accessibility_features['has_lang'] = False
-
-    # --- WCAG 1.1.1: Non-text Content (Level A) ---
-    imgs = soup.find_all('img')
-    imgs_with_alt = [i for i in imgs if i.get('alt', '').strip()]
-    imgs_decorative = [i for i in imgs if i.get('alt') == '' or i.get('role') == 'presentation']
-
-    accessibility_features['images_total'] = len(imgs)
-    accessibility_features['images_with_alt'] = len(imgs_with_alt)
-    accessibility_features['images_decorative'] = len(imgs_decorative)
-
-    if imgs:
-        alt_coverage = (len(imgs_with_alt) + len(imgs_decorative)) / len(imgs) * 100
-        accessibility_features['alt_text_coverage_percent'] = round(alt_coverage, 1)
-        a11y_score += int(alt_coverage * 0.15)  # Max 15 points
-
-        missing_alt = len(imgs) - len(imgs_with_alt) - len(imgs_decorative)
-        if missing_alt > 0:
-            accessibility_issues.append(f'{missing_alt} images missing alt text (WCAG 1.1.1)')
-    else:
-        accessibility_features['alt_text_coverage_percent'] = 100
-        a11y_score += 5
-
-    # --- WCAG 2.4.1: Bypass Blocks (Level A) - Skip Links ---
-    skip_links = soup.find_all('a', href=re.compile('^#(main|content|skip)', re.I))
-    skip_links += soup.find_all('a', class_=re.compile('skip', re.I))
-    has_skip_links = len(skip_links) > 0
-    accessibility_features['has_skip_links'] = has_skip_links
-
-    if has_skip_links:
-        a11y_score += 8
-    else:
-        accessibility_issues.append('No skip navigation links found (WCAG 2.4.1)')
-
-    # --- WCAG 4.1.2: Name, Role, Value (Level A) - ARIA ---
-    aria_labels = soup.find_all(attrs={'aria-label': True})
-    aria_labelledby = soup.find_all(attrs={'aria-labelledby': True})
-    aria_describedby = soup.find_all(attrs={'aria-describedby': True})
-    aria_roles = soup.find_all(attrs={'role': True})
-
-    accessibility_features['aria_label_count'] = len(aria_labels)
-    accessibility_features['aria_role_count'] = len(aria_roles)
-    accessibility_features['has_aria_labels'] = len(aria_labels) > 0 or len(aria_labelledby) > 0
-
-    if accessibility_features['has_aria_labels']:
+    if soup.find('html', lang=True): 
         a11y_score += 10
     else:
-        accessibility_issues.append('Limited ARIA labeling (WCAG 4.1.2)')
-
-    # --- WCAG 1.3.1: Info and Relationships (Level A) - Heading Hierarchy ---
-    headings = {'h1': soup.find_all('h1'), 'h2': soup.find_all('h2'),
-                'h3': soup.find_all('h3'), 'h4': soup.find_all('h4')}
-    heading_counts = {k: len(v) for k, v in headings.items()}
-    accessibility_features['heading_structure'] = heading_counts
-
-    # Check heading hierarchy
-    has_h1 = heading_counts['h1'] >= 1
-    has_proper_hierarchy = has_h1 and (heading_counts['h1'] <= 1 or heading_counts['h2'] > 0)
-    accessibility_features['has_proper_heading_hierarchy'] = has_proper_hierarchy
-
-    if has_proper_hierarchy:
-        a11y_score += 8
-    else:
-        if heading_counts['h1'] == 0:
-            accessibility_issues.append('No H1 heading found (WCAG 1.3.1)')
-        elif heading_counts['h1'] > 1:
-            accessibility_issues.append(f'Multiple H1 headings ({heading_counts["h1"]}) - consider single H1 (WCAG 1.3.1)')
-
-    # --- WCAG 1.3.1: Form Labels ---
-    inputs = soup.find_all(['input', 'select', 'textarea'])
-    inputs_need_label = [i for i in inputs if i.get('type') not in ['hidden', 'submit', 'button', 'reset', 'image']]
-    inputs_with_label = []
-
-    for inp in inputs_need_label:
-        inp_id = inp.get('id')
-        has_explicit_label = inp_id and soup.find('label', attrs={'for': inp_id})
-        has_aria_label = inp.get('aria-label') or inp.get('aria-labelledby')
-        has_placeholder = inp.get('placeholder')  # Not ideal but counts
-        has_title = inp.get('title')
-
-        if has_explicit_label or has_aria_label or has_title:
-            inputs_with_label.append(inp)
-
-    accessibility_features['form_inputs_total'] = len(inputs_need_label)
-    accessibility_features['form_inputs_labeled'] = len(inputs_with_label)
-
-    if inputs_need_label:
-        label_coverage = len(inputs_with_label) / len(inputs_need_label) * 100
-        accessibility_features['form_label_coverage_percent'] = round(label_coverage, 1)
-        a11y_score += int(label_coverage * 0.08)  # Max 8 points
-
-        if label_coverage < 100:
-            missing = len(inputs_need_label) - len(inputs_with_label)
-            accessibility_issues.append(f'{missing} form inputs missing labels (WCAG 1.3.1)')
-    else:
-        accessibility_features['form_label_coverage_percent'] = 100
-
-    # --- WCAG 2.4.4: Link Purpose (Level A) ---
-    links = soup.find_all('a', href=True)
-    vague_link_texts = ['click here', 'read more', 'learn more', 'here', 'more', 'link']
-    vague_links = []
-
-    for link in links:
-        link_text = link.get_text(strip=True).lower()
-        if link_text in vague_link_texts or len(link_text) < 2:
-            # Check if ARIA provides context
-            if not link.get('aria-label') and not link.get('aria-labelledby'):
-                vague_links.append(link_text)
-
-    accessibility_features['links_total'] = len(links)
-    accessibility_features['vague_link_count'] = len(vague_links)
-
-    if vague_links and len(vague_links) > 2:
-        accessibility_issues.append(f'{len(vague_links)} links with vague text (WCAG 2.4.4)')
-    else:
+        accessibility_issues.append('Missing lang attribute')
+        
+    imgs = soup.find_all('img')
+    if imgs:
+        with_alt = [i for i in imgs if i.get('alt','').strip()]
+        a11y_score += int((len(with_alt)/len(imgs))*25)
+        if len(with_alt) < len(imgs):
+            accessibility_issues.append(f'{len(imgs) - len(with_alt)} images missing alt text')
+    else: 
         a11y_score += 5
-
-    # --- WCAG 2.4.7: Focus Visible (Level AA) ---
-    has_focus_styles = (
-        ':focus' in hl or
-        'focus-visible' in hl or
-        'outline:' in hl or
-        'outline-color' in hl
-    )
-    accessibility_features['has_focus_indicators'] = has_focus_styles
-
-    if has_focus_styles:
-        a11y_score += 8
+    
+    # ARIA labels check
+    if 'aria-' in hl:
+        a11y_score += 10
     else:
-        accessibility_issues.append('No visible focus indicators detected (WCAG 2.4.7)')
-
-    # --- WCAG 2.1.1: Keyboard (Level A) ---
-    # Check for tabindex and keyboard event handlers
-    tabindex_elements = soup.find_all(attrs={'tabindex': True})
-    positive_tabindex = [t for t in tabindex_elements if t.get('tabindex', '0').lstrip('-').isdigit() and int(t.get('tabindex', '0')) > 0]
-
-    accessibility_features['tabindex_elements'] = len(tabindex_elements)
-    accessibility_features['positive_tabindex_count'] = len(positive_tabindex)
-
-    if positive_tabindex:
-        accessibility_issues.append(f'{len(positive_tabindex)} elements with positive tabindex (avoid tabindex > 0)')
-
-    # Check for keyboard handlers
-    has_keyboard_handlers = 'onkeydown' in hl or 'onkeyup' in hl or 'onkeypress' in hl or 'keydown' in hl
-    accessibility_features['has_keyboard_handlers'] = has_keyboard_handlers
-    if has_keyboard_handlers:
-        a11y_score += 5
-
-    # --- WCAG 1.4.3: Contrast (Level AA) - Estimation ---
-    # This is a rough estimation based on common low-contrast patterns
-    low_contrast_patterns = [
-        'color: #999', 'color: #aaa', 'color: #bbb', 'color: #ccc',
-        'color: lightgray', 'color: lightgrey', 'color: silver',
-        'color: rgba(0,0,0,0.3)', 'color: rgba(0,0,0,0.4)'
-    ]
-    has_low_contrast = any(pattern in hl for pattern in low_contrast_patterns)
-    accessibility_features['potential_contrast_issues'] = has_low_contrast
-
-    if not has_low_contrast:
-        a11y_score += 5
-    else:
-        accessibility_issues.append('Potential low contrast text detected (WCAG 1.4.3)')
-
-    # --- WCAG 1.4.1: Use of Color (Level A) ---
-    # Check if color is sole indicator (e.g., "red for errors")
-    color_only_indicators = [
-        'color: red', 'color: green', 'color: #f00', 'color: #0f0',
-        'error-color', 'success-color'
-    ]
-    uses_color_only = any(pattern in hl for pattern in color_only_indicators)
-    # Not penalizing, just noting
-    accessibility_features['may_use_color_only'] = uses_color_only
-
-    # --- Final Score Calculation ---
+        accessibility_issues.append('Limited ARIA labeling')
+    
     a11y_score = min(100, a11y_score)
-
+    
     # Mobile UX - KORJATTU SKAALAUS 0-100
     mobile_raw = 0
     vp = soup.find('meta', attrs={'name':'viewport'})
     if vp:
         vc = vp.get('content','')
-        if 'width=device-width' in vc:
+        if 'width=device-width' in vc: 
             mobile_raw += 40
-        if 'initial-scale=1' in vc:
+        if 'initial-scale=1' in vc: 
             mobile_raw += 20
         if detect_responsive_signals(html):
             mobile_raw += 20
         if '@media' in hl:
             mobile_raw += 20
-
+    
     mobile_score = min(100, mobile_raw)
     overall = int((nav_score + design_score + a11y_score + mobile_score)/4)
-
+    
     return {
         'navigation_score': nav_score,
         'visual_design_score': design_score,
@@ -4113,7 +3789,6 @@ async def analyze_ux_elements(html: str) -> Dict[str, Any]:
         'mobile_ux_score': mobile_score,
         'overall_ux_score': overall,
         'accessibility_issues': accessibility_issues,
-        'accessibility_features': accessibility_features,
         'navigation_elements': nav_elements,
         'design_frameworks': design_frameworks
     }
@@ -7124,8 +6799,9 @@ async def _perform_comprehensive_analysis_internal(
     url = clean_url(url)
     
     # Check cache
-    # v6.5.0: Added Core Web Vitals (PageSpeed API) and enhanced WCAG 2.1 accessibility
-    cache_key = get_cache_key(url, "ai_comprehensive_v6.5.0_cwv_a11y")
+    # FIX 11: Updated cache version to v6.3.1_fixed to invalidate old cache
+    # with incorrect accessibility scores (45/15 bug) and modern features bugs
+    cache_key = get_cache_key(url, "ai_comprehensive_v6.3.1_fixed")
     cached_result = await get_from_cache(cache_key)
     if cached_result:
         logger.info(f"Cache hit for {url}")
@@ -7186,10 +6862,6 @@ async def _perform_comprehensive_analysis_internal(
     ux_analysis = await analyze_ux_elements(html_content)
     social_analysis = await analyze_social_media_presence(url, html_content)
     competitive_analysis = await analyze_competitive_positioning(url, basic_analysis)
-
-    # Core Web Vitals analysis (via PageSpeed Insights API if configured)
-    core_web_vitals = await analyze_core_web_vitals(url)
-    logger.info(f"[CWV] Analysis complete: score={core_web_vitals.get('overall_score', 0)}, source={core_web_vitals.get('source', 'unknown')}")
     
     # Score breakdown with aliases
     sb_with_aliases = create_score_breakdown_with_aliases(
@@ -7330,10 +7002,7 @@ async def _perform_comprehensive_analysis_internal(
         },
         
         "enhanced_features": enhanced_features,
-
-        # Core Web Vitals (from PageSpeed Insights API)
-        "core_web_vitals": core_web_vitals,
-
+        
         "metadata": {
             "version": APP_VERSION,
             "scoring_version": "configurable_v1_complete",
@@ -7344,7 +7013,6 @@ async def _perform_comprehensive_analysis_internal(
             "rendering_method": rendering_info['rendering_method'],
             "spa_detected": rendering_info['spa_detected'],
             "playwright_available": PLAYWRIGHT_AVAILABLE,
-            "pagespeed_api_enabled": PAGESPEED_API_ENABLED,
             "scoring_weights": SCORING_CONFIG.weights,
             "content_words": content_analysis.get('word_count', 0),
             "modernity_score": basic_analysis.get('modernity_score', 0)
