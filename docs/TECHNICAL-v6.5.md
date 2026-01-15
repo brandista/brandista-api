@@ -1,7 +1,7 @@
 # Brandista Competitive Intelligence API - Technical Documentation
 
-**Last Updated:** 2026-01-10
-**Version:** 6.4.4 (Growth Engine 2.0 with RunContext)
+**Last Updated:** 2026-01-15
+**Version:** 6.5.0 (Growth Engine 2.0 with Core Web Vitals & WCAG 2.1)
 **Language:** Python 3.11+ / FastAPI
 
 ---
@@ -291,6 +291,7 @@ const ws = new WebSocket('wss://api.brandista.fi/api/v1/agents/ws?token=...');
 | `LOG_LEVEL` | Logging level | INFO |
 | `ALLOWED_ORIGINS` | CORS origins | * |
 | `RUN_DATA_TTL` | Run data TTL (seconds) | 604800 (7 days) |
+| `PAGESPEED_API_KEY` | Google PageSpeed Insights API key | (optional) |
 
 ---
 
@@ -404,7 +405,7 @@ Response:
 ```json
 {
     "status": "healthy",
-    "version": "6.4.4",
+    "version": "6.5.0",
     "redis": "connected",
     "database": "connected",
     "agents": {
@@ -446,10 +447,47 @@ Response:
 | 6.3 | Collaboration, Task Delegation |
 | 6.4 | RunContext, RunStore, cancellation support |
 | 6.4.4 | Production-ready, Redis-backed persistence |
+| 6.5.0 | Core Web Vitals (PageSpeed API), WCAG 2.1 accessibility |
 
 ---
 
-## Next Steps (v6.5 Roadmap)
+## Core Web Vitals (v6.5.0)
+
+Real performance metrics from Google PageSpeed Insights API:
+
+| Metric | Good | Needs Improvement | Description |
+|--------|------|-------------------|-------------|
+| LCP | < 2.5s | < 4s | Largest Contentful Paint |
+| FID | < 100ms | < 300ms | First Input Delay |
+| INP | < 200ms | < 500ms | Interaction to Next Paint |
+| CLS | < 0.1 | < 0.25 | Cumulative Layout Shift |
+| TTFB | < 800ms | - | Time to First Byte |
+| FCP | < 1.8s | < 3s | First Contentful Paint |
+
+Returns: `opportunities` and `diagnostics` for improvements.
+
+---
+
+## WCAG 2.1 Accessibility (v6.5.0)
+
+Comprehensive accessibility checks:
+
+| WCAG | Level | Criterion |
+|------|-------|-----------|
+| 3.1.1 | A | Language (html lang attribute) |
+| 1.1.1 | A | Non-text Content (alt texts) |
+| 2.4.1 | A | Bypass Blocks (skip links) |
+| 4.1.2 | A | Name/Role/Value (ARIA labels) |
+| 1.3.1 | A | Info and Relationships (heading hierarchy) |
+| 2.4.4 | A | Link Purpose (vague link detection) |
+| 2.4.7 | AA | Focus Visible (CSS focus indicators) |
+| 2.1.1 | A | Keyboard (tabindex, keyboard handlers) |
+| 1.4.3 | AA | Contrast (potential contrast issues) |
+| 1.4.1 | A | Use of Color (color-only indicators) |
+
+---
+
+## Next Steps (v6.6 Roadmap)
 
 1. **Streaming Responses** - SSE for real-time analysis updates
 2. **Analysis Templates** - Pre-configured analysis types
