@@ -1,0 +1,28 @@
+# Test dependencies for Growth Engine Swarm
+
+# Pytest core
+pytest>=7.4.0
+pytest-asyncio>=0.23.0
+pytest-cov>=4.1.0
+pytest-mock>=3.12.0
+
+# Time mocking
+freezegun>=1.2.2
+
+# Async helpers
+aiohttp>=3.9.0
+
+# HTTP mocking
+responses>=0.24.0
+respx>=0.20.2
+
+# Assertions and utilities
+assertpy>=1.1
+factory-boy>=3.3.0
+
+# Coverage
+coverage[toml]>=7.3.0
+
+# Redis (optional - for full Redis blackboard tests)
+# Uncomment to enable Redis integration tests:
+# redis[hiredis]>=5.0.0
