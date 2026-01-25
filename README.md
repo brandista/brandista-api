@@ -2,6 +2,49 @@
 
 Six specialized AI agents working together to deliver comprehensive competitive intelligence in 90 seconds.
 
+## 🆕 Refactored Modular Structure
+
+The API has been refactored into a clean, modular architecture:
+
+```
+app/
+├── main.py          # FastAPI application entry point
+├── config.py        # Centralized configuration
+├── dependencies.py  # Auth, rate limiting
+├── routers/         # API endpoints by domain
+├── services/        # Business logic
+└── models/          # Pydantic models
+```
+
+## Quick Start
+
+### Installation
+
+1. Clone the repository
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+3. Set up environment variables:
+```bash
+cp .env.example .env
+# Edit .env with your API keys and configuration
+```
+
+4. Run the server:
+```bash
+# New modular entry point (recommended)
+uvicorn app.main:app --reload --port 8000
+
+# Legacy entry point (still supported)
+uvicorn main:app --reload --port 8000
+```
+
+5. Access the API:
+- API Docs: http://localhost:8000/docs
+- Health Check: http://localhost:8000/health
+
 ## Architecture
 
 ```
@@ -44,6 +87,14 @@ Six specialized AI agents working together to deliver comprehensive competitive 
 ## Files
 
 ```
+app/
+├── main.py              # FastAPI app (NEW modular structure)
+├── config.py            # Configuration management
+├── dependencies.py      # Auth & rate limiting
+├── routers/             # API endpoints
+├── services/            # Business logic
+└── models/              # Pydantic models
+
 agents/
 ├── __init__.py          # Exports
 ├── types.py             # Core types (AnalysisContext, AgentStatus, etc.)
@@ -54,25 +105,9 @@ agents/
 ├── prospector_agent.py  # 💎 Opportunities + SWOT
 ├── strategist_agent.py  # 🎯 Strategic recommendations
 ├── planner_agent.py     # 📋 90-day plan
-├── orchestrator.py      # Coordinates all agents
+└── orchestrator.py      # Coordinates all agents
+
 agent_api.py             # REST + WebSocket endpoints
-```
-
-## Installation
-
-1. Copy `agents/` folder to your project
-2. Copy `agent_api.py` to your project root
-3. Add to `main.py`:
-
-```python
-from agent_api import router as agent_router
-
-app.include_router(agent_router, prefix="/api/v1/agents", tags=["agents"])
-```
-
-4. Add to `requirements.txt`:
-```
-python-whois==0.9.4
 ```
 
 ## API Endpoints
@@ -80,8 +115,9 @@ python-whois==0.9.4
 ### REST
 
 ```
-GET  /api/v1/agents/info     → Agent information
-POST /api/v1/agents/analyze  → Run full analysis (sync)
+GET  /health                   → Health check
+GET  /api/v1/agents/info      → Agent information
+POST /api/v1/agents/analyze   → Run full analysis (sync)
 ```
 
 ### WebSocket
@@ -130,8 +166,13 @@ Signals analyzed:
 - Growth signals (hiring, active blog)
 - Trust signals (case studies, certifications)
 
+## Migration Guide
+
+See [MIGRATION.md](MIGRATION.md) for detailed migration instructions from the legacy structure.
+
 ## Version
 
+- v6.5.0 - Refactored modular architecture
 - v2.0.0 - Complete refactor with English-only backend
 - All agents use real main.py functions
 - Competitor threat assessment included

@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="fi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Brandista Chat Widget</title>
+    <link rel="stylesheet" href="chat-widget.css">
+</head>
+<body>
+    <!-- Chat Widget Container -->
+    <div id="brandista-chat-widget">
+        <!-- Floating Chat Button -->
+        <button id="chat-toggle-btn" class="chat-toggle-btn" aria-label="Open chat">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+            </svg>
+        </button>
+
+        <!-- Chat Window -->
+        <div id="chat-window" class="chat-window hidden">
+            <!-- Header -->
+            <div class="chat-header">
+                <div class="chat-header-info">
+                    <div class="chat-avatar">
+                        <img src="https://www.brandista.eu/logo.png" alt="Brandista" onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect fill=%22%236366f1%22 width=%2240%22 height=%2240%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2220%22 font-family=%22sans-serif%22%3EB%3C/text%3E%3C/svg%3E'">
+                    </div>
+                    <div class="chat-header-text">
+                        <h3>Brandista</h3>
+                        <span class="chat-status">Online</span>
+                    </div>
+                </div>
+                <button id="chat-close-btn" class="chat-close-btn" aria-label="Close chat">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Messages Container -->
+            <div id="chat-messages" class="chat-messages">
+                <!-- Welcome Message -->
+                <div class="message agent-message">
+                    <div class="message-avatar">
+                        <img src="https://www.brandista.eu/logo.png" alt="Brandista" onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2232%22 height=%2232%22%3E%3Crect fill=%22%236366f1%22 width=%2232%22 height=%2232%22 rx=%2216%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2216%22 font-family=%22sans-serif%22%3EB%3C/text%3E%3C/svg%3E'">
+                    </div>
+                    <div class="message-content">
+                        <p>Tervetuloa Brandistan chattiin! 👋</p>
+                        <span class="message-time">Juuri nyt</span>
+                    </div>
+                </div>
+
+                <!-- Quick Actions -->
+                <div class="message agent-message">
+                    <div class="message-avatar">
+                        <img src="https://www.brandista.eu/logo.png" alt="Brandista" onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2232%22 height=%2232%22%3E%3Crect fill=%22%236366f1%22 width=%2232%22 height=%2232%22 rx=%2216%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2216%22 font-family=%22sans-serif%22%3EB%3C/text%3E%3C/svg%3E'">
+                    </div>
+                    <div class="message-content">
+                        <p>Miten voin auttaa sinua tänään?</p>
+                        <div class="quick-actions">
+                            <button class="quick-action-btn" data-message="Kerro lisää Brandistasta">
+                                📊 Kerro lisää Brandistasta
+                            </button>
+                            <button class="quick-action-btn" data-message="Miten kilpailija-analyysi toimii?">
+                                🔍 Kilpailija-analyysi
+                            </button>
+                            <button class="quick-action-btn" data-message="Mitä ominaisuuksia on tarjolla?">
+                                ✨ Ominaisuudet
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Typing Indicator (hidden by default) -->
+                <div id="typing-indicator" class="message agent-message typing-indicator hidden">
+                    <div class="message-avatar">
+                        <img src="https://www.brandista.eu/logo.png" alt="Brandista" onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2232%22 height=%2232%22%3E%3Crect fill=%22%236366f1%22 width=%2232%22 height=%2232%22 rx=%2216%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2216%22 font-family=%22sans-serif%22%3EB%3C/text%3E%3C/svg%3E'">
+                    </div>
+                    <div class="message-content">
+                        <div class="typing-dots">
+                            <span></span>
+                            <span></span>
+                            <span></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Input Area -->
+            <div class="chat-input-container">
+                <input 
+                    type="text" 
+                    id="chat-input" 
+                    class="chat-input" 
+                    placeholder="Kirjoita viestisi..."
+                    autocomplete="off"
+                >
+                <button id="chat-send-btn" class="chat-send-btn" aria-label="Send message">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Powered by -->
+            <div class="chat-footer">
+                <span>Powered by <strong>Brandista AI</strong></span>
+            </div>
+        </div>
+    </div>
+
+    <script src="chat-widget.js"></script>
+</body>
+</html>

@@ -47,4 +47,8 @@ htmlcov/
 *.bak
 backup
 backup2
+backup*
+old*
+*toimiva*
+*.zip
 
