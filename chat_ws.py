@@ -108,14 +108,14 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 
                 try:
                     # Import OpenAI client
-                    from main import openai_client, OPENAI_MODEL, BRANDISTA_SYSTEM_PROMPT
-                    
+                    from main import openai_client, OPENAI_MODEL, CHAT_SYSTEM_PROMPT
+
                     if not openai_client:
                         raise Exception("OpenAI client not available")
-                    
+
                     # Build messages for OpenAI
                     messages = [
-                        {"role": "system", "content": BRANDISTA_SYSTEM_PROMPT}
+                        {"role": "system", "content": CHAT_SYSTEM_PROMPT}
                     ]
                     
                     # Add conversation history (last 10 messages)
