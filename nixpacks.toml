@@ -26,5 +26,5 @@ cmds = [
 ]
 
 [start]
-# Your main.py file
-cmd = "python main.py"
+# Use uvicorn with new modular app structure
+cmd = "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"
