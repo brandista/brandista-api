@@ -115,6 +115,8 @@ app.add_middleware(
         "http://127.0.0.1:3000",
         "https://brandista.eu",
         "https://www.brandista.eu",
+        "http://brandista.eu",
+        "http://www.brandista.eu",
         "https://api.brandista.eu",
         "https://fastapi-production-51f9.up.railway.app",
         "https://3000-ip92lxeccquecaiidxzl0-6aa4782a.manusvm.computer"
