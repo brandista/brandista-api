@@ -10707,24 +10707,7 @@ async def websocket_chat(websocket: WebSocket):
     - Server sends: {"type": "message", "content": "AI response"}
     - Server sends: {"type": "error", "message": "error description"} on error
     """
-    # Check origin for CORS (WebSocket doesn't use CORS middleware)
-    origin = websocket.headers.get("origin", "")
-    allowed_origins = [
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "https://brandista.eu",
-        "https://www.brandista.eu",
-        "http://brandista.eu",
-        "http://www.brandista.eu",
-    ]
-    
-    # Accept connection regardless of origin for now (can restrict later)
-    # if origin not in allowed_origins:
-    #     await websocket.close(code=1008, reason="Origin not allowed")
-    #     return
-    
+    # Accept connection immediately (like notification_ws.py does)
     await websocket.accept()
     connection_id = f"ws_{id(websocket)}"
     active_connections[connection_id] = websocket
