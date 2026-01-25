@@ -10707,6 +10707,7 @@ async def websocket_chat(websocket: WebSocket):
     - Server sends: {"type": "message", "content": "AI response"}
     - Server sends: {"type": "error", "message": "error description"} on error
     """
+    # Accept WebSocket connection (CORS is handled by middleware)
     await websocket.accept()
     connection_id = f"ws_{id(websocket)}"
     active_connections[connection_id] = websocket
