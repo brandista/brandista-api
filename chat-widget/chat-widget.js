@@ -60,9 +60,61 @@ class BrandistaChat {
             }
         });
 
-        // Show demo mode indicator
-        if (this.config.demoMode) {
+        // Connect WebSocket if not in demo mode
+        if (!this.config.demoMode) {
+            this.connectWebSocket();
+        } else {
             console.log('🎭 Demo mode enabled - using simulated GPT responses');
+        }
+    }
+
+    connectWebSocket() {
+        try {
+            // Convert HTTP URL to WebSocket URL
+            const wsUrl = this.config.apiUrl.replace('https://', 'wss://').replace('http://', 'ws://');
+            this.ws = new WebSocket(`${wsUrl}/ws/chat`);
+
+            this.ws.onopen = () => {
+                console.log('✅ WebSocket connected');
+                this.wsConnected = true;
+            };
+
+            this.ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+
+                    if (data.type === 'message') {
+                        this.hideTyping();
+                        this.addMessage(data.content, 'agent');
+                    } else if (data.type === 'typing') {
+                        this.showTyping();
+                    } else if (data.type === 'error') {
+                        this.hideTyping();
+                        this.addMessage(data.message || 'Virhe tapahtui', 'agent');
+                    } else if (data.type === 'connected') {
+                        console.log('💬 Chat connected:', data.message);
+                    }
+                } catch (error) {
+                    console.error('WebSocket message error:', error);
+                }
+            };
+
+            this.ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                this.wsConnected = false;
+            };
+
+            this.ws.onclose = () => {
+                console.log('WebSocket disconnected');
+                this.wsConnected = false;
+                // Attempt reconnect after 5 seconds
+                if (!this.config.demoMode) {
+                    setTimeout(() => this.connectWebSocket(), 5000);
+                }
+            };
+        } catch (error) {
+            console.error('WebSocket connection error:', error);
+            this.wsConnected = false;
         }
     }
 

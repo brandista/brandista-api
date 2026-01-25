@@ -10652,6 +10652,178 @@ async def delete_discovery(
         raise HTTPException(500, f"Failed to delete discovery: {str(e)}")
 
 # ============================================================================
+# WEBSOCKET CHAT ENDPOINT (GPT-POWERED)
+# ============================================================================
+
+from fastapi import WebSocket, WebSocketDisconnect
+
+# Store active WebSocket connections and their conversation history
+active_connections: Dict[str, WebSocket] = {}
+conversation_histories: Dict[str, List[Dict]] = {}
+
+CHAT_SYSTEM_PROMPT = """Olet Brandista AI-assistentti, joka auttaa yrityksiä kilpailija-analyysissä ja digitaalisen markkinoinnin kehittämisessä.
+
+**Tietoa Brandistasta:**
+- Brandista on tekoälypohjainen kilpailija-analyysityökalu
+- Analysoi verkkosivuja, SEO:a, sisältöä ja teknistä toteutusta
+- Tarjoaa 90 päivän toimintasuunnitelman
+- Käyttää 6 erikoistunutta AI-agenttia: Scout, Analyst, Guardian, Prospector, Strategist, Planner
+
+**Ominaisuudet:**
+- Kilpailija-analyysi (löytää ja analysoi kilpailijat automaattisesti)
+- Verkkosivujen tekninen auditointi
+- SEO-analyysi ja suositukset
+- Sisältöanalyysi
+- Digitaalinen pisteytys (0-100)
+- AI-generoidut oivallukset
+- SWOT-analyysi
+- 90 päivän strateginen suunnitelma
+
+**Tyylisi:**
+- Ole ystävällinen ja ammattitaitoinen
+- Vastaa suomeksi (ellei käyttäjä kirjoita englanniksi)
+- Ole ytimekäs mutta informatiivinen
+- Käytä emojeita kohtuudella 🎯 📊 ✨
+- Jos et tiedä jotain, sano rehellisesti
+- Kannusta kysymään lisää
+
+**Erikoisosaaminen:**
+- Digitaalinen markkinointi
+- Kilpailija-analyysi
+- SEO ja verkkosivujen optimointi
+- Liiketoimintastrategia
+- Kasvuhakkerointi
+
+Vastaa käyttäjän kysymyksiin näiden ohjeiden mukaisesti."""
+
+@app.websocket("/ws/chat")
+async def websocket_chat(websocket: WebSocket):
+    """
+    WebSocket endpoint for real-time GPT-powered chat
+    
+    Protocol:
+    - Client sends: {"type": "message", "content": "user message"}
+    - Server sends: {"type": "typing"} when processing
+    - Server sends: {"type": "message", "content": "AI response"}
+    - Server sends: {"type": "error", "message": "error description"} on error
+    """
+    await websocket.accept()
+    connection_id = f"ws_{id(websocket)}"
+    active_connections[connection_id] = websocket
+    conversation_histories[connection_id] = []
+    
+    logger.info(f"💬 WebSocket chat connected: {connection_id}")
+    
+    try:
+        # Send welcome message
+        await websocket.send_json({
+            "type": "connected",
+            "message": "Tervetuloa Brandistan chattiin! 👋"
+        })
+        
+        while True:
+            # Receive message from client
+            data = await websocket.receive_json()
+            
+            if data.get("type") == "message":
+                user_message = data.get("content", "").strip()
+                
+                if not user_message:
+                    continue
+                
+                logger.info(f"💬 Chat message from {connection_id}: {user_message[:50]}...")
+                
+                # Send typing indicator
+                await websocket.send_json({"type": "typing"})
+                
+                try:
+                    # Check if OpenAI is available
+                    if not openai_client:
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": "AI chat ei ole saatavilla juuri nyt. Yritä myöhemmin uudelleen."
+                        })
+                        continue
+                    
+                    # Build messages for OpenAI
+                    messages = [
+                        {"role": "system", "content": CHAT_SYSTEM_PROMPT}
+                    ]
+                    
+                    # Add conversation history (last 10 messages)
+                    history = conversation_histories[connection_id][-10:]
+                    for msg in history:
+                        messages.append({
+                            "role": msg["role"],
+                            "content": msg["content"]
+                        })
+                    
+                    # Add current user message
+                    messages.append({
+                        "role": "user",
+                        "content": user_message
+                    })
+                    
+                    # Call OpenAI API
+                    response = await openai_client.chat.completions.create(
+                        model=OPENAI_MODEL,
+                        messages=messages,
+                        temperature=0.7,
+                        max_tokens=500,
+                        top_p=0.9,
+                        frequency_penalty=0.5,
+                        presence_penalty=0.3
+                    )
+                    
+                    assistant_message = response.choices[0].message.content
+                    
+                    # Store in conversation history
+                    conversation_histories[connection_id].append({
+                        "role": "user",
+                        "content": user_message
+                    })
+                    conversation_histories[connection_id].append({
+                        "role": "assistant",
+                        "content": assistant_message
+                    })
+                    
+                    # Keep only last 20 messages
+                    if len(conversation_histories[connection_id]) > 20:
+                        conversation_histories[connection_id] = conversation_histories[connection_id][-20:]
+                    
+                    # Send response to client
+                    await websocket.send_json({
+                        "type": "message",
+                        "content": assistant_message,
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    
+                    logger.info(f"✅ Chat response sent to {connection_id}: {len(assistant_message)} chars")
+                    
+                except Exception as e:
+                    logger.error(f"❌ Chat error for {connection_id}: {e}")
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "Pahoittelut, tapahtui virhe. Yritä uudelleen."
+                    })
+            
+            elif data.get("type") == "ping":
+                # Respond to ping to keep connection alive
+                await websocket.send_json({"type": "pong"})
+    
+    except WebSocketDisconnect:
+        logger.info(f"💬 WebSocket chat disconnected: {connection_id}")
+    except Exception as e:
+        logger.error(f"❌ WebSocket error for {connection_id}: {e}")
+    finally:
+        # Cleanup
+        if connection_id in active_connections:
+            del active_connections[connection_id]
+        if connection_id in conversation_histories:
+            del conversation_histories[connection_id]
+        logger.info(f"🧹 Cleaned up connection: {connection_id}")
+
+# ============================================================================
 # MAIN APPLICATION ENTRY POINT
 # ============================================================================
 
