@@ -11,10 +11,16 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 
-# Import OpenAI client from main
-import sys
-sys.path.insert(0, '/Users/tuukka/Downloads/Projects/brandista-api-git')
-from main import openai_client, OPENAI_MODEL
+# Import OpenAI client - try both deployment and local paths
+try:
+    # Try Railway/production path first
+    from app.main import openai_client, OPENAI_MODEL
+except ImportError:
+    # Fallback to legacy main.py
+    import sys
+    import os
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from main import openai_client, OPENAI_MODEL
 
 from app.dependencies import get_optional_user
 
