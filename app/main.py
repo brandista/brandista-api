@@ -64,9 +64,14 @@ async def lifespan(app: FastAPI):
     if hasattr(legacy_main, 'HISTORY_DB_AVAILABLE') and legacy_main.HISTORY_DB_AVAILABLE:
         try:
             if legacy_main.AnalysisHistoryDB:
-                legacy_main.history_db = legacy_main.AnalysisHistoryDB()
-                await legacy_main.history_db.connect()
-                logger.info("✅ Analysis history database connected")
+                # Get database URL from environment or legacy main
+                db_url = os.getenv('HISTORY_DATABASE_URL') or getattr(legacy_main, 'HISTORY_DATABASE_URL', None)
+                if db_url:
+                    legacy_main.history_db = legacy_main.AnalysisHistoryDB(db_url)
+                    await legacy_main.history_db.connect()
+                    logger.info("✅ Analysis history database connected")
+                else:
+                    logger.warning("⚠️ History database URL not configured")
         except Exception as e:
             logger.error(f"❌ History DB initialization failed: {e}")
     
