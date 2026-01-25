@@ -236,6 +236,14 @@ try:
 except ImportError:
     logger.warning("⚠️ History API routes not available")
 
+# Chat WebSocket
+try:
+    from chat_ws import chat_ws_router
+    app.include_router(chat_ws_router)
+    logger.info("✅ Chat WebSocket registered: /ws/chat")
+except ImportError as e:
+    logger.warning(f"⚠️ Chat WebSocket not available: {e}")
+
 # ============================================================================
 # LEGACY ENDPOINTS (TO BE MIGRATED)
 # ============================================================================

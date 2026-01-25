@@ -18,6 +18,28 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Chat WebSocket"])
 
 # ============================================================================
+# ALLOWED ORIGINS FOR WEBSOCKET
+# ============================================================================
+
+ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://brandista.eu",
+    "https://www.brandista.eu",
+    "https://api.brandista.eu",
+    "https://fastapi-production-51f9.up.railway.app",
+]
+
+def is_origin_allowed(origin: str | None) -> bool:
+    """Check if the WebSocket origin is allowed"""
+    if not origin:
+        # Allow connections without origin (e.g., from server-side or tools)
+        return True
+    return origin in ALLOWED_ORIGINS or origin.endswith(".brandista.eu")
+
+# ============================================================================
 # CONNECTION STORAGE
 # ============================================================================
 
@@ -33,14 +55,23 @@ conversation_histories: Dict[str, List[dict]] = {}
 async def websocket_chat_endpoint(websocket: WebSocket):
     """
     WebSocket endpoint for real-time GPT-powered chat
-    
+
     Protocol:
     - Client sends: {"type": "message", "content": "user message"}
     - Server sends: {"type": "typing"} when processing
     - Server sends: {"type": "message", "content": "AI response"}
     - Server sends: {"type": "error", "message": "error description"} on error
     """
-    # Accept connection immediately (like notification_ws.py does)
+    # Check origin before accepting
+    origin = websocket.headers.get("origin")
+    logger.info(f"💬 WebSocket connection attempt from origin: {origin}")
+
+    if not is_origin_allowed(origin):
+        logger.warning(f"💬 WebSocket rejected - origin not allowed: {origin}")
+        await websocket.close(code=1008, reason="Origin not allowed")
+        return
+
+    # Accept connection
     await websocket.accept()
     connection_id = f"ws_{id(websocket)}"
     active_connections[connection_id] = websocket
