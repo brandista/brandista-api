@@ -65,7 +65,12 @@ async def lifespan(app: FastAPI):
         try:
             if legacy_main.AnalysisHistoryDB:
                 # Get database URL from environment or legacy main
-                db_url = os.getenv('HISTORY_DATABASE_URL') or getattr(legacy_main, 'HISTORY_DATABASE_URL', None)
+                # Use same database as main if HISTORY_DATABASE_URL not set
+                db_url = (
+                    os.getenv('HISTORY_DATABASE_URL') or 
+                    os.getenv('DATABASE_URL') or 
+                    getattr(legacy_main, 'HISTORY_DATABASE_URL', None)
+                )
                 if db_url:
                     legacy_main.history_db = legacy_main.AnalysisHistoryDB(db_url)
                     await legacy_main.history_db.connect()
