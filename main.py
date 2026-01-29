@@ -6548,15 +6548,30 @@ async def verify_magic_link_get(token: str, req: Request):
 # GOOGLE OAUTH ENDPOINTS - COMPLETE FIXED VERSION
 # ============================================================================
 
+@app.get("/auth/oauth-status")
+async def oauth_status():
+    """Debug endpoint to check OAuth configuration"""
+    return {
+        "oauth_object": "configured" if oauth else "None",
+        "oauth_available": OAUTH_AVAILABLE,
+        "google_client_id_set": bool(os.getenv('GOOGLE_CLIENT_ID')),
+        "google_client_id_preview": os.getenv('GOOGLE_CLIENT_ID', '')[:20] + "..." if os.getenv('GOOGLE_CLIENT_ID') else "not set"
+    }
+
 @app.get("/auth/google/login")
 async def google_login(request: Request):
     """Initiate Google OAuth login flow"""
-    
+
+    # Debug logging
+    logger.info(f"🔐 Google login attempt - oauth object: {oauth}, GOOGLE_CLIENT_ID set: {bool(os.getenv('GOOGLE_CLIENT_ID'))}")
+
     if not oauth:
-        raise HTTPException(503, "Google OAuth not configured")
-    
+        logger.error("❌ OAuth object is None!")
+        raise HTTPException(503, "Google OAuth not configured - oauth object is None")
+
     if not os.getenv('GOOGLE_CLIENT_ID'):
-        raise HTTPException(503, "Google OAuth not configured")
+        logger.error("❌ GOOGLE_CLIENT_ID not set!")
+        raise HTTPException(503, "Google OAuth not configured - GOOGLE_CLIENT_ID missing")
     
     try:
         # ✅ KORJAUS: Käytä GOOGLE_REDIRECT_URI env-muuttujaa
