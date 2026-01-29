@@ -1640,24 +1640,30 @@ async def lifespan(app: FastAPI):
     
     # 4. Initialize Google OAuth
     try:
-        oauth_config = StarletteConfig(environ={
-            'GOOGLE_CLIENT_ID': os.getenv('GOOGLE_CLIENT_ID', ''),
-            'GOOGLE_CLIENT_SECRET': os.getenv('GOOGLE_CLIENT_SECRET', ''),
-        })
-        
-        oauth = OAuth(oauth_config)
-        
-        if os.getenv('GOOGLE_CLIENT_ID'):
+        google_client_id = os.getenv('GOOGLE_CLIENT_ID', '')
+        google_client_secret = os.getenv('GOOGLE_CLIENT_SECRET', '')
+
+        logger.info(f"🔐 Initializing OAuth - Client ID set: {bool(google_client_id)}")
+
+        if google_client_id and google_client_secret:
+            # Create OAuth without config - register with explicit values
+            oauth = OAuth()
+
             oauth.register(
                 name='google',
+                client_id=google_client_id,
+                client_secret=google_client_secret,
                 server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
                 client_kwargs={'scope': 'openid email profile'},
             )
-            logger.info("✅ Google OAuth configured")
+            logger.info("✅ Google OAuth configured successfully")
         else:
-            logger.warning("⚠️ Google OAuth not configured (set GOOGLE_CLIENT_ID)")
+            logger.warning("⚠️ Google OAuth not configured (GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET missing)")
+            oauth = None
     except Exception as e:
         logger.error(f"❌ Google OAuth initialization failed: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         oauth = None
 
     # 5. Initialize Scheduled Analysis Manager
