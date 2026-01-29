@@ -46,7 +46,32 @@ import main as legacy_main
 async def lifespan(app: FastAPI):
     """Application lifespan - startup and shutdown"""
     logger.info(f"🚀 Starting {APP_NAME} v{APP_VERSION}")
-    
+
+    # Initialize Google OAuth
+    try:
+        google_client_id = os.getenv('GOOGLE_CLIENT_ID', '')
+        google_client_secret = os.getenv('GOOGLE_CLIENT_SECRET', '')
+
+        logger.info(f"🔐 Initializing OAuth - Client ID set: {bool(google_client_id)}")
+
+        if google_client_id and google_client_secret:
+            from authlib.integrations.starlette_client import OAuth
+            legacy_main.oauth = OAuth()
+            legacy_main.oauth.register(
+                name='google',
+                client_id=google_client_id,
+                client_secret=google_client_secret,
+                server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
+                client_kwargs={'scope': 'openid email profile'},
+            )
+            logger.info("✅ Google OAuth configured successfully")
+        else:
+            legacy_main.oauth = None
+            logger.warning("⚠️ Google OAuth credentials not set")
+    except Exception as e:
+        logger.error(f"❌ Google OAuth initialization failed: {e}")
+        legacy_main.oauth = None
+
     # Initialize services from legacy main
     if hasattr(legacy_main, 'init_users'):
         legacy_main.init_users()
