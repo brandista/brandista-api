@@ -267,6 +267,8 @@ if hasattr(legacy_main, 'verify_magic_link_get'):
     app.get("/auth/magic-link/verify")(legacy_main.verify_magic_link_get)
 
 # Google OAuth endpoints
+if hasattr(legacy_main, 'oauth_status'):
+    app.get("/auth/oauth-status")(legacy_main.oauth_status)
 if hasattr(legacy_main, 'google_login'):
     app.get("/auth/google/login")(legacy_main.google_login)
 if hasattr(legacy_main, 'google_callback'):
