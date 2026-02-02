@@ -832,6 +832,24 @@ class BaseAgent(ABC):
         if self._context:
             self._context.add_swarm_event(event)
     
+    def _emit_conversation(self, to_agent: str, message: str, message_en: str = None):
+        """
+        Emit a conversation message for real-time frontend visualization.
+
+        This shows agents "talking" to each other in the UI.
+        """
+        self._emit_swarm_event(
+            SwarmEventType.AGENT_CONVERSATION,
+            {
+                'from': self.id,
+                'from_avatar': self.avatar,
+                'to': to_agent,
+                'to_avatar': '',  # Will be filled by frontend
+                'message': message,
+                'message_en': message_en or message
+            }
+        )
+
     def _set_status(self, status: AgentStatus):
         """Update status"""
         self.status = status

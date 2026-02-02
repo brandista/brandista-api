@@ -141,7 +141,14 @@ class ScoutAgent(BaseAgent):
             logger.info(f"[Scout] No unified context available (first analysis)")
         
         self._update_progress(15, self._task("analyzing_company"))
-        
+
+        # Emit conversation to Analyst
+        self._emit_conversation(
+            'analyst',
+            f"Aloitan yrityksen {get_domain_from_url(context.url)} kilpailijakartoituksen.",
+            f"Starting competitor mapping for {get_domain_from_url(context.url)}."
+        )
+
         # 1. Hae kohdesivuston sisältö
         try:
             # get_website_content returns Tuple[Optional[str], bool] - (html_content, used_spa)
@@ -290,7 +297,15 @@ class ScoutAgent(BaseAgent):
             
             top_competitors = scored_competitors[:5]
             competitor_urls = [c['url'] for c in top_competitors]
-            
+
+            # Emit conversation to Analyst about findings
+            if top_competitors:
+                self._emit_conversation(
+                    'analyst',
+                    f"Löysin {len(top_competitors)} kilpailijaa! Paras osuma: {top_competitors[0].get('name', 'tuntematon')}.",
+                    f"Found {len(top_competitors)} competitors! Best match: {top_competitors[0].get('name', 'unknown')}."
+                )
+
             if top_competitors:
                 top_score = top_competitors[0].get('relevance_score', 0)
                 top_name = top_competitors[0].get('name', 'Unknown')

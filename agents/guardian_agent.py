@@ -328,7 +328,14 @@ class GuardianAgent(BaseAgent):
             competitors_enriched = scout_results.get('competitors_enriched', [])
         
         self._update_progress(15, self._task("building_risk_register"))
-        
+
+        # Emit conversation to Prospector
+        self._emit_conversation(
+            'prospector',
+            f"Analysoin riskejä. Pisteesi on {your_score}/100 - etsin uhkia.",
+            f"Analyzing risks. Score is {your_score}/100 - looking for threats."
+        )
+
         self._emit_insight(
             self._t("guardian.starting_rasm"),
             priority=AgentPriority.MEDIUM,

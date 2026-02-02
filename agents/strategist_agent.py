@@ -232,7 +232,14 @@ class StrategistAgent(BaseAgent):
             priority=AgentPriority.MEDIUM,
             insight_type=InsightType.FINDING
         )
-        
+
+        # Emit conversation to Planner
+        self._emit_conversation(
+            'planner',
+            "Yhdistän kaikkien agenttien löydökset strategiaksi.",
+            "Combining all agent findings into a strategy."
+        )
+
         self._update_progress(20, self._task("calculating_scores"))
         
         # 1. Laske kokonaispistemäärät

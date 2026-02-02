@@ -157,7 +157,14 @@ class AnalystAgent(BaseAgent):
                 logger.info(f"[Analyst] Overall score trend: {score_trend:+.1f} points")
         
         self._update_progress(15, self._task("analyzing_target"))
-        
+
+        # Emit conversation to Guardian
+        self._emit_conversation(
+            'guardian',
+            "Aloitan teknisen analyysin. Raportoin löydökseni sinulle pian.",
+            "Starting technical analysis. Will report findings to you shortly."
+        )
+
         self._emit_insight(
             self._t("analyst.starting"),
             priority=AgentPriority.MEDIUM,
