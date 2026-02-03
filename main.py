@@ -2275,6 +2275,13 @@ class BusinessImpactDetailed(BaseModel):
     metrics_used: Dict[str, Any] = {}
     improvement_areas: List[str] = []
     potential_scenarios: Dict[str, Dict[str, Any]] = {}
+    # Revenue at risk fields
+    revenue_at_risk: Optional[int] = None
+    revenue_at_risk_percentage: Optional[float] = None
+    annual_revenue_used: Optional[int] = None
+    revenue_uplift_low: Optional[int] = None
+    revenue_uplift_high: Optional[int] = None
+    revenue_uplift_expected: Optional[int] = None
 
 class RoleSummaries(BaseModel):
     CEO: Optional[str] = None
@@ -4103,11 +4110,23 @@ def compute_business_impact_with_input(
     
     # Trust effect
     customer_trust_effect = (
-        "Improves perceived quality (NPS +2–4)" 
-        if basic.get('modernity_score', 0) >= 50 
+        "Improves perceived quality (NPS +2–4)"
+        if basic.get('modernity_score', 0) >= 50
         else "Small positive trust signal"
     )
-    
+
+    # ===== REVENUE AT RISK CALCULATION =====
+    # Revenue at risk = potential loss from digital deficiencies
+    # Based on score gap: lower score = higher risk percentage
+    score_gap = max(0, 100 - score)
+    # Risk percentage scales from 0% (score 100) to 15% (score 0)
+    risk_percentage = (score_gap / 100) * 0.15
+    revenue_at_risk = int(annual_revenue * risk_percentage)
+    revenue_at_risk_pct = round(risk_percentage * 100, 1)
+
+    # Expected uplift (midpoint)
+    revenue_uplift_expected = (revenue_impact_low + revenue_impact_high) // 2
+
     return BusinessImpactDetailed(
         lead_gain_estimate=_fmt_range(lead_low, lead_high, "leads/mo"),
         revenue_uplift_range=revenue_range,
@@ -4117,7 +4136,14 @@ def compute_business_impact_with_input(
         calculation_basis=calculation_basis,
         metrics_used=metrics_used,
         improvement_areas=improvement_areas,
-        potential_scenarios=potential_scenarios
+        potential_scenarios=potential_scenarios,
+        # New revenue fields
+        revenue_at_risk=revenue_at_risk,
+        revenue_at_risk_percentage=revenue_at_risk_pct,
+        annual_revenue_used=annual_revenue,
+        revenue_uplift_low=revenue_impact_low,
+        revenue_uplift_high=revenue_impact_high,
+        revenue_uplift_expected=revenue_uplift_expected
     )
 
 # Keep old function for backward compatibility
