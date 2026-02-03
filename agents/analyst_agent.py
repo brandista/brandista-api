@@ -172,10 +172,12 @@ class AnalystAgent(BaseAgent):
         )
         
         # 1. Analysoi kohdesivusto
+        # Agents use "ai_enhanced" for full analysis (AI visibility + creative boldness)
         try:
             your_analysis = await _perform_comprehensive_analysis_internal(
                 context.url,
-                language=context.language
+                language=context.language,
+                analysis_type="ai_enhanced"
             )
             
             # Map digital_maturity_score to final_score for consistency
@@ -377,9 +379,14 @@ class AnalystAgent(BaseAgent):
     
     async def _analyze_competitor(self, url: str, language: str) -> Optional[Dict[str, Any]]:
         from main import _perform_comprehensive_analysis_internal, get_domain_from_url
-        
+
+        # Competitors use "comprehensive" level (no AI visibility/creative boldness)
         try:
-            analysis = await _perform_comprehensive_analysis_internal(url, language=language)
+            analysis = await _perform_comprehensive_analysis_internal(
+                url,
+                language=language,
+                analysis_type="comprehensive"
+            )
             analysis['domain'] = get_domain_from_url(url)
             analysis['url'] = url
             # Map digital_maturity_score to final_score for consistency

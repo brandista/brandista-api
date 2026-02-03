@@ -4835,61 +4835,71 @@ async def analyze_ai_search_visibility(
 # ============================================================================
 
 async def generate_ai_insights(
-    url: str, 
-    basic: Dict[str, Any], 
-    technical: Dict[str, Any], 
-    content: Dict[str, Any], 
-    ux: Dict[str, Any], 
+    url: str,
+    basic: Dict[str, Any],
+    technical: Dict[str, Any],
+    content: Dict[str, Any],
+    ux: Dict[str, Any],
     social: Dict[str, Any],
     html: str,
-    language: str = 'en'
+    language: str = 'en',
+    analysis_type: str = 'comprehensive'
 ) -> AIAnalysis:
-    """Generate comprehensive AI-powered insights"""
+    """
+    Generate AI-powered insights based on analysis_type.
+
+    Analysis types:
+        - basic: Rule-based insights only (~30s, no OpenAI)
+        - comprehensive: Full AI recommendations + humanized layer (~1-2min)
+        - ai_enhanced: All features including AI visibility (~2-3min)
+    """
     overall = basic.get('digital_maturity_score', 0)
     spa_detected = basic.get('spa_detected', False)
     modernity_score = basic.get('modernity_score', 0)
-    
+
+    # Determine what to include based on analysis_type
+    include_openai = analysis_type in ("comprehensive", "ai_enhanced")
+    include_humanized_layer = analysis_type in ("comprehensive", "ai_enhanced")
+    include_ai_visibility = analysis_type == "ai_enhanced"
+
+    logger.info(f"[AI Insights] analysis_type={analysis_type} | openai={include_openai} | humanized={include_humanized_layer} | ai_visibility={include_ai_visibility}")
+
+    # ✅ ALWAYS: Generate rule-based insights (fast, no API calls)
     insights = generate_english_insights(overall, basic, technical, content, ux, social)
-    
-    # ✅ GENERATE ENHANCED SWOT (always, for all analyses)
-    logger.info(f"[AI Insights] Generating enhanced SWOT for {url}")
-    try:
-        # Build minimal analysis dict for SWOT generation
-        temp_analysis = {
-            'basic_analysis': basic,
-            'detailed_analysis': {
-                'technical_audit': technical,
-                'content_analysis': content,
-                'ux_analysis': ux,
-                'social_media': social
+
+    # ✅ COMPREHENSIVE/AI_ENHANCED: Generate enhanced SWOT
+    if include_humanized_layer:
+        logger.info(f"[AI Insights] Generating enhanced SWOT for {url}")
+        try:
+            temp_analysis = {
+                'basic_analysis': basic,
+                'detailed_analysis': {
+                    'technical_audit': technical,
+                    'content_analysis': content,
+                    'ux_analysis': ux,
+                    'social_media': social
+                }
             }
-        }
-        
-        enhanced_swot = await generate_competitive_swot_analysis(
-            temp_analysis,
-            competitor_analyses=None,  # Single analysis, no competitors
-            language=language
-        )
-        
-        # Replace basic SWOT with enhanced SWOT
-        insights['enhanced_swot'] = enhanced_swot
-        
-        # Keep backward compatibility: also keep root-level SWOT as strings
-        # (for old frontend code that might still use them)
-        insights['strengths'] = [s.get('area', s.get('finding', '')) for s in enhanced_swot.get('strengths', [])]
-        insights['weaknesses'] = [w.get('area', w.get('finding', '')) for w in enhanced_swot.get('weaknesses', [])]
-        insights['opportunities'] = [o.get('area', o.get('opportunity', '')) for o in enhanced_swot.get('opportunities', [])]
-        insights['threats'] = [t.get('threat', '') for t in enhanced_swot.get('threats', [])]
-        
-        logger.info(f"[AI Insights] ✅ Enhanced SWOT complete: {len(enhanced_swot.get('strengths', []))} strengths, {len(enhanced_swot.get('weaknesses', []))} weaknesses")
-        
-    except Exception as e:
-        logger.error(f"[AI Insights] ❌ Enhanced SWOT failed: {e}", exc_info=True)
-        # Keep basic SWOT as fallback
-        logger.warning("[AI Insights] Falling back to basic SWOT")
-    
-    # Enhance with OpenAI if available
-    if openai_client:
+
+            enhanced_swot = await generate_competitive_swot_analysis(
+                temp_analysis,
+                competitor_analyses=None,
+                language=language
+            )
+
+            insights['enhanced_swot'] = enhanced_swot
+            insights['strengths'] = [s.get('area', s.get('finding', '')) for s in enhanced_swot.get('strengths', [])]
+            insights['weaknesses'] = [w.get('area', w.get('finding', '')) for w in enhanced_swot.get('weaknesses', [])]
+            insights['opportunities'] = [o.get('area', o.get('opportunity', '')) for o in enhanced_swot.get('opportunities', [])]
+            insights['threats'] = [t.get('threat', '') for t in enhanced_swot.get('threats', [])]
+
+            logger.info(f"[AI Insights] ✅ Enhanced SWOT complete")
+
+        except Exception as e:
+            logger.error(f"[AI Insights] ❌ Enhanced SWOT failed: {e}", exc_info=True)
+
+    # ✅ COMPREHENSIVE/AI_ENHANCED: Enhance with OpenAI recommendations
+    if include_openai and openai_client:
         try:
             context = f"""
             Website: {url}
@@ -4920,65 +4930,67 @@ async def generate_ai_insights(
             if cleaned:
                 base = (insights.get('recommendations') or [])[:2]
                 insights['recommendations'] = base + cleaned[:5]
+            logger.info(f"[AI Insights] ✅ OpenAI recommendations added")
         except Exception as e:
             logger.warning(f"OpenAI enhancement failed: {e}")
-    
-    # Humanized layer fusion
-    try:
-        # Use detailed impact calculation (with optional revenue input support)
-        detailed_impact = compute_business_impact_with_input(basic, content, ux, revenue_input=None)
-        
-        # Convert to simple BusinessImpact for backward compatibility with role summaries
-        impact = BusinessImpact(
-            lead_gain_estimate=detailed_impact.lead_gain_estimate,
-            revenue_uplift_range=detailed_impact.revenue_uplift_range,
-            confidence=detailed_impact.confidence,
-            customer_trust_effect=detailed_impact.customer_trust_effect
-        )
-        
-        role = build_role_summaries(url, basic, impact, language=language)
-        
-        # Use enhanced 90-day plan with intelligent prioritization
-        # Note: competitor_gap will be None for now, but the function handles it gracefully
-        plan = generate_enhanced_90day_plan(
-            basic=basic, 
-            content=content, 
-            technical=technical, 
-            language=language,
-            competitor_gap=None  # TODO: Add competitor analysis data when available
-        )
-        
-        risks = build_risk_register(basic, technical, content, language=language)
-        snippets = build_snippet_examples(url, basic, language=language)
 
-        insights.update({
-            "business_impact": detailed_impact.model_dump(),  # FIX 10: Pydantic V2
-            "role_summaries": role.model_dump(),
-            "plan_90d": plan.model_dump(),
-            "risk_register": [r.model_dump() for r in risks],
-            "snippet_examples": snippets.model_dump()
-        })
-    except Exception as e:
-        logger.warning(f"Humanized layer build failed: {e}")
+    # ✅ COMPREHENSIVE/AI_ENHANCED: Humanized layer (role summaries, 90-day plan, etc.)
+    if include_humanized_layer:
+        try:
+            detailed_impact = compute_business_impact_with_input(basic, content, ux, revenue_input=None)
 
-    # AI Search Visibility Analysis
-    try:
-        ai_visibility = await analyze_ai_search_visibility(
-            url, html, basic, technical, content, social
-        )
-        insights["ai_search_visibility"] = ai_visibility
-    except Exception as e:
-        logger.error(f"AI Search Visibility analysis failed: {e}")
-        insights["ai_search_visibility"] = {
-            "chatgpt_readiness_score": 0,
-            "perplexity_readiness_score": 0,
-            "overall_ai_search_score": 0,
-            "competitive_advantage": "Analysis unavailable",
-            "validation_status": "error",
-            "factors": {},
-            "key_insights": ["Analysis failed - see logs"],
-            "priority_actions": []
-        }
+            impact = BusinessImpact(
+                lead_gain_estimate=detailed_impact.lead_gain_estimate,
+                revenue_uplift_range=detailed_impact.revenue_uplift_range,
+                confidence=detailed_impact.confidence,
+                customer_trust_effect=detailed_impact.customer_trust_effect
+            )
+
+            role = build_role_summaries(url, basic, impact, language=language)
+            plan = generate_enhanced_90day_plan(
+                basic=basic,
+                content=content,
+                technical=technical,
+                language=language,
+                competitor_gap=None
+            )
+            risks = build_risk_register(basic, technical, content, language=language)
+            snippets = build_snippet_examples(url, basic, language=language)
+
+            insights.update({
+                "business_impact": detailed_impact.model_dump(),
+                "role_summaries": role.model_dump(),
+                "plan_90d": plan.model_dump(),
+                "risk_register": [r.model_dump() for r in risks],
+                "snippet_examples": snippets.model_dump()
+            })
+            logger.info(f"[AI Insights] ✅ Humanized layer complete")
+        except Exception as e:
+            logger.warning(f"Humanized layer build failed: {e}")
+
+    # ✅ AI_ENHANCED ONLY: AI Search Visibility Analysis
+    if include_ai_visibility:
+        try:
+            ai_visibility = await analyze_ai_search_visibility(
+                url, html, basic, technical, content, social
+            )
+            insights["ai_search_visibility"] = ai_visibility
+            logger.info(f"[AI Insights] ✅ AI Search Visibility complete")
+        except Exception as e:
+            logger.error(f"AI Search Visibility analysis failed: {e}")
+            insights["ai_search_visibility"] = {
+                "chatgpt_readiness_score": 0,
+                "perplexity_readiness_score": 0,
+                "overall_ai_search_score": 0,
+                "competitive_advantage": "Analysis unavailable",
+                "validation_status": "error",
+                "factors": {},
+                "key_insights": ["Analysis failed - see logs"],
+                "priority_actions": []
+            }
+    else:
+        # For basic/comprehensive, set empty ai_search_visibility
+        insights["ai_search_visibility"] = None
 
     return AIAnalysis(**insights)
 
@@ -6878,12 +6890,13 @@ async def _perform_comprehensive_analysis_internal(
     language: str = "en",
     force_playwright: bool = False,
     user: Optional[UserInfo] = None,
-    revenue_input: Optional[RevenueInputRequest] = None
-) -> Dict[str, Any]:  
+    revenue_input: Optional[RevenueInputRequest] = None,
+    analysis_type: str = "comprehensive"
+) -> Dict[str, Any]:
     """
     Internal analysis core - NO QUOTA CHECK.
     Used by both public API and background tasks.
-    
+
     Args:
         url: Cleaned URL to analyze
         company_name: Optional company name
@@ -6891,10 +6904,14 @@ async def _perform_comprehensive_analysis_internal(
         force_playwright: Force SPA rendering
         user: Optional user info for metadata
         revenue_input: Optional user revenue data for business impact calculation
-    
+        analysis_type: "basic" | "comprehensive" | "ai_enhanced"
+            - basic: Fast (~30s), no OpenAI calls
+            - comprehensive: Full analysis with AI recommendations (~1-2min)
+            - ai_enhanced: All features including AI visibility & creative boldness (~2-3min)
+
     Returns:
         Complete analysis result dict
-    
+
     Raises:
         HTTPException: For invalid URLs, SSRF, or insufficient content
         Exception: For internal errors
@@ -6902,17 +6919,20 @@ async def _perform_comprehensive_analysis_internal(
     
     # URL validation (SSRF check already done by caller)
     url = clean_url(url)
-    
-    # Check cache
-    # FIX 11: Updated cache version to v6.3.1_fixed to invalidate old cache
-    # with incorrect accessibility scores (45/15 bug) and modern features bugs
-    cache_key = get_cache_key(url, "ai_comprehensive_v6.3.1_fixed")
+
+    # Validate analysis_type
+    if analysis_type not in ("basic", "comprehensive", "ai_enhanced"):
+        analysis_type = "comprehensive"  # Default fallback
+
+    # Check cache (include analysis_type in cache key)
+    # FIX 11: Updated cache version to v6.3.2 with analysis_type support
+    cache_key = get_cache_key(url, f"ai_{analysis_type}_v6.3.2")
     cached_result = await get_from_cache(cache_key)
     if cached_result:
-        logger.info(f"Cache hit for {url}")
+        logger.info(f"Cache hit for {url} (type: {analysis_type})")
         return cached_result
-    
-    logger.info(f"Starting analysis for {url}")
+
+    logger.info(f"Starting {analysis_type} analysis for {url}")
     
     # Fetch website content with smart rendering
     html_content, used_spa = await get_website_content(
@@ -6973,10 +6993,12 @@ async def _perform_comprehensive_analysis_internal(
         basic_analysis.get('score_breakdown', {})
     )
     
-    # AI insights
+    # AI insights (conditional based on analysis_type)
     ai_analysis = await generate_ai_insights(
-        url, basic_analysis, technical_audit, content_analysis, 
-        ux_analysis, social_analysis, html_content, language=language
+        url, basic_analysis, technical_audit, content_analysis,
+        ux_analysis, social_analysis, html_content,
+        language=language,
+        analysis_type=analysis_type
     )
     
     # Enhanced features
@@ -7023,7 +7045,29 @@ async def _perform_comprehensive_analysis_internal(
             mobile_reasons.append('No responsive design signals detected')
         if not basic_analysis.get('detailed_findings', {}).get('responsive_design', {}).get('media_queries'):
             mobile_reasons.append('No media queries found')
-    
+
+    # ✅ AI_ENHANCED ONLY: Creative Boldness Analysis
+    creative_boldness_result = None
+    if analysis_type == "ai_enhanced":
+        try:
+            temp_your_analysis = {
+                'basic_analysis': basic_analysis,
+                'detailed_analysis': {
+                    'technical_audit': technical_audit,
+                    'content_analysis': content_analysis,
+                    'ux_analysis': ux_analysis,
+                    'social_media': social_analysis
+                }
+            }
+            creative_boldness_result = await analyze_creative_boldness(
+                temp_your_analysis,
+                [],  # No competitors for single analysis
+                language
+            )
+            logger.info(f"✅ Creative boldness: {creative_boldness_result.get('creative_boldness_score', 0)}")
+        except Exception as e:
+            logger.warning(f"Creative boldness failed: {e}")
+
     # ✅ CONSTRUCT RESULT - KORJATTU RAKENNE
     result = {
         "success": True,
@@ -7111,7 +7155,7 @@ async def _perform_comprehensive_analysis_internal(
         "metadata": {
             "version": APP_VERSION,
             "scoring_version": "configurable_v1_complete",
-            "analysis_depth": "comprehensive_spa_aware_complete",
+            "analysis_depth": analysis_type,  # Dynamic based on analysis_type
             "confidence_level": ai_analysis.confidence_score,
             "analyzed_by": user.username if user else "system",
             "user_role": user.role if user else "system",
@@ -7123,7 +7167,12 @@ async def _perform_comprehensive_analysis_internal(
             "modernity_score": basic_analysis.get('modernity_score', 0)
         }
     }
-    
+
+    # Add creative_boldness to ai_analysis if available (ai_enhanced only)
+    if creative_boldness_result:
+        result["ai_analysis"]["creative_boldness"] = creative_boldness_result
+        logger.info(f"✅ Added creative_boldness to result")
+
     # Ensure integer scores
     result = ensure_integer_scores(result)
     
@@ -7659,13 +7708,15 @@ async def discover_competitors(
                         _reject_ssrf(clean_competitor_url)
                         
                         # Perform analysis WITH TIMEOUT
+                        # Competitors use "comprehensive" level (no AI visibility/creative boldness)
                         result = await asyncio.wait_for(
                             _perform_comprehensive_analysis_internal(
                                 url=clean_competitor_url,
                                 company_name=competitor["domain"],
                                 language=request.country_code,
                                 force_playwright=False,
-                                user=user
+                                user=user,
+                                analysis_type="comprehensive"
                             ),
                             timeout=ANALYSIS_TIMEOUT_SECONDS
                         )
@@ -8081,7 +8132,8 @@ async def ai_analyze_comprehensive(
             language=request.language,
             force_playwright=getattr(request, 'force_playwright', False),
             user=user,
-            revenue_input=None
+            revenue_input=None,
+            analysis_type=request.analysis_type  # Pass analysis_type from request
         )
         
         # === SAVE TO DATABASE ===
@@ -9199,30 +9251,34 @@ async def analyze_competitive_radar(
         # === 1. ANALYSOI OMA SIVU ===
         your_url = clean_url(request.your_url)
         _reject_ssrf(your_url)
-        
+
         logger.info(f"[Radar] Analyzing YOUR site: {your_url}")
-        
+
+        # Your site uses ai_enhanced for full analysis (AI visibility + creative boldness)
         your_analysis = await _perform_comprehensive_analysis_internal(
             url=your_url,
             language=request.language,
-            user=user
+            user=user,
+            analysis_type="ai_enhanced"
         )
-        
+
         # === 2. ANALYSOI KILPAILIJAT ===
         competitor_analyses = []
         failed_competitors = []
-        
+
         for idx, competitor_url in enumerate(request.competitor_urls, 1):
             try:
                 clean_comp_url = clean_url(competitor_url)
                 _reject_ssrf(clean_comp_url)
-                
+
                 logger.info(f"[Radar] Analyzing competitor {idx}/{len(request.competitor_urls)}: {clean_comp_url}")
-                
+
+                # Competitors use comprehensive level (no AI visibility/creative boldness)
                 comp_analysis = await _perform_comprehensive_analysis_internal(
                     url=clean_comp_url,
                     language=request.language,
-                    user=user
+                    user=user,
+                    analysis_type="comprehensive"
                 )
                 
                 competitor_analyses.append(comp_analysis)
