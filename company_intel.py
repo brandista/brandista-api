@@ -41,10 +41,14 @@ class CompanyIntel:
     """
     
     # PRH/YTJ Open Data API - V3 (updated August 2024)
+    # Note: V3 uses query parameters for businessId
     YTJ_API_BASE = "https://avoindata.prh.fi/opendata-ytj-api/v3/companies"
     
     # Kauppalehti company pages
     KAUPPALEHTI_BASE = "https://www.kauppalehti.fi/yritykset/yritys"
+    
+    # Finder.fi
+    FINDER_SEARCH = "https://www.finder.fi/search?what="
     
     def __init__(self):
         self.client = httpx.AsyncClient(
@@ -54,6 +58,7 @@ class CompanyIntel:
             },
             follow_redirects=True
         )
+        self._last_domain_name = None
     
     async def close(self):
         await self.client.aclose()
@@ -88,11 +93,12 @@ class CompanyIntel:
             return None
         
         try:
-            # Fetch from both sources in parallel
+            # Fetch from sources
             ytj_task = self._ytj_get_company(business_id)
             kl_task = self._kauppalehti_get_company(business_id)
+            finder_task = self._finder_get_company(business_id)
             
-            ytj_data, kl_data = await asyncio.gather(ytj_task, kl_task, return_exceptions=True)
+            ytj_data, kl_data, finder_data = await asyncio.gather(ytj_task, kl_task, finder_task, return_exceptions=True)
             
             # Handle exceptions
             if isinstance(ytj_data, Exception):
@@ -101,12 +107,28 @@ class CompanyIntel:
             if isinstance(kl_data, Exception):
                 logger.warning(f"[CompanyIntel] Kauppalehti fetch failed: {kl_data}")
                 kl_data = None
+            if isinstance(finder_data, Exception):
+                logger.warning(f"[CompanyIntel] Finder fetch failed: {finder_data}")
+                finder_data = None
             
-            if not ytj_data and not kl_data:
+            if not ytj_data and not kl_data and not finder_data:
+                # One last try: if we have a name (from domain extraction), search by name
+                if not getattr(self, '_last_domain_name', None):
+                    return None
+                    
+                logger.info(f"[CompanyIntel] ID lookup failed for {business_id}, trying to find by name: {self._last_domain_name}")
+                search_results = await self.search_companies(self._last_domain_name)
+                if search_results:
+                    # Take the first relative match and try fetching its ID
+                    # (Prevent infinite recursion by not name-searching again)
+                    best_match = search_results[0]
+                    new_id = best_match.get('business_id')
+                    if new_id and new_id != business_id:
+                        return await self.get_company_profile(new_id)
                 return None
             
             # Merge data
-            profile = self._merge_company_data(ytj_data, kl_data, business_id)
+            profile = self._merge_company_data(ytj_data, kl_data, finder_data, business_id)
             
             logger.info(f"[CompanyIntel] ✅ Profile fetched: {profile.get('name', business_id)}")
             return profile
@@ -145,6 +167,13 @@ class CompanyIntel:
         
         for company in results:
             company_name = (company.get('name') or '').lower()
+            
+            # Skip dissolved companies (status "4" or endDate exists)
+            # tradeRegisterStatus is a string in some versions, check both
+            tr_status = str(company.get('tradeRegisterStatus', ''))
+            if tr_status == '4' or company.get('endDate'):
+                logger.info(f"[CompanyIntel] Skipping dissolved company: {company.get('name')}")
+                continue
             
             # Skip housing cooperatives
             if any(skip in company_name for skip in skip_patterns):
@@ -195,6 +224,7 @@ class CompanyIntel:
         # valio.fi -> Valio
         # verkkokauppa.com -> Verkkokauppa
         name_part = domain.split('.')[0]
+        self._last_domain_name = name_part
         
         logger.info(f"[CompanyIntel] Extracted name from domain: '{name_part}'")
         
@@ -320,21 +350,48 @@ class CompanyIntel:
         url = f"{self.YTJ_API_BASE}"
         params = {'businessId': business_id}
         
-        response = await self.client.get(url, params=params)
-        
-        if response.status_code == 404:
+        try:
+            logger.info(f"[CompanyIntel] Fetching YTJ V3: {url} (ID: {business_id})")
+            response = await self.client.get(url, params=params)
+            logger.info(f"[CompanyIntel] YTJ V3 Status: {response.status_code}")
+            
+            results = []
+            if response.status_code == 200:
+                data = response.json()
+                # V3 returns 'companies', V1 returns 'results'
+                results = data.get('companies', data.get('results', []))
+            
+            # If V3 fails or returns no results, try V1 fallback (more stable for ID lookups)
+            if not results:
+                logger.info(f"[CompanyIntel] YTJ V3 empty or failed, trying V1 fallback...")
+                # Try without dash first in V1
+                bid_clean = business_id.replace('-', '')
+                url_v1 = f"https://avoindata.prh.fi/opendata/bis/v1/{bid_clean}"
+                try:
+                    response_v1 = await self.client.get(url_v1)
+                    if response_v1.status_code == 200:
+                        data_v1 = response_v1.json()
+                        results = data_v1.get('results', [])
+                    elif response_v1.status_code == 404:
+                        # Try with dash just in case
+                        url_v1_dash = f"https://avoindata.prh.fi/opendata/bis/v1/{business_id}"
+                        response_v1 = await self.client.get(url_v1_dash)
+                        if response_v1.status_code == 200:
+                            data_v1 = response_v1.json()
+                            results = data_v1.get('results', [])
+                except Exception as e:
+                    logger.warning(f"[CompanyIntel] V1 fallback failed: {e}")
+            
+            if not results:
+                logger.info(f"[CompanyIntel] No results found in YTJ for {business_id}")
+                return None
+            
+            # V3 and V1 have slightly different item structures, but our parser handles them
+            return self._parse_ytj_result(results[0])
+            
+        except Exception as e:
+            logger.error(f"[CompanyIntel] YTJ fetch failed for {business_id}: {e}")
             return None
-        
-        response.raise_for_status()
-        
-        data = response.json()
-        # V3 API returns 'companies' array
-        results = data.get('companies', data.get('results', []))
-        
-        if not results:
-            return None
-        
-        return self._parse_ytj_result(results[0])
     
     def _parse_ytj_result(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Parse YTJ V3 API result into clean format"""
@@ -462,7 +519,9 @@ class CompanyIntel:
         url = f"{self.KAUPPALEHTI_BASE}/{clean_id}"
         
         try:
+            logger.info(f"[CompanyIntel] Fetching Kauppalehti: {url}")
             response = await self.client.get(url)
+            logger.info(f"[CompanyIntel] Kauppalehti Status: {response.status_code}")
             
             if response.status_code == 404:
                 return None
@@ -497,26 +556,53 @@ class CompanyIntel:
             # Kauppalehti uses various div structures, try common patterns
             
             # Method 1: Look for labeled values
-            for label_text in ['Liikevaihto', 'Henkilöstö', 'Tulos', 'Henkilöstömäärä']:
-                label = soup.find(string=re.compile(label_text, re.IGNORECASE))
+            # Updated labels to include more variations
+            labels = [
+                'Liikevaihto', 'Liikevaihto (euroa)', 'Liikevaihto (euroa) ', 'Liikevaihto (EUR)', 'Liikevaihto (1000 EUR)',
+                'Henkilöstö', 'Henkilöstömäärä', 'Tulos', 'Liikevaihtoluokka', 'Tilikauden tulos'
+            ]
+            
+            for label_text in labels:
+                # Use regex for flexible matching (handles cases like "Liikevaihto (€)")
+                label = soup.find(string=re.compile(rf'^{re.escape(label_text)}\s*$', re.IGNORECASE))
+                if not label:
+                    # Try partial match if exact fails
+                    label = soup.find(string=re.compile(re.escape(label_text), re.IGNORECASE))
+                    
                 if label:
-                    parent = label.find_parent(['div', 'td', 'tr', 'li'])
+                    parent = label.find_parent(['div', 'td', 'tr', 'li', 'dt', 'span', 'th'])
                     if parent:
-                        # Try to find the value nearby
-                        value_elem = parent.find_next(['span', 'div', 'td'])
-                        if value_elem:
-                            value_text = value_elem.get_text(strip=True)
+                        # Try to find the value nearby - search in siblings or children of parent
+                        value_text = None
+                        
+                        # 1. Check next sibling (td/span/div)
+                        next_sib = parent.find_next(['span', 'div', 'td', 'dd', 'b', 'strong', 'p'])
+                        if next_sib:
+                            value_text = next_sib.get_text(strip=True)
+                        
+                        # 2. If parent is row, check cells
+                        if not value_text and parent.name in ['tr', 'th', 'td']:
+                            row = parent if parent.name == 'tr' else parent.find_parent('tr')
+                            if row:
+                                cells = row.find_all(['td', 'th'])
+                                if len(cells) >= 2:
+                                    value_text = cells[-1].get_text(strip=True)
+                        
+                        if value_text:
                             parsed = self._parse_financial_value(value_text)
                             
                             if 'Liikevaihto' in label_text:
-                                data['revenue'] = parsed.get('value')
-                                data['revenue_text'] = value_text
+                                if parsed.get('value') and not data.get('revenue'):
+                                    data['revenue'] = parsed['value']
+                                    data['revenue_text'] = value_text
                             elif 'Henkilöstö' in label_text:
-                                data['employees'] = parsed.get('value')
-                                data['employees_text'] = value_text
+                                if parsed.get('value') and not data.get('employees'):
+                                    data['employees'] = int(parsed['value'])
+                                    data['employees_text'] = value_text
                             elif 'Tulos' in label_text:
-                                data['profit'] = parsed.get('value')
-                                data['profit_text'] = value_text
+                                if parsed.get('value') and not data.get('profit'):
+                                    data['profit'] = parsed['value']
+                                    data['profit_text'] = value_text
             
             # Method 2: Look for structured data (JSON-LD)
             scripts = soup.find_all('script', type='application/ld+json')
@@ -525,6 +611,7 @@ class CompanyIntel:
                     import json
                     json_data = json.loads(script.string)
                     if isinstance(json_data, dict):
+                        # Some sites wrap LD-JSON in a list
                         if json_data.get('@type') == 'Organization':
                             if 'numberOfEmployees' in json_data:
                                 emp = json_data['numberOfEmployees']
@@ -535,19 +622,41 @@ class CompanyIntel:
                 except:
                     pass
             
-            # Method 3: Look for common CSS classes
-            revenue_elem = soup.select_one('[class*="revenue"], [class*="liikevaihto"]')
-            if revenue_elem:
+            # Method 3: Look for common CSS classes and data attributes
+            # Kauppalehti often uses specific data-testid or class names like "financials__row"
+            revenue_elem = soup.select_one('[class*="revenue"], [class*="liikevaihto"], [data-testid*="revenue"]')
+            if revenue_elem and not data.get('revenue'):
                 parsed = self._parse_financial_value(revenue_elem.get_text())
                 if parsed.get('value'):
                     data['revenue'] = parsed['value']
+                    data['revenue_text'] = revenue_elem.get_text(strip=True)
             
-            employees_elem = soup.select_one('[class*="employees"], [class*="henkilosto"]')
-            if employees_elem:
+            employees_elem = soup.select_one('[class*="employees"], [class*="henkilosto"], [data-testid*="employees"]')
+            if employees_elem and not data.get('employees'):
                 parsed = self._parse_financial_value(employees_elem.get_text())
                 if parsed.get('value'):
-                    data['employees'] = parsed['value']
+                    data['employees'] = int(parsed['value'])
+                    data['employees_text'] = employees_elem.get_text(strip=True)
             
+            # Method 4: Specific table parsing for Kauppalehti's "Tunnusluvut" (Key figures)
+            figures_section = soup.find(string=re.compile('Tunnusluvut', re.IGNORECASE))
+            if figures_section:
+                table = figures_section.find_parent(['div', 'section']).find('table') if figures_section.find_parent(['div', 'section']) else None
+                if table:
+                    for row in table.find_all('tr'):
+                        cells = row.find_all(['td', 'th'])
+                        if len(cells) >= 2:
+                            label = cells[0].get_text(strip=True).lower()
+                            value_text = cells[1].get_text(strip=True)
+                            parsed = self._parse_financial_value(value_text)
+                            
+                            if 'liikevaihto' in label and not data.get('revenue'):
+                                data['revenue'] = parsed.get('value')
+                                data['revenue_text'] = value_text
+                            elif 'tulos' in label and not data.get('profit'):
+                                data['profit'] = parsed.get('value')
+                                data['profit_text'] = value_text
+
             # Try to extract financial history from tables
             tables = soup.find_all('table')
             for table in tables:
@@ -563,14 +672,114 @@ class CompanyIntel:
                     if history:
                         data['financial_history'] = history[:5]  # Last 5 years
             
+            # Method 5: Look for metadata (meta description often contains basic financials)
+            if not data.get('revenue'):
+                meta_desc = soup.find('meta', {'name': 'description'}) or soup.find('meta', {'property': 'og:description'})
+                if meta_desc:
+                    desc_text = meta_desc.get('content', '')
+                    # Look for pattern: "Liikevaihto 123,4 M€" or "Liikevaihto: 123 456"
+                    pattern = re.search(r'Liikevaihto[:\s]+([\d\s,.]+)\s*([MK]€|EUR|EUROA|milj|e)', desc_text, re.IGNORECASE)
+                    if not pattern:
+                        # Try even simpler: "123,4 milj. euroa" near the start
+                        pattern = re.search(r'([\d\s,.]+)\s*(M€|EUR|milj|euro)', desc_text, re.IGNORECASE)
+                    
+                    if pattern:
+                        value_text = pattern.group(1)
+                        unit_text = pattern.group(2) if len(pattern.groups()) > 1 else ""
+                        full_text = value_text + " " + unit_text
+                        parsed = self._parse_financial_value(full_text)
+                        if parsed.get('value'):
+                            data['revenue'] = parsed['value']
+                            data['revenue_text'] = full_text
+                            logger.info(f"[CompanyIntel] Extracted revenue from metadata pattern: {data['revenue']}")
+
             # Only return if we got some useful data
             if data.get('revenue') or data.get('employees') or data.get('name'):
+                logger.info(f"[CompanyIntel] Scraped from Kauppalehti: {data.get('name')} - Revenue: {data.get('revenue')}")
                 return data
             
+            logger.warning(f"[CompanyIntel] Kauppalehti scrape failed to find key data for {business_id}")
             return None
             
         except Exception as e:
             logger.error(f"[CompanyIntel] Kauppalehti parse error: {e}")
+            return None
+
+    # =========================================================================
+    # FINDER.FI (Web Scraping)
+    # =========================================================================
+
+    async def _finder_get_company(self, business_id: str) -> Optional[Dict[str, Any]]:
+        """Scrape company data from Finder.fi"""
+        # Try both formats: with and without dash
+        ids_to_try = [business_id, business_id.replace('-', '')]
+        
+        for bid in ids_to_try:
+            url = f"{self.FINDER_SEARCH}{bid}"
+            try:
+                logger.info(f"[CompanyIntel] Fetching Finder: {url}")
+                response = await self.client.get(url)
+                logger.info(f"[CompanyIntel] Finder Status: {response.status_code}")
+                
+                if response.status_code == 202:
+                    logger.info(f"[CompanyIntel] Finder returned 202 (Accepted), waiting 2s for redirect...")
+                    await asyncio.sleep(2.0)
+                    response = await self.client.get(url)
+                    logger.info(f"[CompanyIntel] Finder Retry Status: {response.status_code}")
+                
+                if response.status_code == 200:
+                    html = response.text
+                    # Check if we actually found something
+                    if "tuloksia" in html.lower() and "löydetty" in html.lower() and "0" in html:
+                        continue # No results
+                        
+                    data = self._parse_finder_html(html, business_id)
+                    if data:
+                        return data
+            except Exception as e:
+                logger.error(f"[CompanyIntel] Finder fetch failed for {bid}: {e}")
+                
+        return None
+
+    def _parse_finder_html(self, html: str, business_id: str) -> Optional[Dict[str, Any]]:
+        """Parse Finder.fi company page"""
+        try:
+            soup = BeautifulSoup(html, 'html.parser')
+            data = {
+                'business_id': business_id,
+                'source': 'finder'
+            }
+            
+            # Find name
+            name_elem = soup.select_one('.Profile__Name, h1')
+            if name_elem:
+                data['name'] = name_elem.get_text(strip=True)
+            
+            # Financials table parsing
+            financial_table = soup.select_one('.Financials__Table, table')
+            if financial_table:
+                rows = financial_table.find_all('tr')
+                for row in rows:
+                    cells = row.find_all(['td', 'th'])
+                    if len(cells) >= 2:
+                        label = cells[0].get_text(strip=True).lower()
+                        value_text = cells[1].get_text(strip=True)
+                        parsed = self._parse_financial_value(value_text)
+                        
+                        if 'liikevaihto' in label and not data.get('revenue'):
+                            data['revenue'] = parsed.get('value')
+                        elif 'tulos' in label and not data.get('profit'):
+                            data['profit'] = parsed.get('value')
+                        elif 'henkilöstö' in label and not data.get('employees'):
+                            data['employees'] = parsed.get('value')
+
+            if data.get('revenue') or data.get('employees') or data.get('name'):
+                logger.info(f"[CompanyIntel] Scraped from Finder: {data.get('name')} - Revenue: {data.get('revenue')}")
+                return data
+            
+            return None
+        except Exception as e:
+            logger.error(f"[CompanyIntel] Finder parse error: {e}")
             return None
     
     def _parse_financial_value(self, text: str) -> Dict[str, Any]:
@@ -580,8 +789,10 @@ class CompanyIntel:
         Examples:
         - "12 500 000 €" -> {'value': 12500000, 'unit': 'EUR'}
         - "12,5 M€" -> {'value': 12500000, 'unit': 'EUR'}
+        - "12.5 M€" -> {'value': 12500000, 'unit': 'EUR'}
         - "1 234" -> {'value': 1234}
         - "15 hlö" -> {'value': 15}
+        - "1,2 milj. €" -> {'value': 1200000}
         """
         
         result = {'raw': text}
@@ -589,44 +800,57 @@ class CompanyIntel:
         if not text:
             return result
         
+        # Clean and normalize
         text = text.strip().upper()
         
-        # Remove currency symbols
-        text = text.replace('€', '').replace('EUR', '')
+        # Remove currency symbols and common labels
+        text = text.replace('€', '').replace('EUR', '').replace('HLÖ', '').replace('HENKILÖÄ', '')
         
         # Handle millions/thousands abbreviations
         multiplier = 1
-        if 'M' in text or 'MILJ' in text:
+        if 'MILJ' in text or 'M' in text:
             multiplier = 1_000_000
-            text = re.sub(r'M(ILJ)?\.?', '', text)
-        elif 'K' in text or 'T€' in text:
+            # Remove M or MILJ but keep dots if they are decimals (handled later)
+            text = re.sub(r'MILJ\.?|M\.?', '', text)
+        elif 'K' in text or 'T€' in text or 'TEUR' in text or 'TUIHAN' in text:
             multiplier = 1_000
-            text = text.replace('K', '').replace('T', '')
+            text = text.replace('K', '').replace('T€', '').replace('TEUR', '').replace('TUIHAN', '')
         
-        # Remove non-numeric except comma and minus
-        text = re.sub(r'[^\d,.\-]', '', text)
+        # Check if it's a range like "1-4"
+        if '-' in text and not text.startswith('-'):
+            parts = text.split('-')
+            try:
+                # Use the higher end of the range
+                text = parts[1]
+            except:
+                pass
+
+        # Remove all whitespace (thousand separators)
+        # Finnish often uses non-breaking space (0xA0) or normal space
+        text = text.replace('\xa0', '').replace(' ', '')
         
-        # Handle Finnish decimal (comma) vs thousand separator (space/dot)
-        # "12 500,50" -> 12500.50
-        text = text.replace(' ', '')
+        # Replace comma with dot for float parsing (Finnish decimal)
+        text = text.replace(',', '.')
         
-        # If both comma and dot, comma is likely decimal
-        if ',' in text and '.' in text:
-            text = text.replace('.', '').replace(',', '.')
-        elif ',' in text:
-            # Single comma - could be decimal or thousand
-            parts = text.split(',')
-            if len(parts) == 2 and len(parts[1]) <= 2:
-                # Likely decimal: 12,5 or 12,50
-                text = text.replace(',', '.')
-            else:
-                # Likely thousand separator
-                text = text.replace(',', '')
+        # Remove any other non-numeric characters except first dot and minus
+        # (Handling cases like "1.2.345,67" where dots are thousand separators)
+        if text.count('.') > 1:
+            # If multiple dots, they are likely thousand separators
+            text = text.replace('.', '')
+        
+        # Final cleanup for float parsing
+        text = re.sub(r'[^\d.\-]', '', text)
         
         try:
+            if not text:
+                return result
+                
             value = float(text) * multiplier
+            # Convert to int if it's a whole number
             result['value'] = int(value) if value == int(value) else value
-        except:
+            logger.debug(f"[CompanyIntel] Parsed '{result['raw']}' to {result['value']}")
+        except ValueError:
+            logger.debug(f"[CompanyIntel] Failed to parse financial value: '{text}' (original: '{result['raw']}')")
             pass
         
         return result
@@ -662,9 +886,10 @@ class CompanyIntel:
         self, 
         ytj_data: Optional[Dict], 
         kl_data: Optional[Dict],
+        finder_data: Optional[Dict],
         business_id: str
     ) -> Dict[str, Any]:
-        """Merge data from YTJ and Kauppalehti into unified profile"""
+        """Merge data from YTJ, Kauppalehti and Finder into unified profile"""
         
         profile = {
             'business_id': business_id,
@@ -711,6 +936,21 @@ class CompanyIntel:
             
             if kl_data.get('financial_history'):
                 profile['financial_history'] = kl_data['financial_history']
+        
+        # Enrich with Finder data (backup/additional financials)
+        if finder_data:
+            profile['sources'].append('finder')
+            
+            # Prefer Finder revenue if KL failed
+            if not profile.get('revenue') and finder_data.get('revenue'):
+                profile['revenue'] = finder_data['revenue']
+                profile['revenue_source'] = 'finder'
+                
+            if not profile.get('employees') and finder_data.get('employees'):
+                profile['employees'] = finder_data['employees']
+                
+            if not profile.get('profit') and finder_data.get('profit'):
+                profile['profit'] = finder_data['profit']
         
         # Calculate company age
         if profile.get('founded_year'):

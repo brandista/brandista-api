@@ -196,6 +196,14 @@ class ScoutAgent(BaseAgent):
                 else:
                     your_company_intel = await self._get_own_company_intel(context.url)
 
+                # Create minimal intel if lookup failed but we have user input
+                if not your_company_intel and (context.revenue_input or context.business_id):
+                    your_company_intel = {
+                        'name': company_name,
+                        'business_id': context.business_id,
+                        'source': 'user_input'
+                    }
+
                 if your_company_intel:
                     logger.info(f"[Scout] Got company intel: {your_company_intel.get('name')}, TOL: {your_company_intel.get('industry_code')}")
                     # UPDATE company_name with real name from registry!
@@ -203,11 +211,13 @@ class ScoutAgent(BaseAgent):
                         company_name = your_company_intel.get('name')
                         logger.info(f"[Scout] Updated company_name to: {company_name}")
 
-                    # Merge user-provided revenue if company intel doesn't have it
-                    if not your_company_intel.get('revenue') and context.revenue_input:
+                    # PRIORITIZE user-provided revenue (Always overrides scraped data)
+                    if context.revenue_input and context.revenue_input.get('annual_revenue'):
                         your_company_intel['revenue'] = context.revenue_input.get('annual_revenue')
                         your_company_intel['revenue_source'] = 'user_provided'
-                        logger.info(f"[Scout] Using user-provided revenue: EUR {your_company_intel['revenue']:,}")
+                        logger.info(f"[Scout] ✅ Using USER-PROVIDED revenue: EUR {your_company_intel['revenue']:,}")
+                    elif your_company_intel.get('revenue'):
+                        logger.info(f"[Scout] Using scraped revenue: EUR {your_company_intel['revenue']:,}")
             except Exception as e:
                 logger.warning(f"[Scout] Company intel fetch failed: {e}")
         
@@ -709,15 +719,11 @@ class ScoutAgent(BaseAgent):
             logger.warning(f"[Scout] Failed to get company by business ID: {e}")
             return None
 
-    async def _get_own_company_intel(self, url: str) -> Optional[Dict[str, Any]]:
+    async def _get_own_company_intel(self, url_or_context: Any) -> Optional[Dict[str, Any]]:
         """
         Get company intelligence for the user's own company.
-
-        Returns dict with:
-        - name, business_id, city, industry
-        - revenue, employees
-        - ytj_url, kauppalehti_url
         """
+        url = url_or_context.url if hasattr(url_or_context, 'url') else str(url_or_context)
         logger.info(f"[Scout] _get_own_company_intel called for: {url}")
         logger.info(f"[Scout] COMPANY_INTEL_AVAILABLE: {COMPANY_INTEL_AVAILABLE}")
         

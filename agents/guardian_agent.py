@@ -383,30 +383,40 @@ class GuardianAgent(BaseAgent):
         revenue_warning = None
         
         try:
+            # 1. Start with user provided input (highest priority)
+            if context.revenue_input and context.revenue_input.get('annual_revenue'):
+                annual_revenue = int(context.revenue_input.get('annual_revenue'))
+                revenue_source = "user_input"
+                logger.info(f"[Guardian] ✅ Using USER-PROVIDED revenue: EUR{annual_revenue:,}")
+            
+            # 2. Try company intel from Scout
             your_company_intel = scout_results.get('your_company_intel', {}) if scout_results else {}
             
-            if your_company_intel and your_company_intel.get('revenue'):
-                annual_revenue = int(your_company_intel.get('revenue', 500000))
-                revenue_source = "company_intel"
-                company_name = your_company_intel.get('name', 'Company')
-                logger.info(f"[Guardian] ✅ Using REAL revenue from Company Intel: EUR{annual_revenue:,} ({company_name})")
-            elif your_company_intel and your_company_intel.get('name'):
-                # Company found but no revenue data
-                company_name = your_company_intel.get('name', 'Company')
-                revenue_warning = f"Company '{company_name}' found but revenue data not available - using estimate"
-                logger.warning(f"[Guardian] ⚠️ {revenue_warning}")
-            elif context.revenue_input:
-                annual_revenue = int(context.revenue_input.get('annual_revenue', 500000))
-                revenue_source = "user_input"
-                logger.info(f"[Guardian] Using user-provided revenue: EUR{annual_revenue:,}")
-            else:
-                revenue_warning = "No company data found - using EUR500k default estimate"
-                logger.warning(f"[Guardian] ⚠️ {revenue_warning}")
+            if your_company_intel:
+                company_name = your_company_intel.get('name', company_name)
+                
+                # If we don't have user revenue, use company intel revenue
+                if revenue_source == "default" and your_company_intel.get('revenue'):
+                    annual_revenue = int(your_company_intel.get('revenue'))
+                    revenue_source = "company_intel"
+                    logger.info(f"[Guardian] ✅ Using REAL revenue from Company Intel: EUR{annual_revenue:,} ({company_name})")
+                elif revenue_source == "user_input":
+                    logger.info(f"[Guardian] (Company Intel found for {company_name}, but keeping user-provided revenue)")
+                
+                if not your_company_intel.get('revenue') and revenue_source == "default":
+                    revenue_warning = f"Company '{company_name}' found but revenue data not available - using EUR500k estimate"
+                    logger.warning(f"[Guardian] ⚠️ {revenue_warning}")
+            
+            # 3. Final fallback handling
+            if revenue_source == "default":
+                if not revenue_warning:
+                    revenue_warning = "No company data found - using EUR500k default estimate"
+                    logger.warning(f"[Guardian] ⚠️ {revenue_warning}")
                 
         except Exception as e:
-            logger.warning(f"[Guardian] Revenue fetch failed, using default: {e}")
-            annual_revenue = 500000
-            revenue_warning = f"Revenue fetch failed: {e}"
+            logger.warning(f"[Guardian] Revenue logic failed, using default: {e}")
+            if annual_revenue == 500000:
+                revenue_warning = f"Revenue fetch failed: {e}"
         
         # Kayta uutta mallia jos saatavilla
         if USE_NEW_REVENUE_MODEL:
