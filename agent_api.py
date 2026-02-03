@@ -510,6 +510,9 @@ async def websocket_agent_analysis(
                 competitor_urls = data.get("competitor_urls", [])
                 language = data.get("language", "fi")
                 industry_context = data.get("industry_context")
+                # NEW: User-provided revenue data (Feb 2026)
+                annual_revenue = data.get("annual_revenue")  # EUR, e.g. 500000
+                business_id = data.get("business_id")  # Y-tunnus, e.g. "0116297-6"
 
                 if not url:
                     await manager.send_json(websocket, {
@@ -674,12 +677,23 @@ async def websocket_agent_analysis(
                 
                 # Suorita analyysi
                 try:
+                    # Build revenue_input if user provided annual_revenue
+                    revenue_input = None
+                    if annual_revenue:
+                        revenue_input = {
+                            'annual_revenue': int(annual_revenue),
+                            'source': 'user_provided'
+                        }
+                        logger.info(f"[WS] User provided revenue: EUR {annual_revenue:,}")
+
                     result = await orchestrator.run_analysis(
                         url=url,
                         competitor_urls=competitor_urls,
                         language=language,
                         industry_context=industry_context,
                         user_id=user_id,  # Pass user_id for unified context
+                        revenue_input=revenue_input,  # NEW: User-provided revenue
+                        business_id=business_id,  # NEW: User-provided Y-tunnus
                         run_context=run_context  # NEW: Pass RunContext for isolation
                     )
                     

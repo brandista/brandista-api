@@ -148,8 +148,10 @@ class AnalysisContext(BaseModel):
     industry_context: Optional[str] = None
     user_id: Optional[str] = None
 
-    # Revenue input
+    # Revenue input (user-provided)
     revenue_input: Optional[Dict[str, Any]] = None
+    # Business ID (Y-tunnus, user-provided)
+    business_id: Optional[str] = None
 
     # Shared state (updates as agents progress)
     agent_results: Dict[str, AgentResult] = {}

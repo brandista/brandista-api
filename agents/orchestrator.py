@@ -96,6 +96,8 @@ class GrowthEngineOrchestrator:
         language: str = "fi",
         industry_context: str = None,
         user_id: str = None,
+        revenue_input: dict = None,  # NEW: User-provided revenue
+        business_id: str = None,  # NEW: User-provided Y-tunnus
         run_context: Optional['RunContext'] = None  # RunContext for isolation
     ) -> OrchestrationResult:
         """
@@ -136,11 +138,19 @@ class GrowthEngineOrchestrator:
             except Exception as e:
                 logger.warning(f"[Orchestrator] Unified context error: {e}")
 
+        # Log user-provided data
+        if revenue_input:
+            logger.info(f"[Orchestrator] 💰 User revenue: EUR {revenue_input.get('annual_revenue', 0):,}")
+        if business_id:
+            logger.info(f"[Orchestrator] 🏢 User Y-tunnus: {business_id}")
+
         # Create LOCAL context for this run (not self.context!)
         context = AnalysisContext(
             url=url, competitor_urls=competitor_urls or [], language=language,
             industry_context=industry_context, user_id=user_id,
             unified_context=unified_context_data,
+            revenue_input=revenue_input,  # NEW: Pass user-provided revenue
+            business_id=business_id,  # NEW: Pass user-provided Y-tunnus
             run_id=run_context.run_id if run_context else None
         )
 

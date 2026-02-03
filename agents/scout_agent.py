@@ -189,13 +189,25 @@ class ScoutAgent(BaseAgent):
         your_company_intel = None
         if COMPANY_INTEL_AVAILABLE:
             try:
-                your_company_intel = await self._get_own_company_intel(context.url)
+                # Prioritize user-provided Y-tunnus if available
+                if context.business_id:
+                    logger.info(f"[Scout] Using user-provided Y-tunnus: {context.business_id}")
+                    your_company_intel = await self._get_company_by_business_id(context.business_id)
+                else:
+                    your_company_intel = await self._get_own_company_intel(context.url)
+
                 if your_company_intel:
                     logger.info(f"[Scout] Got company intel: {your_company_intel.get('name')}, TOL: {your_company_intel.get('industry_code')}")
                     # UPDATE company_name with real name from registry!
                     if your_company_intel.get('name'):
                         company_name = your_company_intel.get('name')
                         logger.info(f"[Scout] Updated company_name to: {company_name}")
+
+                    # Merge user-provided revenue if company intel doesn't have it
+                    if not your_company_intel.get('revenue') and context.revenue_input:
+                        your_company_intel['revenue'] = context.revenue_input.get('annual_revenue')
+                        your_company_intel['revenue_source'] = 'user_provided'
+                        logger.info(f"[Scout] Using user-provided revenue: EUR {your_company_intel['revenue']:,}")
             except Exception as e:
                 logger.warning(f"[Scout] Company intel fetch failed: {e}")
         
@@ -642,10 +654,65 @@ class ScoutAgent(BaseAgent):
         
         return scored
     
+    async def _get_company_by_business_id(self, business_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get company intelligence by Y-tunnus (business ID).
+        Used when user provides their business ID directly.
+        """
+        logger.info(f"[Scout] Fetching company by Y-tunnus: {business_id}")
+
+        if not COMPANY_INTEL_AVAILABLE:
+            logger.warning("[Scout] Company Intel module not available!")
+            return None
+
+        try:
+            intel = CompanyIntel()
+            profile = await intel.get_company_profile(business_id)
+
+            if profile:
+                self._emit_insight(
+                    f"🏢 {profile.get('name', business_id)} - Y-tunnus: {business_id}"
+                    if self._language == 'fi' else
+                    f"🏢 {profile.get('name', business_id)} - Business ID: {business_id}",
+                    priority=AgentPriority.LOW,
+                    insight_type=InsightType.FINDING
+                )
+
+                return {
+                    'name': profile.get('name'),
+                    'business_id': profile.get('business_id'),
+                    'street': profile.get('street'),
+                    'postal_code': profile.get('postal_code'),
+                    'city': profile.get('city'),
+                    'country': profile.get('country', 'FI'),
+                    'industry': profile.get('industry'),
+                    'industry_code': profile.get('industry_code'),
+                    'company_form': profile.get('company_form'),
+                    'registration_date': profile.get('registration_date'),
+                    'revenue': profile.get('revenue'),
+                    'revenue_text': profile.get('revenue_text'),
+                    'employees': profile.get('employees'),
+                    'employees_text': profile.get('employees_text'),
+                    'profit': profile.get('profit'),
+                    'profit_text': profile.get('profit_text'),
+                    'status': profile.get('status'),
+                    'ytj_url': f"https://www.ytj.fi/fi/yritystiedot.html?businessId={business_id}",
+                    'kauppalehti_url': f"https://www.kauppalehti.fi/yritykset/yritys/{business_id.replace('-', '')}",
+                    'source': profile.get('source'),
+                    'fetched_at': profile.get('fetched_at')
+                }
+
+            await intel.close()
+            return None
+
+        except Exception as e:
+            logger.warning(f"[Scout] Failed to get company by business ID: {e}")
+            return None
+
     async def _get_own_company_intel(self, url: str) -> Optional[Dict[str, Any]]:
         """
         Get company intelligence for the user's own company.
-        
+
         Returns dict with:
         - name, business_id, city, industry
         - revenue, employees
