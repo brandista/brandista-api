@@ -2454,9 +2454,16 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> Optio
                     break
         
         if not user_data:
-            logger.warning(f"❌ User not found for sub: {sub}")
-            return None
-        
+            # 🆕 User not in USERS_DB - create UserInfo from token (for OAuth users)
+            logger.info(f"🆕 User not in USERS_DB, creating from token: {sub}")
+            return UserInfo(
+                username=sub.split('@')[0] if '@' in sub else sub,
+                email=sub if '@' in sub else None,
+                role=role,
+                search_limit=10,  # Default limit
+                searches_used=0
+            )
+
         # Use the role from token (it's already correct)
         return UserInfo(
             username=user_data.get("username", user_key),
