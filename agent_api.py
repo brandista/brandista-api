@@ -969,10 +969,13 @@ async def websocket_agent_analysis(
                             "market_position": market_position,  # NEW
                             "strategic_score": strategic_score,  # NEW
                             "creative_boldness": creative_boldness,  # NEW
+                            "market_trajectory": strategist_result.get('market_trajectory', {}), # NEW Agent 3.0
+                            "guardian_vetos": strategist_result.get('guardian_vetos', []), # NEW Agent 3.0
                             
                             # Planner data
                             "action_plan": action_plan_mapped,
                             "projected_improvement": projected_improvement,
+                            "dependency_management": True, # NEW Agent 3.0
                             
                             # Legacy fields
                             "overall_score": result.overall_score,

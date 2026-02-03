@@ -371,11 +371,18 @@ class StrategistAgent(BaseAgent):
             # NEW: Swarm data
             'swarm_enhancement': swarm_enhancement,
             'alerts_processed': len(self._critical_alerts),
+            'guardian_vetos': self._perform_guardian_veto(prospector_results),
             'shared_data_used': {
                 'threats': len(shared_threats),
                 'opportunities': len(shared_opportunities),
                 'collaborations': len(collaboration_results)
-            }
+            },
+            # NEW in Agent 3.0: Predictive trajectory
+            'market_trajectory': self._project_market_trajectory(
+                overall_score,
+                strategic_priorities,
+                competitive_trend
+            )
         }
     
     def _calculate_composite_scores(
@@ -628,3 +635,88 @@ class StrategistAgent(BaseAgent):
             'short_term': short_term,  # 1-3 months
             'medium_term': medium_term  # 3-6 months
         }
+    
+    def _project_market_trajectory(
+        self,
+        current_score: int,
+        priorities: List[Dict[str, Any]],
+        current_trend: str
+    ) -> Dict[str, Any]:
+        """
+        Simulate market trajectory for the next 6-12 months.
+        Based on momentum and potential impact of top priorities.
+        """
+        # Calculate potential gain from top priorities
+        high_impact = len([p for p in priorities[:5] if p.get('impact') == 'high'])
+        medium_impact = len([p for p in priorities[:5] if p.get('impact') == 'medium'])
+        
+        potential_gain = (high_impact * 8) + (medium_impact * 4)
+        
+        # Momentum factor from unified context history
+        momentum_map = {
+            'improving': 1.25,
+            'declining': 0.75,
+            'stable': 1.0
+        }
+        momentum = momentum_map.get(current_trend, 1.0)
+        
+        # Simulaation steps (cumulative points)
+        month_3_gain = potential_gain * 0.3 * momentum
+        month_6_gain = potential_gain * 0.6 * momentum
+        month_12_gain = potential_gain * 1.0 * momentum
+        
+        # Cap at 100
+        month_3 = min(100, current_score + month_3_gain)
+        month_6 = min(100, current_score + month_6_gain)
+        month_12 = min(100, current_score + month_12_gain)
+        
+        projection = {
+            'timeline': [
+                {'month': 0, 'score': current_score, 'label': 'Current'},
+                {'month': 3, 'score': round(month_3), 'label': '3 Months'},
+                {'month': 6, 'score': round(month_6), 'label': '6 Months'},
+                {'month': 12, 'score': round(month_12), 'label': '12 Months'}
+            ],
+            'confidence_score': 0.75 if current_trend != 'stable' else 0.65,
+            'summary': {
+                'fi': f"Ennustettu kasvu: +{round(month_12 - current_score)} pistettä 12 kuukaudessa.",
+                'en': f"Projected growth: +{round(month_12 - current_score)} points in 12 months."
+            }.get(self._language)
+        }
+        
+        logger.info(f"[Strategist] 📈 Market trajectory projected: +{round(month_12 - current_score)} points")
+        return projection
+    
+    def _perform_guardian_veto(self, prospector_results: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Agent 3.0: Adversarial logic - Consult Guardian's risk rules for growth proposals.
+        """
+        if not prospector_results:
+            return []
+            
+        growth_opps = prospector_results.get('growth_opportunities', [])
+        if not growth_opps:
+            return []
+            
+        # Simulated Guardian veto logic (Adversarial)
+        vetos = []
+        risk_keywords = {
+            'scraping': 'Legal/IP Block Risk',
+            'automation': 'Brand Voice Risk',
+            'ai-content': 'SEO Penalty Risk'
+        }
+        
+        for opp in growth_opps:
+            title = opp.get('title', '').lower()
+            for kw, risk in risk_keywords.items():
+                if kw in title:
+                    vetos.append({
+                        'opportunity': opp.get('title'),
+                        'risk_type': risk,
+                        'severity': 'high'
+                    })
+        
+        if vetos:
+            logger.info(f"[Strategist] 🛡️ Guardian applied {len(vetos)} risk vetos to growth plans")
+            
+        return vetos

@@ -1603,3 +1603,33 @@ class GuardianAgent(BaseAgent):
             return name
         except:
             return url
+    
+    def _veto_growth_proposals(self, growth_opportunities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Agent 3.0: Adversarial Logic - Guardian checks Prospector's proposals for brand/security risks.
+        """
+        vetos = []
+        
+        # Risk patterns
+        risk_patterns = [
+            {'keyword': 'scraping', 'risk': 'Legal/IP Block Risk', 'fi': 'Laki- ja esto-riski: Automaattinen tiedonkeruu voi johtaa porttikieltoihin.', 'en': 'Legal/IP Block Risk: Automated data collection can lead to IP bans.'},
+            {'keyword': 'automation', 'risk': 'Brand Voice Risk', 'fi': 'Brändiriski: Liiallinen automatisaatio voi heikentää viestinnän laatua.', 'en': 'Brand Voice Risk: Excessive automation may degrade communication quality.'},
+            {'keyword': 'ai-content', 'risk': 'SEO Penalty Risk', 'fi': 'SEO-riski: Puhtaasti tekoälyllä luotu sisältö voi johtaa hakukonerangaistuksiin.', 'en': 'SEO Risk: Purely AI-generated content can lead to search engine penalties.'},
+            {'keyword': 'scaling', 'risk': 'Infrastructure Risk', 'fi': 'Kustannusriski: Nopea skaalaus vaatii vahvan teknisen pohjan.', 'en': 'Infrastructure Risk: Rapid scaling requires a strong technical foundation.'},
+        ]
+        
+        for opp in growth_opportunities:
+            title = opp.get('title', '').lower()
+            desc = opp.get('description', '').lower()
+            
+            for pattern in risk_patterns:
+                if pattern['keyword'] in title or pattern['keyword'] in desc:
+                    vetos.append({
+                        'opportunity_title': opp.get('title'),
+                        'risk_type': pattern['risk'],
+                        'warning': pattern.get(self._language, pattern['risk']),
+                        'severity': 'high'
+                    })
+                    logger.warning(f"[Guardian] 🛡️ VETO applied to opportunity: {opp.get('title')} due to {pattern['keyword']}")
+        
+        return vetos
