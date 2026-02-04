@@ -5309,7 +5309,81 @@ async def generate_competitive_swot_analysis(
             'competitive_gap': 'Failing basic SEO requirements',
             'fix_steps': ['Write title tags (50-60 chars)', 'Meta descriptions (150-160 chars)', 'Fix H1 tags', 'Add canonical URLs', 'Internal linking']
         })
-    
+
+    # ===================================================================
+    # ADDITIONAL DATA-DRIVEN WEAKNESSES (lower thresholds to find real issues)
+    # ===================================================================
+
+    # Performance - lower threshold (even 70-80 is improvable)
+    if page_speed < 85 and page_speed >= 70 and not any(w.get('area', '').startswith(('Very Slow', 'Slow')) for w in weaknesses):
+        weaknesses.append({
+            'area': 'Performance Could Be Better' if language != 'fi' else 'Suorituskyky voisi olla parempi',
+            'finding': f'{page_speed}/100 - room for improvement vs 90+ targets' if language != 'fi' else f'{page_speed}/100 - parannusvaraa vs 90+ tavoite',
+            'urgency': 'LOW',
+            'business_risk': 'Each 100ms delay = 1% conversion loss' if language != 'fi' else 'Jokainen 100ms viive = 1% konversiotappio',
+            'fix_timeframe': '1-2 weeks',
+            'fix_cost': '€500-1500',
+            'priority_score': 55,
+            'competitive_gap': f'Top performers score 90+' if language != 'fi' else f'Huippusuorittajat saavat 90+',
+            'fix_steps': ['Image optimization', 'Lazy loading', 'Code minification', 'CDN setup']
+        })
+
+    # Content depth check - even if above 1000
+    if wc < 2000 and wc >= 1000 and not any('Content' in w.get('area', '') for w in weaknesses):
+        avg_comp_content = sum(c.get('detailed_analysis', {}).get('content_analysis', {}).get('word_count', 0) for c in (competitor_analyses or [])) / max(1, len(competitor_analyses or []))
+        if avg_comp_content > wc:
+            weaknesses.append({
+                'area': 'Below Average Content Depth' if language != 'fi' else 'Keskiarvon alapuolella sisältömäärässä',
+                'finding': f'{wc} words vs competitor avg {int(avg_comp_content)}' if language != 'fi' else f'{wc} sanaa vs kilpailijat keskimäärin {int(avg_comp_content)}',
+                'urgency': 'MEDIUM',
+                'business_risk': 'Competitors ranking for more keywords' if language != 'fi' else 'Kilpailijat rankataan useammille avainsanoille',
+                'fix_timeframe': '2-4 weeks',
+                'fix_cost': '€1000-2500',
+                'priority_score': 65,
+                'competitive_gap': f'{int(avg_comp_content - wc)} words behind average' if language != 'fi' else f'{int(avg_comp_content - wc)} sanaa keskiarvon takana',
+                'fix_steps': ['Content gap analysis', 'Expand key service pages', 'Add case studies/blog posts']
+            })
+
+    # Modernity gap - technology modernization
+    if modernity < 70 and not any('Modern' in w.get('area', '') or 'Technology' in w.get('area', '') for w in weaknesses):
+        weaknesses.append({
+            'area': 'Technology Refresh Needed' if language != 'fi' else 'Tekninen päivitys tarpeen',
+            'finding': f'Modernity score {modernity}/100 indicates outdated tech' if language != 'fi' else f'Modernisuus {modernity}/100 viittaa vanhentuneeseen teknologiaan',
+            'urgency': 'MEDIUM',
+            'business_risk': 'Slower development, worse UX, maintenance debt' if language != 'fi' else 'Hitaampi kehitys, huonompi UX, teknistä velkaa',
+            'fix_timeframe': '3-6 months',
+            'fix_cost': '€5000-15000',
+            'priority_score': 60,
+            'competitive_gap': 'Modern sites load faster and convert better' if language != 'fi' else 'Modernit sivustot latautuvat nopeammin ja konvertoivat paremmin',
+            'fix_steps': ['Technology audit', 'Modernization roadmap', 'Phased implementation']
+        })
+
+    # Category-specific weaknesses from competitor comparison
+    if has_competitors and category_comparison:
+        for cat, data in category_comparison.items():
+            if data.get('status') in ['below', 'behind'] and not any(cat.lower() in w.get('area', '').lower() for w in weaknesses):
+                cat_names = {
+                    'seo': 'SEO' if language != 'fi' else 'Hakukoneoptimointi',
+                    'security': 'Security' if language != 'fi' else 'Tietoturva',
+                    'mobile': 'Mobile' if language != 'fi' else 'Mobiili',
+                    'performance': 'Performance' if language != 'fi' else 'Suorituskyky',
+                    'content': 'Content' if language != 'fi' else 'Sisältö',
+                    'social': 'Social Media' if language != 'fi' else 'Sosiaalinen media'
+                }
+                gap = abs(data.get('difference', 0))
+                if gap >= 5:  # At least 5 points behind
+                    weaknesses.append({
+                        'area': f'{cat_names.get(cat, cat.title())} Gap vs Competitors' if language != 'fi' else f'{cat_names.get(cat, cat.title())} - jäljessä kilpailijoita',
+                        'finding': f'{gap} points below competitor average in {cat}' if language != 'fi' else f'{gap} pistettä kilpailijoiden keskiarvon alle {cat}:ssa',
+                        'urgency': 'HIGH' if gap >= 15 else 'MEDIUM',
+                        'business_risk': f'Losing competitive edge in {cat}' if language != 'fi' else f'Kilpailuedun menetys {cat}:ssa',
+                        'fix_timeframe': '2-4 weeks',
+                        'fix_cost': '€500-2000',
+                        'priority_score': min(85, 50 + gap),
+                        'competitive_gap': f'{gap} points to close' if language != 'fi' else f'{gap} pistettä kurottavana',
+                        'fix_steps': [f'Analyze top competitors {cat} tactics', f'Prioritize {cat} improvements', 'Implement and measure']
+                    })
+
     # === OPPORTUNITIES ===
     opportunities = []
     
@@ -5426,7 +5500,92 @@ async def generate_competitive_swot_analysis(
     
     # === THREATS ===
     threats = []
-    
+
+    # ===================================================================
+    # DATA-DRIVEN THREATS - Based on actual analysis findings
+    # ===================================================================
+
+    # Threat 1: Competitive gap threat (based on real competitor data)
+    if has_competitors and competitor_analyses:
+        # Find competitors who are ahead
+        comps_ahead = [c for c in competitor_analyses if (c.get('final_score', 0) or c.get('score', 0)) > your_score]
+        if comps_ahead:
+            best_comp = max(comps_ahead, key=lambda c: c.get('final_score', 0) or c.get('score', 0))
+            best_score = best_comp.get('final_score', 0) or best_comp.get('score', 0)
+            gap = best_score - your_score
+            best_name = best_comp.get('domain', best_comp.get('url', 'competitor'))
+            threats.append({
+                'threat': f'Competitor {best_name} Leads by {gap} Points' if language != 'fi' else f'Kilpailija {best_name} johtaa {gap} pisteellä',
+                'description': f'Top competitor scores {best_score} vs your {your_score}' if language != 'fi' else f'Johtava kilpailija saa {best_score} vs sinun {your_score}',
+                'likelihood': 'HIGH' if gap >= 15 else 'MEDIUM',
+                'impact': 'HIGH' if gap >= 15 else 'MEDIUM',
+                'risk_score': min(95, 60 + gap),
+                'business_consequences': f'Losing market visibility to {best_name}' if language != 'fi' else f'Markkinanäkyvyyden menetys kilpailijalle {best_name}',
+                'mitigation': f'Close the {gap} point gap within 3-6 months' if language != 'fi' else f'Kurota {gap} pisteen ero 3-6 kuukaudessa',
+                'urgency': 'Act within 30 days' if gap >= 15 else 'Act within 90 days',
+                'mitigation_steps': [f'Analyze what {best_name} does better', 'Prioritize highest impact improvements', 'Set monthly progress targets']
+            })
+
+    # Threat 2: Category-specific threats from competitor comparison
+    if has_competitors and category_comparison:
+        for cat, data in category_comparison.items():
+            if data.get('status') in ['below', 'behind', 'significantly_behind']:
+                gap = abs(data.get('difference', 0))
+                if gap >= 10:  # Significant gap
+                    cat_names = {
+                        'seo': 'SEO ranking',
+                        'security': 'security posture',
+                        'mobile': 'mobile experience',
+                        'performance': 'site performance',
+                        'content': 'content depth',
+                        'social': 'social presence'
+                    }
+                    cat_fi = {
+                        'seo': 'SEO-sijoitus',
+                        'security': 'tietoturvatasot',
+                        'mobile': 'mobiilikokemus',
+                        'performance': 'sivuston suorituskyky',
+                        'content': 'sisällön määrä',
+                        'social': 'sosiaalinen näkyvyys'
+                    }
+                    threats.append({
+                        'threat': f'Losing {cat_names.get(cat, cat)} to Competitors' if language != 'fi' else f'{cat_fi.get(cat, cat).capitalize()} jää kilpailijoista',
+                        'description': f'{gap} points behind in {cat}' if language != 'fi' else f'{gap} pistettä jäljessä {cat}:ssa',
+                        'likelihood': 'HIGH' if gap >= 20 else 'MEDIUM',
+                        'impact': 'HIGH' if cat in ['seo', 'performance', 'mobile'] else 'MEDIUM',
+                        'risk_score': min(90, 55 + gap),
+                        'business_consequences': f'Customers choosing competitors for better {cat}' if language != 'fi' else f'Asiakkaat valitsevat kilpailijat paremman {cat}:n vuoksi',
+                        'mitigation': f'Prioritize {cat} improvements immediately' if language != 'fi' else f'Priorisoi {cat}-parannukset heti',
+                        'urgency': 'Within 30 days' if gap >= 20 else 'Within 60 days',
+                        'mitigation_steps': [f'Audit {cat} vs top competitor', f'Implement quick {cat} wins', f'Track {cat} progress weekly']
+                    })
+
+    # Threat 3: Technology aging (from modernity score)
+    if modernity < 50:
+        threats.append({
+            'threat': 'Outdated Technology Stack' if language != 'fi' else 'Vanhentunut teknologia',
+            'description': f'Modernity score {modernity}/100 indicates aging infrastructure' if language != 'fi' else f'Modernisuus {modernity}/100 - infrastruktuuri vanhenee',
+            'likelihood': 'HIGH',
+            'impact': 'HIGH',
+            'risk_score': 85,
+            'business_consequences': 'Security vulnerabilities, poor UX, development bottleneck' if language != 'fi' else 'Tietoturva-aukkoja, huono UX, kehitys hidastuu',
+            'mitigation': 'Plan technology modernization roadmap' if language != 'fi' else 'Suunnittele teknologian modernisointitiekartta',
+            'urgency': 'Plan within 90 days, execute within 12 months',
+            'mitigation_steps': ['Technology audit', 'Security assessment', 'Modernization roadmap', 'Phased implementation']
+        })
+    elif modernity < 65:
+        threats.append({
+            'threat': 'Technology Refresh Needed' if language != 'fi' else 'Tekninen päivitys tarpeen',
+            'description': f'Modernity score {modernity}/100 - falling behind modern standards' if language != 'fi' else f'Modernisuus {modernity}/100 - jää moderneista standardeista',
+            'likelihood': 'MEDIUM',
+            'impact': 'MEDIUM',
+            'risk_score': 68,
+            'business_consequences': 'Incremental performance and UX gap vs competitors' if language != 'fi' else 'Kasvava suorituskyky- ja UX-ero kilpailijoihin',
+            'mitigation': 'Budget for technology updates in next cycle' if language != 'fi' else 'Budjetoi teknologiapäivitykset seuraavaan sykliin',
+            'urgency': 'Within 6-12 months',
+            'mitigation_steps': ['Identify outdated components', 'Prioritize by impact', 'Update incrementally']
+        })
+
     # Falling behind
     if your_score < avg_comp_score:
         gap = int(avg_comp_score - your_score)

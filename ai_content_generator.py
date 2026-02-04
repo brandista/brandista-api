@@ -304,24 +304,35 @@ async def generate_ai_swot(
     
     lang_instruction = LANGUAGE_INSTRUCTIONS.get(language, LANGUAGE_INSTRUCTIONS['en'])
     
-    # Radical creativity for SWOT
+    # SWOT framework - balanced and realistic
     swot_framework = """
-**SWOT WITH RADICAL CREATIVITY:**
-- Weaknesses = untapped growth opportunities (not just problems to fix)
-- Opportunities = what new territory/segment can we capture?
-- Think: "changing the reach" not "changing the flavour"
-- Every gap is a chance to build something that didn't exist
+**SWOT ANALYSIS RULES:**
+- Strengths: What you do BETTER than competitors (use actual scores)
+- Weaknesses: Real technical/content gaps that hurt performance (be specific!)
+- Opportunities: What you could capture with improvements
+- Threats: Real competitive threats from the data (competitors ahead, technology gaps)
 """
-    
-    prompt = f"""You are a digital strategy analyst with growth mindset. {lang_instruction}
+
+    # Determine competitive context
+    comp_context = ""
+    if 'competitor_scores' in numbers and numbers.get('competitor_scores'):
+        comp_context = f"""
+**COMPETITOR DATA (CRITICAL - use this for threats!):**
+- Your score: {numbers.get('your_score', 0)}/100
+- Competitor average: {numbers.get('competitor_avg', 0)}/100
+- Gap: {numbers.get('competitor_avg', 0) - numbers.get('your_score', 0)} points
+"""
+
+    prompt = f"""You are a digital strategy analyst. {lang_instruction}
 
 {swot_framework}
+{comp_context}
 
 **CRITICAL RULES:**
 1. Use ONLY numbers from the context.numbers section below
-2. DO NOT invent, calculate, or estimate any numbers
-3. Reference numbers with their exact context.numbers key
-4. Frame weaknesses as GROWTH OPPORTUNITIES
+2. EVERY weakness must reference a specific low score or missing feature
+3. EVERY threat must be based on actual competitive data or technical gaps
+4. Be SPECIFIC - no generic statements like "improve SEO"
 
 **Context (READ-ONLY):**
 ```json
@@ -332,19 +343,22 @@ async def generate_ai_swot(
 Generate a SWOT analysis based ONLY on the data above. Return valid JSON:
 
 {{
-  "strengths": ["List 2-4 strengths with specific numbers from context"],
-  "weaknesses": ["List 2-4 GROWTH OPPORTUNITIES (frame gaps positively) with numbers"],
-  "opportunities": ["List 2-3 NEW MARKET/SEGMENT opportunities to capture"],
-  "threats": ["List 1-2 competitive threats or market risks"]
+  "strengths": ["List 2-4 specific strengths with actual scores. Example: 'Security: {numbers['security_score']}/15 - above industry standard'"],
+  "weaknesses": ["List 2-4 SPECIFIC weaknesses with scores. Example: 'Mobile score {numbers['mobile_score']}/15 = losing 60% of potential visitors'"],
+  "opportunities": ["List 2-3 growth opportunities based on weak areas"],
+  "threats": ["List 2-3 REAL threats: competitor gaps, technology aging, market changes"]
 }}
 
-**Example strength:** "Strong security posture (security_score: {numbers['security_score']}/15)"
+**GOOD examples:**
+- Strength: "Performance score 78/100 - faster than 65% of competitors"
+- Weakness: "Word count {numbers['word_count']} - thin content hurts SEO rankings"
+- Threat: "Competitor average {numbers.get('competitor_avg', 50)} vs your {numbers.get('your_score', 0)} - losing market visibility"
+- Threat: "Modernity score {numbers.get('modernity_score', 0)}/100 - technology stack aging"
 
-**Good weakness (growth-oriented):** "Mobile experience gap = opportunity to capture 70% market segment (mobile_score: {numbers['mobile_score']}/15)"
-**Bad weakness:** "Mobile optimization needed" ← Process thinking!
-
-**Good opportunity:** "Untapped AI personalization = convert passive visitors into advocates"
-**Bad opportunity:** "Improve content quality" ← Incremental, not transformative!
+**BAD examples (DO NOT USE):**
+- "Improve SEO" ← Too generic
+- "Market competition" ← No data reference
+- "Need better content" ← What specifically?
 
 Return ONLY the JSON, no explanations.
 """
@@ -583,45 +597,113 @@ Return ONLY the JSON array.
 # ============================================================================
 
 def fallback_swot(context: Dict[str, Any], language: str) -> Dict[str, Any]:
-    """Rule-based SWOT fallback"""
-    
+    """Rule-based SWOT fallback - ensures we ALWAYS have meaningful data"""
+
     numbers = context['numbers']
     flags = context['flags']
-    
+
     strengths, weaknesses, opportunities, threats = [], [], [], []
-    
-    # Strengths
-    if numbers['security_score'] >= 13:
-        strengths.append(f"Strong security ({numbers['security_score']}/15)")
-    if numbers['seo_score'] >= 15:
-        strengths.append(f"Excellent SEO ({numbers['seo_score']}/20)")
-    if numbers['word_count'] > 2000:
-        strengths.append(f"Rich content ({numbers['word_count']} words)")
-    
-    # Weaknesses
-    if numbers['security_score'] == 0:
-        weaknesses.append("CRITICAL: No HTTPS")
-    if numbers['content_score'] < 5:
-        weaknesses.append(f"Thin content ({numbers['word_count']} words)")
-    if not flags['has_analytics']:
-        weaknesses.append("No analytics tracking")
-    
-    # Opportunities
-    score_gap = 90 - numbers['overall_score']
-    if score_gap > 40:
-        opportunities.append(f"Major growth potential (+{score_gap} points)")
-    else:
-        opportunities.append(f"Optimization opportunities (+{score_gap} points)")
-    
-    # Threats
-    if numbers['security_score'] < 5:
-        threats.append("Search engine penalties for non-HTTPS")
-    
+
+    overall = numbers.get('overall_score', 0)
+    security = numbers.get('security_score', 0)
+    seo = numbers.get('seo_score', 0)
+    content = numbers.get('content_score', 0)
+    mobile = numbers.get('mobile_score', 0)
+    performance = numbers.get('performance_score', 0)
+    wc = numbers.get('word_count', 0)
+    modernity = numbers.get('modernity_score', 0)
+    competitor_avg = numbers.get('competitor_avg', 50)
+
+    # === STRENGTHS (find what's good) ===
+    if security >= 13:
+        strengths.append(f"Strong security posture ({security}/15)")
+    if seo >= 15:
+        strengths.append(f"Excellent SEO foundations ({seo}/20)")
+    if wc > 2000:
+        strengths.append(f"Rich content depth ({wc} words)")
+    if performance >= 75:
+        strengths.append(f"Fast performance ({performance}/100)")
+    if mobile >= 12:
+        strengths.append(f"Good mobile experience ({mobile}/15)")
+    if modernity >= 70:
+        strengths.append(f"Modern technology stack ({modernity}/100)")
+
+    # Ensure at least one strength
+    if not strengths:
+        if overall >= 50:
+            strengths.append(f"Solid digital foundation ({overall}/100)")
+        else:
+            strengths.append("Room for significant improvement")
+
+    # === WEAKNESSES (find real gaps - lower thresholds) ===
+    if security < 10:
+        weaknesses.append(f"Security gaps ({security}/15) - hurting trust & SEO")
+    if content < 10:
+        weaknesses.append(f"Thin content ({wc} words) - weak SEO signal")
+    if mobile < 10:
+        weaknesses.append(f"Mobile experience ({mobile}/15) - losing 60%+ of visitors")
+    if performance < 70:
+        weaknesses.append(f"Slow performance ({performance}/100) - high bounce rate")
+    if seo < 12:
+        weaknesses.append(f"SEO basics ({seo}/20) - poor search visibility")
+    if modernity < 50:
+        weaknesses.append(f"Outdated technology ({modernity}/100) - development bottleneck")
+    if not flags.get('has_analytics'):
+        weaknesses.append("No analytics tracking - flying blind")
+
+    # Ensure at least one weakness
+    if not weaknesses:
+        if overall < 80:
+            weaknesses.append(f"Score {overall}/100 - room to reach industry leaders at 85+")
+        else:
+            weaknesses.append("Maintenance: continuous improvement needed to stay ahead")
+
+    # === OPPORTUNITIES ===
+    score_gap = 90 - overall
+    if score_gap > 30:
+        opportunities.append(f"Major growth potential: +{score_gap} points available")
+    elif score_gap > 10:
+        opportunities.append(f"Optimization potential: +{score_gap} points achievable")
+
+    if wc < 2000:
+        opportunities.append(f"Content expansion: {wc} → 2000+ words for better rankings")
+    if mobile < 12:
+        opportunities.append("Mobile-first: capture growing mobile traffic segment")
+
+    # === THREATS (ensure we ALWAYS have threats) ===
+    # Competitive threats
+    if competitor_avg > overall:
+        gap = competitor_avg - overall
+        threats.append(f"Competitor average {competitor_avg} vs your {overall}: {gap} point gap")
+
+    # Technology threats
+    if modernity < 60:
+        threats.append(f"Technology aging ({modernity}/100) - competitors modernizing")
+
+    # Security threats
+    if security < 10:
+        threats.append(f"Security ({security}/15) - Google penalties & trust issues")
+
+    # Performance threats
+    if performance < 60:
+        threats.append(f"Slow site ({performance}/100) - losing visitors to faster competitors")
+
+    # SEO threats
+    if seo < 10:
+        threats.append(f"Poor SEO ({seo}/20) - invisible in search results")
+
+    # Ensure at least one threat
+    if not threats:
+        if overall < competitor_avg:
+            threats.append(f"Below market average: competitors have edge")
+        else:
+            threats.append("Market dynamics: competitors continuously improving")
+
     return {
-        "strengths": strengths[:4] or ["Baseline established"],
-        "weaknesses": weaknesses[:4] or ["Minor improvements needed"],
+        "strengths": strengths[:4],
+        "weaknesses": weaknesses[:4],
         "opportunities": opportunities[:3],
-        "threats": threats[:2]
+        "threats": threats[:3]
     }
 
 def fallback_recommendations(context: Dict[str, Any], language: str) -> List[str]:
