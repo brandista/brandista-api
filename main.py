@@ -99,7 +99,12 @@ except ImportError:
     logger.warning("Email notifications module not available")
 
 try:
-    from ai_content_generator import generate_full_ai_insights
+    from ai_content_generator import (
+        generate_full_ai_insights,
+        LLMClient,
+        generate_ai_swot,
+        build_structured_context
+    )
     AI_GENERATOR_AVAILABLE = True
 except ImportError:
     AI_GENERATOR_AVAILABLE = False
@@ -5006,15 +5011,18 @@ async def generate_competitive_swot_analysis(
 ) -> Dict[str, Any]:
     """
     Generate comprehensive SWOT with competitive context and business impact.
-    
+
+    STRATEGY:
+    1. Try AI-powered SWOT generation first (better insights)
+    2. Fall back to rule-based if AI fails
+
     Features:
+    - AI-generated analysis with real competitive data
     - Competitive benchmarking for each SWOT item
     - Business impact quantification
     - Priority scoring with RICE framework
-    - Actionable recommendations with timelines
-    - Risk assessment with mitigation strategies
     """
-    
+
     # Extract data
     basic = your_analysis.get('basic_analysis', {})
     breakdown = basic.get('score_breakdown', {})
@@ -5022,10 +5030,10 @@ async def generate_competitive_swot_analysis(
     content = your_analysis.get('detailed_analysis', {}).get('content_analysis', {})
     ux = your_analysis.get('detailed_analysis', {}).get('ux_analysis', {})
     social = your_analysis.get('detailed_analysis', {}).get('social_media', {})
-    
+
     your_score = basic.get('digital_maturity_score', 0)
     wc = content.get('word_count', 0)
-    
+
     # Competitive context
     if competitor_analyses and len(competitor_analyses) > 0:
         comp_scores = [c.get('basic_analysis', {}).get('digital_maturity_score', 50) for c in competitor_analyses]
@@ -5038,7 +5046,67 @@ async def generate_competitive_swot_analysis(
         max_comp_score = 70
         min_comp_score = 30
         has_competitors = False
-    
+
+    # =========================================================================
+    # STEP 1: TRY AI-POWERED SWOT GENERATION
+    # =========================================================================
+    ai_swot = None
+    if AI_GENERATOR_AVAILABLE:
+        try:
+            import os
+            api_key = os.getenv('OPENAI_API_KEY')
+            if api_key:
+                logger.info("[SWOT] 🤖 Attempting AI-powered SWOT generation...")
+
+                # Build context with competitor data
+                context, _ = build_structured_context(
+                    url=basic.get('url', ''),
+                    basic=basic,
+                    technical=technical,
+                    content=content,
+                    ux=ux,
+                    social=social,
+                    language=language
+                )
+
+                # Add competitor data to context
+                context['numbers']['your_score'] = your_score
+                context['numbers']['competitor_avg'] = int(avg_comp_score)
+                context['numbers']['competitor_max'] = int(max_comp_score)
+                context['numbers']['competitor_gap'] = int(avg_comp_score - your_score)
+                context['numbers']['modernity_score'] = basic.get('modernity_score', 0)
+
+                if has_competitors:
+                    context['numbers']['competitor_scores'] = comp_scores
+                    context['competitor_count'] = len(competitor_analyses)
+                    # Add top competitor details
+                    top_comps = []
+                    for c in competitor_analyses[:3]:
+                        c_basic = c.get('basic_analysis', {})
+                        top_comps.append({
+                            'domain': c_basic.get('domain', c.get('url', 'unknown')),
+                            'score': c_basic.get('digital_maturity_score', 0),
+                            'gap': c_basic.get('digital_maturity_score', 0) - your_score
+                        })
+                    context['top_competitors'] = top_comps
+
+                llm_client = LLMClient(api_key=api_key)
+                ai_swot = await generate_ai_swot(context, language, llm_client)
+
+                if ai_swot and isinstance(ai_swot, dict):
+                    logger.info(f"[SWOT] ✅ AI SWOT generated: {len(ai_swot.get('strengths', []))} strengths, {len(ai_swot.get('weaknesses', []))} weaknesses, {len(ai_swot.get('threats', []))} threats")
+                else:
+                    logger.warning("[SWOT] ⚠️ AI returned invalid SWOT, using rule-based fallback")
+                    ai_swot = None
+            else:
+                logger.warning("[SWOT] No OPENAI_API_KEY, using rule-based generation")
+        except Exception as e:
+            logger.error(f"[SWOT] AI generation failed: {e}, using rule-based fallback")
+            ai_swot = None
+
+    # =========================================================================
+    # STEP 2: BUILD SWOT STRUCTURE
+    # =========================================================================
     swot = {
         'strengths': [],
         'weaknesses': [],
@@ -5052,14 +5120,53 @@ async def generate_competitive_swot_analysis(
             'market_average': int(avg_comp_score),
             'market_leader': int(max_comp_score),
             'position': 'Leader' if your_score >= max_comp_score else 'Above Average' if your_score >= avg_comp_score else 'Below Average'
-        }
+        },
+        'generation_method': 'ai' if ai_swot else 'rule_based'
     }
-    
-    # === STRENGTHS ===
-    strengths = []
-    
-    # Overall maturity
-    if your_score > avg_comp_score + 15:
+
+    # If AI succeeded, use AI-generated basic SWOT items
+    if ai_swot:
+        # Convert AI simple strings to rich objects
+        for s in ai_swot.get('strengths', [])[:4]:
+            if isinstance(s, str):
+                swot['strengths'].append({'area': s, 'finding': s, 'source': 'ai'})
+            else:
+                s['source'] = 'ai'
+                swot['strengths'].append(s)
+
+        for w in ai_swot.get('weaknesses', [])[:4]:
+            if isinstance(w, str):
+                swot['weaknesses'].append({'area': w, 'finding': w, 'urgency': 'MEDIUM', 'source': 'ai'})
+            else:
+                w['source'] = 'ai'
+                swot['weaknesses'].append(w)
+
+        for o in ai_swot.get('opportunities', [])[:3]:
+            if isinstance(o, str):
+                swot['opportunities'].append({'area': o, 'opportunity': o, 'source': 'ai'})
+            else:
+                o['source'] = 'ai'
+                swot['opportunities'].append(o)
+
+        for t in ai_swot.get('threats', [])[:3]:
+            if isinstance(t, str):
+                swot['threats'].append({'threat': t, 'description': t, 'likelihood': 'MEDIUM', 'impact': 'MEDIUM', 'source': 'ai'})
+            else:
+                t['source'] = 'ai'
+                swot['threats'].append(t)
+
+        logger.info(f"[SWOT] Using AI-generated SWOT: {len(swot['strengths'])}S, {len(swot['weaknesses'])}W, {len(swot['opportunities'])}O, {len(swot['threats'])}T")
+
+    # =========================================================================
+    # STEP 3: RULE-BASED ENRICHMENT (add details AI might miss)
+    # =========================================================================
+    # === STRENGTHS (rule-based additions) ===
+    strengths = swot['strengths']
+
+    # Overall maturity (only add if AI didn't cover it)
+    strength_areas = [s.get('area', '').lower() for s in strengths]
+
+    if your_score > avg_comp_score + 15 and 'maturity' not in str(strength_areas) and 'leadership' not in str(strength_areas):
         strengths.append({
             'area': 'Digital Maturity Leadership',
             'finding': f'Score {your_score}/100 significantly above market average ({int(avg_comp_score)})',
@@ -5173,11 +5280,12 @@ async def generate_competitive_swot_analysis(
             'leverage_actions': ['Cross-promote content', 'Engage with audience', 'Run campaigns']
         })
     
-    # === WEAKNESSES ===
-    weaknesses = []
-    
-    # Critical security
-    if security_score <= 5:
+    # === WEAKNESSES (rule-based additions) ===
+    weaknesses = swot['weaknesses']  # Start with AI-generated weaknesses
+    weakness_areas = [w.get('area', '').lower() for w in weaknesses]
+
+    # Critical security (only add if AI didn't cover)
+    if security_score <= 5 and 'security' not in str(weakness_areas):
         weaknesses.append({
             'area': 'Security Vulnerability',
             'finding': 'Missing SSL certificate or security headers',
@@ -5384,11 +5492,12 @@ async def generate_competitive_swot_analysis(
                         'fix_steps': [f'Analyze top competitors {cat} tactics', f'Prioritize {cat} improvements', 'Implement and measure']
                     })
 
-    # === OPPORTUNITIES ===
-    opportunities = []
-    
-    # Content marketing gap
-    if not content.get('has_blog') and wc < 2000:
+    # === OPPORTUNITIES (rule-based additions) ===
+    opportunities = swot['opportunities']  # Start with AI-generated opportunities
+    opportunity_areas = [o.get('area', '').lower() for o in opportunities]
+
+    # Content marketing gap (only add if AI didn't cover)
+    if not content.get('has_blog') and wc < 2000 and 'content' not in str(opportunity_areas):
         comp_with_blogs = sum(1 for c in (competitor_analyses or []) if c.get('detailed_analysis', {}).get('content_analysis', {}).get('has_blog', False)) if has_competitors else 0
         opportunities.append({
             'area': 'Content Marketing Strategy',
@@ -5498,11 +5607,12 @@ async def generate_competitive_swot_analysis(
             'success_metrics': ['Conversion rate +15%', 'Lower bounce rate', 'Higher average order value']
         })
     
-    # === THREATS ===
-    threats = []
+    # === THREATS (rule-based additions) ===
+    threats = swot['threats']  # Start with AI-generated threats
+    threat_areas = [t.get('threat', '').lower() for t in threats]
 
     # ===================================================================
-    # DATA-DRIVEN THREATS - Based on actual analysis findings
+    # DATA-DRIVEN THREATS - Only add if AI didn't cover
     # ===================================================================
 
     # Threat 1: Competitive gap threat (based on real competitor data)
