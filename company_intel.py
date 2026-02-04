@@ -538,15 +538,65 @@ class CompanyIntel:
     
     def _parse_kauppalehti_html(self, html: str, business_id: str) -> Optional[Dict[str, Any]]:
         """Parse Kauppalehti company page HTML"""
-        
+
         try:
-            soup = BeautifulSoup(html, 'html.parser')
-            
+            import json as json_module
+
             data = {
                 'business_id': business_id,
                 'source': 'kauppalehti'
             }
-            
+
+            # =========================================================
+            # METHOD 0 (PRIMARY): Extract from __PRELOADED_STATE__ JSON
+            # Kauppalehti is a React app - all data is in this JSON blob
+            # =========================================================
+            preloaded_match = re.search(r'window\.__PRELOADED_STATE__\s*=\s*(\{.*?\});?\s*</script>', html, re.DOTALL)
+            if preloaded_match:
+                try:
+                    preloaded = json_module.loads(preloaded_match.group(1))
+                    api_queries = preloaded.get('api', {}).get('queries', {})
+
+                    # Look for getCompanySearch or getCompanyData results
+                    for key, value in api_queries.items():
+                        if 'CompanySearch' in key or 'CompanyData' in key:
+                            result_data = value.get('data', {})
+
+                            # Handle both direct data and companies array
+                            company_data = None
+                            if 'companies' in result_data and result_data['companies']:
+                                company_data = result_data['companies'][0]
+                            elif result_data.get('name'):
+                                company_data = result_data
+
+                            if company_data:
+                                # Extract financial data
+                                if company_data.get('turnover') and not data.get('revenue'):
+                                    data['revenue'] = int(company_data['turnover'])
+                                    data['revenue_text'] = f"{data['revenue']:,} EUR".replace(',', ' ')
+                                    logger.info(f"[CompanyIntel] Found revenue in PRELOADED_STATE: {data['revenue']}")
+
+                                if company_data.get('personnelAverage') and not data.get('employees'):
+                                    data['employees'] = int(company_data['personnelAverage'])
+                                    data['employees_text'] = str(data['employees'])
+                                    logger.info(f"[CompanyIntel] Found employees in PRELOADED_STATE: {data['employees']}")
+
+                                if company_data.get('name') and not data.get('name'):
+                                    data['name'] = company_data['name']
+
+                                # If we got financial data, return early
+                                if data.get('revenue') or data.get('employees'):
+                                    logger.info(f"[CompanyIntel] ✅ Extracted from Kauppalehti PRELOADED_STATE: {data.get('name')} - Revenue: {data.get('revenue')}, Employees: {data.get('employees')}")
+                                    return data
+
+                except json_module.JSONDecodeError as e:
+                    logger.warning(f"[CompanyIntel] Failed to parse PRELOADED_STATE JSON: {e}")
+
+            # =========================================================
+            # FALLBACK: Traditional HTML scraping (legacy, may not work)
+            # =========================================================
+            soup = BeautifulSoup(html, 'html.parser')
+
             # Company name (h1)
             h1 = soup.find('h1')
             if h1:
