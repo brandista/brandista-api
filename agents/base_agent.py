@@ -762,7 +762,7 @@ class BaseAgent(ABC):
         self.progress = min(100, max(0, progress))
         if task:
             self.current_task = task
-        
+
         progress_update = AgentProgress(
             agent_id=self.id,
             status=self.status,
@@ -771,10 +771,14 @@ class BaseAgent(ABC):
             messages_sent=self._swarm_stats['messages_sent'],
             messages_received=self._swarm_stats['messages_received']
         )
-        
+
+        # 🔍 DEBUG: Log every progress update
+        logger.info(f"[{self.name}] 📊 Progress update: {self.progress}% - {self.current_task} (callback={'SET' if self._on_progress else 'NOT SET'})")
+
         if self._on_progress:
             try:
                 self._on_progress(progress_update)
+                logger.info(f"[{self.name}] ✅ Progress callback executed successfully")
             except Exception as e:
                 logger.error(f"[{self.name}] Progress callback error: {e}")
     
