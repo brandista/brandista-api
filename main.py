@@ -5066,7 +5066,7 @@ async def generate_competitive_swot_analysis(
                     content=content,
                     ux=ux,
                     social=social,
-                    language=language
+                    html=""  # HTML not needed for SWOT generation
                 )
 
                 # Add competitor data to context
