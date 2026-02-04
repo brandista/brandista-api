@@ -703,15 +703,14 @@ class ScoutAgent(BaseAgent):
             if any(term in combined_text for term in ['oy', 'ab', 'oyj', 'ky']):
                 score += 5
 
-            # Only include if score is above threshold
-            if score >= 40:
-                comp['relevance_score'] = min(score, 100)
-                comp['name'] = comp.get('title', domain).split(' - ')[0].split(' | ')[0][:50]
-                comp['industry_match'] = keyword_matches
-                scored.append(comp)
-                logger.info(f"[Scout] Scored competitor: {domain} = {score} (industry matches: {keyword_matches})")
-            else:
-                logger.info(f"[Scout] Filtered out: {domain} = {score} (too low)")
+            # Include all results - sorting will prioritize relevant ones
+            # Minimum score of 20 to keep reasonable ranking
+            final_score = max(score, 20)
+            comp['relevance_score'] = min(final_score, 100)
+            comp['name'] = comp.get('title', domain).split(' - ')[0].split(' | ')[0][:50]
+            comp['industry_match'] = keyword_matches
+            scored.append(comp)
+            logger.info(f"[Scout] Scored competitor: {domain} = {final_score} (industry matches: {keyword_matches})")
 
         scored.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
 
