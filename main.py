@@ -7563,32 +7563,78 @@ def generate_smart_search_terms(
     custom_terms: Optional[List[str]] = None
 ) -> List[str]:
     """
-    Generate intelligent search terms based on industry and country
+    Generate intelligent search terms based on industry and country.
+    Uses proper translations for each language.
     """
     if custom_terms:
         return custom_terms
-    
-    # Language-specific search terms
+
+    # Industry translations for Finnish searches
+    industry_fi = {
+        'jewelry': 'koruliike',
+        'fashion': 'vaatekauppa',
+        'ecommerce': 'verkkokauppa',
+        'saas': 'ohjelmisto',
+        'technology': 'teknologia',
+        'consulting': 'konsultointi',
+        'marketing': 'markkinointi',
+        'finance': 'rahoitus',
+        'healthcare': 'terveydenhuolto',
+        'education': 'koulutus',
+        'real_estate': 'kiinteistö',
+        'manufacturing': 'valmistus',
+        'hospitality': 'ravintola',
+        'automotive': 'autokauppa',
+        'general': 'yritys',
+    }
+
+    # Industry translations for Swedish searches
+    industry_sv = {
+        'jewelry': 'juvelerare',
+        'fashion': 'klädbutik',
+        'ecommerce': 'nätbutik',
+        'saas': 'programvara',
+        'technology': 'teknik',
+        'consulting': 'konsultverksamhet',
+        'marketing': 'marknadsföring',
+        'finance': 'finans',
+        'healthcare': 'hälsovård',
+        'education': 'utbildning',
+        'real_estate': 'fastigheter',
+        'manufacturing': 'tillverkning',
+        'hospitality': 'restaurang',
+        'automotive': 'bilhandel',
+        'general': 'företag',
+    }
+
+    # Get translated industry term
+    fi_term = industry_fi.get(industry, industry)
+    sv_term = industry_sv.get(industry, industry)
+    en_term = industry  # English uses the original
+
+    # Language-specific search terms with proper translations
     search_patterns = {
         "fi": [
-            f"top 10 {industry} Suomessa",
-            f"parhaat {industry} yritykset",
-            f"{industry} kilpailijat Suomi",
-            f"suositut {industry} palvelut"
+            f"parhaat {fi_term} Suomi",
+            f"{fi_term} yritykset Suomessa",
+            f"suosituimmat {fi_term} palvelut",
+            f"{fi_term} verkkokauppa Suomi"
         ],
         "en": [
-            f"top {industry} companies",
-            f"best {industry} services",
-            f"{industry} competitors",
-            f"leading {industry} providers"
+            f"top {en_term} companies",
+            f"best {en_term} services",
+            f"{en_term} competitors",
+            f"leading {en_term} providers"
         ],
         "sv": [
-            f"bästa {industry} företag",
-            f"topp {industry} tjänster",
-            f"{industry} konkurrenter",
+            f"bästa {sv_term} företag Sverige",
+            f"topp {sv_term} tjänster",
+            f"{sv_term} konkurrenter",
         ]
     }
-    
+
+    logger.info(f"[Search] Industry '{industry}' -> search terms: {search_patterns.get(country_code, search_patterns['en'])}")
+
     return search_patterns.get(country_code, search_patterns["en"])
 
 

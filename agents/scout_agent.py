@@ -605,14 +605,37 @@ class ScoutAgent(BaseAgent):
         industry: str
     ) -> List[Dict[str, Any]]:
         from main import get_domain_from_url
-        
+
         own_domain = get_domain_from_url(own_url)
         scored = []
-        
+
+        # Industry-specific keywords for validation
+        industry_keywords = {
+            'jewelry': ['koru', 'korut', 'kulta', 'hopea', 'timantit', 'sormus', 'kaulakoru',
+                       'rannekoru', 'jewelry', 'jewel', 'gold', 'silver', 'diamond', 'ring',
+                       'necklace', 'bracelet', 'kultaseppä', 'koruliike'],
+            'fashion': ['vaate', 'muoti', 'fashion', 'clothing', 'pukeutuminen', 'asuste'],
+            'ecommerce': ['verkkokauppa', 'kauppa', 'shop', 'store', 'osta', 'tilaa'],
+            'saas': ['ohjelmisto', 'software', 'platform', 'cloud', 'saas', 'app'],
+            'technology': ['teknologia', 'tech', 'digital', 'it-', 'järjestelmä'],
+            'consulting': ['konsultointi', 'consulting', 'neuvonta', 'advisory'],
+            'marketing': ['markkinointi', 'marketing', 'mainos', 'brändi'],
+            'finance': ['rahoitus', 'finance', 'pankki', 'sijoitus', 'laina'],
+            'healthcare': ['terveys', 'health', 'lääkäri', 'klinikka', 'hoito'],
+            'education': ['koulutus', 'education', 'kurssi', 'valmennus', 'oppi'],
+            'real_estate': ['kiinteistö', 'asunto', 'real estate', 'property', 'vuokra'],
+            'manufacturing': ['valmistus', 'tuotanto', 'manufacturing', 'tehdas'],
+            'hospitality': ['ravintola', 'hotelli', 'restaurant', 'hotel', 'majoitus'],
+            'automotive': ['auto', 'ajoneuvo', 'car', 'vehicle', 'huolto', 'autokauppa'],
+        }
+
+        # Get industry-specific keywords (or empty list for 'general')
+        relevant_keywords = industry_keywords.get(industry, [])
+
         # Comprehensive list of non-competitor domains
         skip_domains = [
             # Social media
-            'facebook.', 'linkedin.', 'twitter.', 'instagram.', 
+            'facebook.', 'linkedin.', 'twitter.', 'instagram.',
             'tiktok.', 'pinterest.', 'snapchat.', 'threads.',
             # Search & tech giants
             'google.', 'bing.', 'yahoo.', 'baidu.',
@@ -632,36 +655,66 @@ class ScoutAgent(BaseAgent):
             'gov.', '.gov', 'europa.eu', 'prh.fi', 'vero.fi',
             # Developer/tech
             'github.', 'gitlab.', 'stackoverflow.', 'npmjs.',
+            # Generic list/comparison sites
+            'top10.', 'best-', 'vertaa.', 'compare', 'ranking',
         ]
-        
+
         for comp in competitors:
             url = comp.get('url', '')
             domain = get_domain_from_url(url)
-            
+
             if domain == own_domain:
                 continue
-            if any(skip in domain for skip in skip_domains):
+            if any(skip in domain.lower() for skip in skip_domains):
                 continue
-            
-            score = 50
-            
+
+            # Start with base score
+            score = 30
+
+            # Same TLD bonus (e.g., both .fi)
             if own_domain.split('.')[-1] == domain.split('.')[-1]:
-                score += 10
-            
-            snippet = comp.get('snippet', '').lower()
-            if industry.lower() in snippet:
                 score += 15
-            
+
+            snippet = comp.get('snippet', '').lower()
             title = comp.get('title', '').lower()
-            if any(term in title for term in ['vs', 'alternative', 'competitor', 'vaihtoehto']):
-                score += 20
-            
-            comp['relevance_score'] = min(score, 100)
-            comp['name'] = comp.get('title', domain).split(' - ')[0].split(' | ')[0][:50]
-            scored.append(comp)
-        
+            combined_text = f"{title} {snippet} {domain}".lower()
+
+            # Industry keyword match - MAJOR scoring factor
+            keyword_matches = sum(1 for kw in relevant_keywords if kw in combined_text)
+            if keyword_matches >= 3:
+                score += 40  # Very relevant
+            elif keyword_matches >= 2:
+                score += 30  # Relevant
+            elif keyword_matches >= 1:
+                score += 15  # Somewhat relevant
+            else:
+                # No industry keywords found - likely not a competitor
+                score -= 20  # Penalty for irrelevant results
+
+            # Domain name relevance
+            if any(kw in domain.lower() for kw in relevant_keywords):
+                score += 20  # Domain contains industry keyword
+
+            # Competitor indicator terms
+            if any(term in combined_text for term in ['vs', 'alternative', 'competitor', 'vaihtoehto', 'kilpailija']):
+                score += 10
+
+            # Finnish business indicators
+            if any(term in combined_text for term in ['oy', 'ab', 'oyj', 'ky']):
+                score += 5
+
+            # Only include if score is above threshold
+            if score >= 40:
+                comp['relevance_score'] = min(score, 100)
+                comp['name'] = comp.get('title', domain).split(' - ')[0].split(' | ')[0][:50]
+                comp['industry_match'] = keyword_matches
+                scored.append(comp)
+                logger.info(f"[Scout] Scored competitor: {domain} = {score} (industry matches: {keyword_matches})")
+            else:
+                logger.info(f"[Scout] Filtered out: {domain} = {score} (too low)")
+
         scored.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
-        
+
         return scored
     
     async def _get_company_by_business_id(self, business_id: str) -> Optional[Dict[str, Any]]:
