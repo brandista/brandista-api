@@ -589,6 +589,9 @@ async def websocket_agent_analysis(
                 
                 def sync_progress(progress: AgentProgress):
                     try:
+                        # 🔍 DEBUG: Log every progress callback
+                        logger.info(f"[WS] 📊 sync_progress called: agent={progress.agent_id}, progress={progress.progress}%, task={progress.current_task}")
+
                         msg = {
                             "type": WSMessageType.AGENT_PROGRESS.value,
                             "run_id": current_run_id,  # NEW: Include run_id
@@ -603,6 +606,7 @@ async def websocket_agent_analysis(
                         # Send immediately via queue
                         message_queue.put_nowait(msg)
                         pending_messages.append(msg)
+                        logger.info(f"[WS] ✅ Progress queued for {progress.agent_id}: {progress.progress}%")
                     except Exception as e:
                         logger.error(f"[WS] Failed to queue progress: {e}")
                 
