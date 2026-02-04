@@ -520,44 +520,62 @@ class ScoutAgent(BaseAgent):
                 if any(kw in industry_lower for kw in ['konsult', 'consult', 'neuvon']):
                     return 'consulting'
         
-        # Fallback: analyze HTML content
+        # Fallback: analyze HTML content AND URL/domain
         content = str(website_data).lower()
-        
+        url_lower = url.lower()
+
+        # Also check domain name for industry hints
+        from main import get_domain_from_url
+        domain = get_domain_from_url(url).lower()
+
+        # Combine all text for analysis
+        all_text = f"{content} {url_lower} {domain}"
+
         industry_keywords = {
-            # Retail & Products
-            'jewelry': ['jewelry', 'jewellery', 'koru', 'korut', 'koruliike', 'timantit', 'kultaseppä', 'hopeakoru', 'ring', 'necklace', 'bracelet', 'earring', 'sormus', 'kaulakoru', 'rannekoru', 'kultakoru'],
+            # Retail & Products - expanded with domain patterns
+            'jewelry': [
+                'jewelry', 'jewellery', 'koru', 'korut', 'koruliike', 'timantit',
+                'kultaseppä', 'hopeakoru', 'ring', 'necklace', 'bracelet', 'earring',
+                'sormus', 'kaulakoru', 'rannekoru', 'kultakoru', 'kulta', 'hopea',
+                'timantti', 'jalokivi', 'kello', 'kellot', 'watch', 'watches',
+                # Known Finnish jewelry stores
+                'kultajousi', 'kultakeskus', 'timanttiset', 'laatukoru'
+            ],
             'fashion': ['fashion', 'clothing', 'vaate', 'muoti', 'pukeutuminen', 'design', 'accessories', 'asusteet'],
             'ecommerce': ['shop', 'store', 'buy', 'cart', 'kauppa', 'osta', 'tuote', 'verkkokauppa', 'tilaa'],
-            
+
             # Tech
             'saas': ['software', 'saas', 'platform', 'cloud', 'app', 'ohjelmisto', 'palvelu'],
             'technology': ['tech', 'digital', 'it', 'software', 'teknologia', 'digitaalinen', 'järjestelmä'],
-            
+
             # Services
             'consulting': ['consulting', 'advisory', 'konsultointi', 'neuvonta', 'asiantuntija'],
             'marketing': ['marketing', 'agency', 'markkinointi', 'mainos', 'brändi', 'viestintä'],
             'finance': ['finance', 'bank', 'investment', 'rahoitus', 'pankki', 'sijoitus', 'vakuutus'],
             'healthcare': ['health', 'medical', 'clinic', 'terveys', 'lääkäri', 'klinikka', 'hyvinvointi'],
             'education': ['education', 'training', 'course', 'koulutus', 'kurssi', 'oppi', 'valmennus'],
-            
+
             # Other
             'real_estate': ['real estate', 'property', 'kiinteistö', 'asunto', 'talo', 'vuokra'],
             'manufacturing': ['manufacturing', 'factory', 'production', 'tuotanto', 'tehdas', 'valmistus'],
             'hospitality': ['hotel', 'restaurant', 'ravintola', 'hotelli', 'majoitus', 'ruoka'],
             'automotive': ['car', 'auto', 'vehicle', 'ajoneuvo', 'autokauppa', 'huolto'],
         }
-        
+
         scores = {}
         for industry, keywords in industry_keywords.items():
-            score = sum(1 for kw in keywords if kw in content)
+            score = sum(1 for kw in keywords if kw in all_text)
+            # Bonus if keyword found in domain name (stronger signal)
+            domain_matches = sum(2 for kw in keywords if kw in domain)
+            score += domain_matches
             if score > 0:
                 scores[industry] = score
-        
+
         if scores:
             detected = max(scores, key=scores.get)
             logger.info(f"[Scout] Industry detection scores: {scores}, selected: {detected}")
             return detected
-        
+
         logger.info(f"[Scout] No industry detected, using 'general'")
         return 'general'
     
