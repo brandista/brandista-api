@@ -160,12 +160,14 @@ class GrowthEngineOrchestrator:
 
         try:
             # Set callbacks and RunContext for each agent
+            logger.info(f"[Orchestrator] 🔧 Setting callbacks: on_progress={'SET' if self._on_progress else 'NOT SET'}")
             for agent in self.agents.values():
                 agent.set_callbacks(
                     on_insight=self._on_insight,
                     on_progress=self._on_progress,
                     on_swarm_event=self._on_swarm_event
                 )
+                logger.info(f"[Orchestrator] ✅ Callbacks set for {agent.name}: on_progress={'SET' if agent._on_progress else 'NOT SET'}")
                 # Inject RunContext if provided
                 if run_context:
                     agent.set_run_context(run_context)
