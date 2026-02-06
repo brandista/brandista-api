@@ -2686,15 +2686,42 @@ def analyze_image_optimization(soup: BeautifulSoup) -> Dict[str, Any]:
 def detect_analytics_tools(html: str) -> Dict[str, Any]:
     tools = []
     patterns = {
-        'Google Analytics': ['google-analytics', 'gtag', 'ga.js'],
-        'Google Tag Manager': ['googletagmanager', 'gtm.js'],
+        'Google Analytics': ['google-analytics', 'gtag', 'ga.js', 'analytics.js', 'ga4'],
+        'Google Tag Manager': ['googletagmanager', 'gtm.js', 'gtm-', 'google_tag_manager'],
         'Matomo': ['matomo', 'piwik'], 'Hotjar': ['hotjar'],
-        'Facebook Pixel': ['fbevents.js', 'facebook.*pixel']
+        'Facebook Pixel': ['fbevents.js', 'facebook.*pixel', 'connect.facebook.net'],
+        'Microsoft Clarity': ['clarity.ms'],
+        'Plausible': ['plausible.io'],
+        'Fathom': ['usefathom.com'],
     }
     hl = html.lower()
     for tool, pats in patterns.items():
         if any(p in hl for p in pats):
             tools.append(tool)
+
+    # ✅ FIX: Also detect consent-managed analytics
+    # Many sites load analytics ONLY after cookie consent, but the consent platform
+    # itself is a strong signal that analytics IS configured (just consent-gated).
+    # Without this, sites with proper GDPR compliance get incorrectly flagged as "no analytics".
+    if not tools:
+        consent_platforms_with_analytics = [
+            ('cookiebot', 'Cookiebot (analytics consent-gated)'),
+            ('onetrust', 'OneTrust (analytics consent-gated)'),
+            ('cookieconsent', 'CookieConsent (analytics consent-gated)'),
+            ('cookie-consent', 'Cookie Consent (analytics consent-gated)'),
+            ('klaro', 'Klaro (analytics consent-gated)'),
+            ('quantcast', 'Quantcast (analytics consent-gated)'),
+            ('didomi', 'Didomi (analytics consent-gated)'),
+            ('trustarc', 'TrustArc (analytics consent-gated)'),
+            ('iubenda', 'iubenda (analytics consent-gated)'),
+        ]
+        for pattern, tool_name in consent_platforms_with_analytics:
+            if pattern in hl:
+                # Found consent platform - very likely analytics is just consent-gated
+                tools.append(tool_name)
+                logger.info(f"[analytics] Detected consent-gated analytics via {pattern}")
+                break
+
     return {'has_analytics': bool(tools), 'tools': tools, 'count': len(tools)}
 
 def check_sitemap_indicators(soup: BeautifulSoup) -> bool:
@@ -2702,6 +2729,60 @@ def check_sitemap_indicators(soup: BeautifulSoup) -> bool:
     for a in soup.find_all('a', href=True):
         if 'sitemap' in a['href'].lower(): return True
     return False
+
+async def check_sitemap_exists(url: str) -> bool:
+    """Actually check if /sitemap.xml exists via HTTP request.
+
+    check_sitemap_indicators only checks HTML for <link rel="sitemap"> or sitemap anchors,
+    which misses the vast majority of sitemaps that are only referenced in robots.txt.
+    This function does a real HTTP HEAD/GET check.
+    """
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+        sitemap_urls = [
+            f"{base_url}/sitemap.xml",
+            f"{base_url}/sitemap_index.xml",
+        ]
+
+        async with httpx.AsyncClient(
+            timeout=10,
+            follow_redirects=True,
+            verify=True,
+            limits=httpx.Limits(max_keepalive_connections=2, max_connections=4)
+        ) as client:
+            for sitemap_url in sitemap_urls:
+                try:
+                    res = await client.head(sitemap_url, headers={"User-Agent": USER_AGENT})
+                    if res.status_code == 200:
+                        # Verify it's actually XML, not a redirect to homepage
+                        content_type = res.headers.get('content-type', '')
+                        if 'xml' in content_type or 'text' in content_type:
+                            logger.info(f"[sitemap] Found sitemap at {sitemap_url}")
+                            return True
+                        # HEAD might not return content-type properly, try GET
+                        res2 = await client.get(sitemap_url, headers={"User-Agent": USER_AGENT})
+                        if res2.status_code == 200 and ('<?xml' in res2.text[:200] or '<urlset' in res2.text[:500] or '<sitemapindex' in res2.text[:500]):
+                            logger.info(f"[sitemap] Found sitemap at {sitemap_url} (verified via GET)")
+                            return True
+                except Exception:
+                    continue
+
+        # Also check robots.txt for Sitemap directive
+        try:
+            async with httpx.AsyncClient(timeout=8, follow_redirects=True, verify=True) as client:
+                robots_res = await client.get(f"{base_url}/robots.txt", headers={"User-Agent": USER_AGENT})
+                if robots_res.status_code == 200 and 'sitemap' in robots_res.text.lower():
+                    logger.info(f"[sitemap] Found sitemap reference in robots.txt")
+                    return True
+        except Exception:
+            pass
+
+        return False
+    except Exception as e:
+        logger.warning(f"[sitemap] Error checking sitemap for {url}: {e}")
+        return False
 
 def check_robots_indicators(html: str) -> bool:
     return 'robots.txt' in html.lower()
@@ -7228,10 +7309,22 @@ async def _perform_comprehensive_analysis_internal(
     )
     
     technical_audit = await analyze_technical_aspects(
-        url, html_content, 
+        url, html_content,
         headers=httpx.Headers({})
     )
-    
+
+    # ✅ FIX: Sitemap detection - check actual /sitemap.xml via HTTP
+    # check_sitemap_indicators() only looks at HTML <link> and <a> tags,
+    # but most sitemaps are only referenced in robots.txt, not in HTML.
+    if not technical_audit.get('has_sitemap', False):
+        try:
+            sitemap_found = await check_sitemap_exists(url)
+            if sitemap_found:
+                logger.info(f"✅ Sitemap found via HTTP check for {url} (HTML check missed it)")
+                technical_audit['has_sitemap'] = True
+        except Exception as e:
+            logger.warning(f"Sitemap HTTP check failed for {url}: {e}")
+
     # Enrich technical audit with modern features
     if 'modern_features' in basic_analysis.get('detailed_findings', {}):
         modern_features = basic_analysis['detailed_findings']['modern_features']
