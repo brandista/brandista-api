@@ -4994,8 +4994,9 @@ async def generate_ai_insights(
                 "priority_actions": []
             }
     else:
-        # For basic/comprehensive, set empty ai_search_visibility
-        insights["ai_search_visibility"] = None
+        # For basic/comprehensive, let default_factory create empty AISearchVisibility
+        # NOTE: Do NOT set to None - field is not Optional, Pydantic will reject it
+        pass
 
     return AIAnalysis(**insights)
 
