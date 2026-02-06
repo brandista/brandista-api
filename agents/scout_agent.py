@@ -476,7 +476,8 @@ class ScoutAgent(BaseAgent):
         2. Company intel TOL code (official registry)
         3. HTML content keywords (fallback)
         """
-        if provided_industry:
+        # Use provided industry only if it's a specific category (not generic "other"/"general")
+        if provided_industry and provided_industry not in ('other', 'general', 'muu', ''):
             return provided_industry
         
         # Try to use TOL code from company intel
@@ -540,8 +541,9 @@ class ScoutAgent(BaseAgent):
                 'kultaseppä', 'hopeakoru', 'ring', 'necklace', 'bracelet', 'earring',
                 'sormus', 'kaulakoru', 'rannekoru', 'kultakoru', 'kulta', 'hopea',
                 'timantti', 'jalokivi', 'kello', 'kellot', 'watch', 'watches',
-                # Known Finnish jewelry stores
-                'kultajousi', 'kultakeskus', 'timanttiset', 'laatukoru'
+                # Known Finnish jewelry brands/stores
+                'kultajousi', 'kultakeskus', 'timanttiset', 'laatukoru',
+                'kalevala', 'lumoava', 'saurum', 'lapponia', 'aarikka'
             ],
             'fashion': ['fashion', 'clothing', 'vaate', 'muoti', 'pukeutuminen', 'design', 'accessories', 'asusteet'],
             'ecommerce': ['shop', 'store', 'buy', 'cart', 'kauppa', 'osta', 'tuote', 'verkkokauppa', 'tilaa'],
