@@ -281,11 +281,13 @@ class ScoutAgent(BaseAgent):
             insight_type=InsightType.FINDING
         )
         
-        # Generate search terms based on detected industry
+        # Generate search terms based on detected industry AND company name
         search_terms = generate_smart_search_terms(
             industry,           # Industry detected earlier (e.g., "korut", "jewelry")
             context.language,   # Country code (fi, en)
-            None                # No custom terms
+            None,               # No custom terms
+            company_name=company_name,  # e.g., "Kalevala Koru" for targeted searches
+            domain=get_domain_from_url(context.url)
         )
         
         logger.info(f"[Scout] Industry: {industry}, Search terms: {search_terms}")
@@ -664,17 +666,21 @@ class ScoutAgent(BaseAgent):
             # Review & directory sites
             'yelp.', 'tripadvisor.', 'trustpilot.', 'g2.', 'capterra.',
             'glassdoor.', 'indeed.', 'crunchbase.', 'zoominfo.',
-            # Finnish directories
+            # Finnish directories & media
             'fonecta.', 'finder.fi', 'yritystele.', 'kauppalehti.',
             'hs.fi', 'is.fi', 'iltalehti.', 'mtv.fi', 'yle.fi',
+            'anna.fi', 'menaiset.fi', 'mtvuutiset.',
             # News & media
             'bbc.', 'cnn.', 'nytimes.', 'theguardian.', 'forbes.',
-            # Government
+            # Government & institutions
             'gov.', '.gov', 'europa.eu', 'prh.fi', 'vero.fi',
+            'um.fi', 'eduskunta.fi', 'finlex.fi',
             # Developer/tech
             'github.', 'gitlab.', 'stackoverflow.', 'npmjs.',
             # Generic list/comparison sites
             'top10.', 'best-', 'vertaa.', 'compare', 'ranking',
+            # Marketplaces (not direct competitors)
+            'aboutyou.', 'zalando.', 'wish.', 'temu.',
         ]
 
         for comp in competitors:
@@ -713,6 +719,15 @@ class ScoutAgent(BaseAgent):
             if any(kw in domain.lower() for kw in relevant_keywords):
                 score += 20  # Domain contains industry keyword
 
+            # PENALTY: Deep URLs are usually articles, not business homepages
+            from urllib.parse import urlparse
+            parsed_url = urlparse(url)
+            path_depth = len([p for p in parsed_url.path.strip('/').split('/') if p])
+            if path_depth >= 3:
+                score -= 25  # Deep page = article, product page, not a competitor homepage
+            elif path_depth >= 2:
+                score -= 10  # Somewhat deep
+
             # Competitor indicator terms
             if any(term in combined_text for term in ['vs', 'alternative', 'competitor', 'vaihtoehto', 'kilpailija']):
                 score += 10
@@ -721,14 +736,23 @@ class ScoutAgent(BaseAgent):
             if any(term in combined_text for term in ['oy', 'ab', 'oyj', 'ky']):
                 score += 5
 
-            # Include all results - sorting will prioritize relevant ones
-            # Minimum score of 20 to keep reasonable ranking
-            final_score = max(score, 20)
+            # BONUS: Root domain URLs (homepages) are more likely competitors
+            if path_depth == 0:
+                score += 10
+
+            # Filter out results with very low scores (clearly irrelevant)
+            final_score = max(score, 5)
+
+            # Skip results that score too low (no industry match + deep URL)
+            if final_score < 15:
+                logger.info(f"[Scout] Skipping low-score result: {domain} = {final_score}")
+                continue
+
             comp['relevance_score'] = min(final_score, 100)
             comp['name'] = comp.get('title', domain).split(' - ')[0].split(' | ')[0][:50]
             comp['industry_match'] = keyword_matches
             scored.append(comp)
-            logger.info(f"[Scout] Scored competitor: {domain} = {final_score} (industry matches: {keyword_matches})")
+            logger.info(f"[Scout] Scored competitor: {domain} = {final_score} (industry matches: {keyword_matches}, depth: {path_depth})")
 
         scored.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
 

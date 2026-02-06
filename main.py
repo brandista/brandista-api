@@ -7528,50 +7528,49 @@ async def multi_provider_search(
 ) -> List[str]:
     """
     Search using multiple providers with fallback mechanism
-    Returns: List of URLs from all providers
+    Returns: List of unique URLs from all providers (deduplicated by domain)
     """
     all_results = []
-    
+    seen_domains = set()
+
     # Try Google first (primary provider)
     if SEARCH_PROVIDERS["google"]["enabled"] and GOOGLE_SEARCH_AVAILABLE:
         for term in search_terms:
             try:
                 results = search(term, num_results=num_results, lang=country_code)
-                all_results.extend(results)
-                logger.info(f"✅ Google Search '{term}': {len(results)} results")
+                for url in results:
+                    domain = get_domain_from_url(url)
+                    if domain not in seen_domains:
+                        seen_domains.add(domain)
+                        all_results.append(url)
+                logger.info(f"✅ Google Search '{term}': {len(results)} results, {len(all_results)} unique total")
             except Exception as e:
                 logger.warning(f"⚠️ Google search failed: '{term}' - {e}")
-    
-    # TODO: Add Bing fallback here if enabled
-    # if SEARCH_PROVIDERS["bing"]["enabled"]:
-    #     bing_results = await bing_search(search_terms, num_results)
-    #     all_results.extend(bing_results)
-    
+
     # If no results from any provider, use fallback database
     if not all_results:
         logger.warning("⚠️ All search providers failed, checking fallback database")
-        # TODO: Implement database fallback with pre-indexed competitors
-        # fallback_results = await get_competitors_from_database(industry, country_code)
-        # all_results.extend(fallback_results)
-    
+
     return all_results
 
 
 def generate_smart_search_terms(
     industry: str,
     country_code: str,
-    custom_terms: Optional[List[str]] = None
+    custom_terms: Optional[List[str]] = None,
+    company_name: Optional[str] = None,
+    domain: Optional[str] = None
 ) -> List[str]:
     """
-    Generate intelligent search terms based on industry and country.
-    Uses proper translations for each language.
+    Generate intelligent search terms based on industry, country, and company name.
+    Uses company name for targeted competitor searches and industry for broader discovery.
     """
     if custom_terms:
         return custom_terms
 
     # Industry translations for Finnish searches
     industry_fi = {
-        'jewelry': 'koruliike',
+        'jewelry': 'korukauppa',
         'fashion': 'vaatekauppa',
         'ecommerce': 'verkkokauppa',
         'saas': 'ohjelmisto',
@@ -7586,6 +7585,25 @@ def generate_smart_search_terms(
         'hospitality': 'ravintola',
         'automotive': 'autokauppa',
         'general': 'yritys',
+    }
+
+    # More descriptive industry terms for search context
+    industry_fi_broad = {
+        'jewelry': 'korut ja kellot',
+        'fashion': 'muoti ja vaatteet',
+        'ecommerce': 'verkkokauppa',
+        'saas': 'SaaS-ohjelmistot',
+        'technology': 'teknologia-alan yritykset',
+        'consulting': 'konsultointipalvelut',
+        'marketing': 'markkinointipalvelut',
+        'finance': 'rahoituspalvelut',
+        'healthcare': 'terveyspalvelut',
+        'education': 'koulutuspalvelut',
+        'real_estate': 'kiinteistöpalvelut',
+        'manufacturing': 'valmistus ja tuotanto',
+        'hospitality': 'ravintola-ala',
+        'automotive': 'autoala',
+        'general': 'yrityspalvelut',
     }
 
     # Industry translations for Swedish searches
@@ -7609,33 +7627,69 @@ def generate_smart_search_terms(
 
     # Get translated industry term
     fi_term = industry_fi.get(industry, industry)
+    fi_broad = industry_fi_broad.get(industry, fi_term)
     sv_term = industry_sv.get(industry, industry)
     en_term = industry  # English uses the original
 
-    # Language-specific search terms with proper translations
-    search_patterns = {
-        "fi": [
-            f"parhaat {fi_term} Suomi",
-            f"{fi_term} yritykset Suomessa",
-            f"suosituimmat {fi_term} palvelut",
-            f"{fi_term} verkkokauppa Suomi"
-        ],
-        "en": [
-            f"top {en_term} companies",
-            f"best {en_term} services",
-            f"{en_term} competitors",
-            f"leading {en_term} providers"
-        ],
-        "sv": [
-            f"bästa {sv_term} företag Sverige",
-            f"topp {sv_term} tjänster",
-            f"{sv_term} konkurrenter",
-        ]
-    }
+    # Clean company name (remove Oy, Ab, etc.)
+    clean_name = company_name or ''
+    for suffix in [' Oy', ' OY', ' Ab', ' AB', ' Oyj', ' OYJ', ' Ky', ' KY', ' Ry', ' RY']:
+        clean_name = clean_name.replace(suffix, '')
+    clean_name = clean_name.strip()
 
-    logger.info(f"[Search] Industry '{industry}' -> search terms: {search_patterns.get(country_code, search_patterns['en'])}")
+    # Language-specific search terms - PRIORITIZE company-specific searches
+    if clean_name and country_code == "fi":
+        search_patterns = {
+            "fi": [
+                f"{clean_name} kilpailijat",
+                f"{clean_name} vaihtoehdot",
+                f"parhaat {fi_broad} Suomi",
+                f"{fi_term} verkkokauppa Suomi",
+            ]
+        }
+    elif clean_name and country_code == "en":
+        search_patterns = {
+            "en": [
+                f"{clean_name} competitors",
+                f"{clean_name} alternatives",
+                f"top {en_term} companies",
+                f"best {en_term} services",
+            ]
+        }
+    elif clean_name and country_code == "sv":
+        search_patterns = {
+            "sv": [
+                f"{clean_name} konkurrenter",
+                f"{clean_name} alternativ",
+                f"bästa {sv_term} företag Sverige",
+            ]
+        }
+    else:
+        # Fallback without company name
+        search_patterns = {
+            "fi": [
+                f"parhaat {fi_broad} Suomi",
+                f"{fi_term} yritykset Suomessa",
+                f"suosituimmat {fi_broad}",
+                f"{fi_term} verkkokauppa Suomi"
+            ],
+            "en": [
+                f"top {en_term} companies",
+                f"best {en_term} services",
+                f"{en_term} competitors",
+                f"leading {en_term} providers"
+            ],
+            "sv": [
+                f"bästa {sv_term} företag Sverige",
+                f"topp {sv_term} tjänster",
+                f"{sv_term} konkurrenter",
+            ]
+        }
 
-    return search_patterns.get(country_code, search_patterns["en"])
+    terms = search_patterns.get(country_code, search_patterns.get('en', search_patterns.get('fi', [])))
+    logger.info(f"[Search] Industry '{industry}', company '{clean_name}' -> search terms: {terms}")
+
+    return terms
 
 
 async def update_task_progress(
