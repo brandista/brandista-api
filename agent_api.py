@@ -895,6 +895,7 @@ async def websocket_agent_analysis(
                         your_company = scout_result.get('your_company_intel')
                     
                     # Map competitor companies with their intel
+                    # Include ALL competitors, not just those with company_intel from YTJ/Kauppalehti
                     competitor_companies = []
                     for comp in competitors_enriched:
                         company_intel = comp.get('company_intel')
@@ -911,7 +912,22 @@ async def websocket_agent_analysis(
                                 'ytj_url': company_intel.get('ytj_url'),
                                 'kauppalehti_url': company_intel.get('kauppalehti_url'),
                                 'source': company_intel.get('source'),
+                                'domain': comp.get('domain', ''),
+                                'url': comp.get('url', ''),
                             })
+                        else:
+                            # Still include competitor even without company_intel
+                            # Use domain/URL so frontend can display them
+                            domain = comp.get('domain', '')
+                            url = comp.get('url', '')
+                            name = domain.replace('www.', '') if domain else url.replace('https://', '').replace('http://', '').rstrip('/')
+                            competitor_companies.append({
+                                'name': name,
+                                'domain': domain,
+                                'url': url,
+                                'source': 'web_analysis',
+                            })
+                    logger.info(f"[WS] competitor_companies: {len(competitor_companies)} (enriched: {len(competitors_enriched)}, with intel: {len([c for c in competitor_companies if c.get('business_id')])})")
                     
                     # Reconcile total_competitors: use max of Analyst benchmark and Scout findings
                     total_competitors = max(
