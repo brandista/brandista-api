@@ -139,9 +139,11 @@ def detect_business_presence(html_content: str, basic_analysis: Dict[str, Any]) 
     
     # 2. Myymalasijainnit
     store_patterns = [
-        'myymala', 'myymalat', 'liike', 'liikkeet',
-        'store locat', 'find store', 'our stores',
-        'toimipist', 'store finder', 'etsi myymala'
+        'myymala', 'myymälä', 'myymalat', 'myymälät', 'liike', 'liikkeet',
+        'store locat', 'find store', 'our stores', 'stores',
+        'toimipist', 'store finder', 'etsi myymala', 'etsi myymälä',
+        'jälleenmyy', 'jalleenmyy', 'retailer', 'dealer',
+        'myyntipist', 'showroom', 'näyttely', 'nayttely'
     ]
     for pattern in store_patterns:
         if pattern in html_lower:
@@ -173,9 +175,9 @@ def detect_business_presence(html_content: str, basic_analysis: Dict[str, Any]) 
             break
     
     # 6. Verkkokauppa signaalit
-    if any(p in html_lower for p in ['checkout', 'kassa', 'tilaus', 'maksu']):
+    if any(p in html_lower for p in ['checkout', 'kassa', 'tilaus', 'maksu', 'payment', 'maksaminen']):
         signals['has_checkout'] = True
-    if any(p in html_lower for p in ['cart', 'ostoskori', 'add to cart', 'lisaa koriin']):
+    if any(p in html_lower for p in ['cart', 'ostoskori', 'add to cart', 'lisaa koriin', 'lisää koriin', 'add-to-cart', 'addtocart']):
         signals['has_cart'] = True
     
     # 7. Maarita presence type
@@ -566,14 +568,23 @@ def detect_industry(url: str, basic_analysis: Dict[str, Any], company_intel: Dic
             return 'jewelry'
         if any(x in industry_name for x in ['verkkokauppa', 'ecommerce', 'e-commerce']):
             return 'ecommerce'
-    
+
+        # Yrityksen nimesta (fallback kun industry_code/industry puuttuu)
+        company_name = (company_intel.get('name') or '').lower()
+        if any(x in company_name for x in ['koru', 'jewelry', 'jewel', 'gold', 'kulta']):
+            return 'jewelry'
+        if any(x in company_name for x in ['verkkokauppa', 'ecommerce', 'shop']):
+            return 'ecommerce'
+        if any(x in company_name for x in ['software', 'ohjelmisto', 'tech', 'digital']):
+            return 'saas'
+
     # URL-pohjainen arvaus
     url_lower = url.lower()
     if any(x in url_lower for x in ['shop', 'store', 'kauppa', 'buy']):
         return 'ecommerce'
     if any(x in url_lower for x in ['koru', 'jewelry', 'gold', 'kulta']):
         return 'jewelry'
-    
+
     return 'default'
 
 
@@ -698,7 +709,13 @@ def calculate_revenue_impact(
         business_presence, presence_signals = detect_business_presence(html_content, {})
         logger.info(f"[RevenueImpact] Detected business presence: {business_presence}")
         logger.info(f"[RevenueImpact] Presence signals: {presence_signals}")
-    
+
+    # Sanity check: jewelry/retail yritykset iso liikevaihdolla eivat ole online_only
+    # (myymaladetektointi ei aina toimi koska etusivu ei sisalla myymala-tietoja)
+    if business_presence == 'online_only' and industry in ('jewelry', 'retail') and annual_revenue > 1_000_000:
+        business_presence = 'hybrid'
+        logger.info(f"[RevenueImpact] Overriding online_only -> hybrid for {industry} with EUR{annual_revenue:,} revenue")
+
     # Hae presence multiplier
     presence_config = PRESENCE_MULTIPLIERS.get(business_presence, PRESENCE_MULTIPLIERS['hybrid'])
     presence_multiplier = presence_config['digital_share_multiplier']
