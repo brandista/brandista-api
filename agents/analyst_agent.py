@@ -380,12 +380,13 @@ class AnalystAgent(BaseAgent):
     async def _analyze_competitor(self, url: str, language: str) -> Optional[Dict[str, Any]]:
         from main import _perform_comprehensive_analysis_internal, get_domain_from_url
 
-        # Competitors use "comprehensive" level (no AI visibility/creative boldness)
+        # Competitors use "basic" level - fast scoring only (no OpenAI calls)
+        # We only need digital_maturity_score for benchmark comparison
         try:
             analysis = await _perform_comprehensive_analysis_internal(
                 url,
                 language=language,
-                analysis_type="comprehensive"
+                analysis_type="basic"  # Fast: ~30s vs ~1-2min for comprehensive
             )
             analysis['domain'] = get_domain_from_url(url)
             analysis['url'] = url
