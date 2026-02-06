@@ -723,7 +723,7 @@ async def websocket_agent_analysis(
                     benchmark_raw = analyst_result.get('benchmark', {})
                     your_score = analyst_result.get('your_score', 0) or benchmark_raw.get('your_score', 0) or result.overall_score
                     your_ranking = benchmark_raw.get('your_rank', benchmark_raw.get('your_position', 1))
-                    total_competitors = benchmark_raw.get('total_analyzed', 1)
+                    total_competitors_from_analyst = benchmark_raw.get('total_analyzed', 1)
                     avg_score = benchmark_raw.get('avg_competitor_score', 0)
                     best_score = benchmark_raw.get('max_competitor_score', your_score)
                     
@@ -737,13 +737,13 @@ async def websocket_agent_analysis(
                         'avg_competitor_score': avg_score,
                         'max_competitor_score': best_score,
                         'your_position': your_ranking,
-                        'total_analyzed': total_competitors
+                        'total_analyzed': total_competitors_from_analyst
                     }
                     
                     # Get your_analysis for detailed data
                     your_analysis = analyst_result.get('your_analysis', {})
                     
-                    logger.info(f"[WS] Analyst data: score={your_score}, rank={your_ranking}, total={total_competitors}")
+                    logger.info(f"[WS] Analyst data: score={your_score}, rank={your_ranking}, total={total_competitors_from_analyst}")
                     logger.info(f"[WS] Benchmark: avg={avg_score}, max={best_score}")
                     
                     # Guardian data
@@ -907,6 +907,16 @@ async def websocket_agent_analysis(
                                 'kauppalehti_url': company_intel.get('kauppalehti_url'),
                                 'source': company_intel.get('source'),
                             })
+                    
+                    # Reconcile total_competitors: use max of Analyst benchmark and Scout findings
+                    total_competitors = max(
+                        total_competitors_from_analyst,
+                        len(competitor_urls_found) + 1  # Scout found N competitors + your site
+                    ) if competitor_urls_found else total_competitors_from_analyst
+                    logger.info(f"[WS] total_competitors reconciled: analyst={total_competitors_from_analyst}, scout_found={len(competitor_urls_found)}, final={total_competitors}")
+                    
+                    # Update benchmark with reconciled total
+                    benchmark['total_analyzed'] = total_competitors
                     
                     # Get additional Strategist data
                     market_position = strategist_result.get('market_position', '') if strategist_result else ''
