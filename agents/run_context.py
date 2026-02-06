@@ -71,20 +71,20 @@ class RunLimits:
     scrape_concurrency: int = 3       # Max concurrent web scrapes
 
     # Timeouts (seconds) - generous for analysis tasks
-    total_timeout: float = 180.0      # 3 min total run timeout
-    agent_timeout: float = 90.0       # 90s default per agent (analysis takes time)
+    total_timeout: float = 300.0      # 5 min total run timeout
+    agent_timeout: float = 120.0      # 120s default per agent (analysis takes time)
     llm_timeout: float = 60.0         # 60s LLM call timeout
     scrape_timeout: float = 30.0      # 30s web scrape timeout
 
     # Per-agent timeout overrides (agent_id -> timeout_seconds)
     # Use this for agents that need more/less time than the default
     agent_timeouts: Dict[str, float] = field(default_factory=lambda: {
-        'scout': 120.0,      # Scout may need to scrape multiple pages
-        'analyst': 90.0,     # Standard analysis
-        'guardian': 60.0,    # Threat detection is faster
-        'prospector': 90.0,  # Opportunity analysis
-        'strategist': 120.0, # Strategy synthesis takes longer
-        'planner': 90.0,     # Action plan generation
+        'scout': 150.0,      # Scout may need to scrape multiple pages
+        'analyst': 180.0,    # Analyst analyzes your site + all competitors (heavy)
+        'guardian': 90.0,    # Threat detection
+        'prospector': 120.0, # Opportunity analysis
+        'strategist': 150.0, # Strategy synthesis takes longer
+        'planner': 120.0,    # Action plan generation
     })
 
     def __post_init__(self):

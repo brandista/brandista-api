@@ -718,7 +718,12 @@ async def websocket_agent_analysis(
                     # Analyst data - structure: {your_analysis, competitor_analyses, benchmark, your_score}
                     analyst_data = agent_results.get('analyst', {})
                     analyst_result = analyst_data.data if hasattr(analyst_data, 'data') else analyst_data
-                    
+
+                    # Debug: log analyst result to detect timeout/empty data
+                    analyst_status = analyst_data.status.value if hasattr(analyst_data, 'status') else 'unknown'
+                    analyst_error = analyst_data.error if hasattr(analyst_data, 'error') else None
+                    logger.info(f"[WS] Analyst status={analyst_status}, error={analyst_error}, data_keys={list(analyst_result.keys()) if isinstance(analyst_result, dict) else 'not-dict'}")
+
                     # Get benchmark which contains ranking info
                     benchmark_raw = analyst_result.get('benchmark', {})
                     your_score = analyst_result.get('your_score', 0) or benchmark_raw.get('your_score', 0) or result.overall_score
