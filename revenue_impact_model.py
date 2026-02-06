@@ -634,24 +634,36 @@ def detect_risks_from_analysis(basic: Dict[str, Any], technical: Dict[str, Any],
     if word_count < 300:
         detected_risks.append('thin_content')
     
-    # Analytics
-    if not basic.get('has_analytics', False):
+    # Analytics - check BOTH basic and technical data sources
+    # basic_analysis and technical_audit both have has_analytics from detect_analytics_tools()
+    # Also check detected_frameworks for 'google analytics' / 'google tag manager' as fallback
+    has_analytics = basic.get('has_analytics', False) or technical.get('has_analytics', False)
+    if not has_analytics:
+        # Fallback: check if frameworks list includes analytics tools
+        frameworks = technical.get('detected_frameworks', [])
+        analytics_frameworks = [f for f in frameworks if any(
+            kw in f.lower() for kw in ['analytics', 'tag manager', 'gtm', 'matomo', 'hotjar', 'clarity']
+        )]
+        if analytics_frameworks:
+            has_analytics = True
+            logger.info(f"[RevenueImpact] Analytics detected via frameworks: {analytics_frameworks}")
+    if not has_analytics:
         detected_risks.append('no_analytics')
-    
+
     # Structured data
     if not basic.get('has_schema', False):
         detected_risks.append('no_structured_data')
-    
+
     # SPA rendering
     if basic.get('spa_detected') and basic.get('rendering_method') == 'http':
         detected_risks.append('spa_not_rendered')
-    
+
     # Alt texts
     images_without_alt = technical.get('images_without_alt', 0)
     if images_without_alt > 5:
         detected_risks.append('missing_alt_texts')
-    
-    # Sitemap
+
+    # Sitemap - check technical data (updated by check_sitemap_exists HTTP check)
     if not technical.get('has_sitemap', False):
         detected_risks.append('no_sitemap')
     
