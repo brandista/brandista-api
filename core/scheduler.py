@@ -130,7 +130,15 @@ class AgentScheduler:
         """Execute a single scheduled agent run and emit alerts."""
         agent_name = schedule["agent_name"]
         task_type = schedule["task_type"]
-        config = schedule.get("config", {}) or {}
+        raw_config = schedule.get("config", {}) or {}
+        # Config may come as JSON string from DB — parse if needed
+        if isinstance(raw_config, str):
+            try:
+                config = json.loads(raw_config)
+            except (json.JSONDecodeError, TypeError):
+                config = {}
+        else:
+            config = raw_config
         user_id = schedule["user_id"]
         schedule_id = schedule["id"]
 
