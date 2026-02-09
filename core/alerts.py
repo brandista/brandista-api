@@ -169,7 +169,7 @@ class AlertService:
             logger.info("🛑 AlertService pool closed")
 
     async def _create_tables(self):
-        """Ensure alerts and agent_schedules tables exist."""
+        """Ensure alerts and agent_schedules tables exist, seed default schedules."""
         async with self.pool.acquire() as conn:
             await conn.execute(CREATE_ALERTS_TABLE)
             for idx in CREATE_ALERTS_INDEXES:
@@ -177,6 +177,22 @@ class AlertService:
             await conn.execute(CREATE_SCHEDULES_TABLE)
             for idx in CREATE_SCHEDULES_INDEXES:
                 await conn.execute(idx)
+
+            # Seed default schedules (ON CONFLICT = skip if already exists)
+            seed_schedules = [
+                ("admin@brandista.eu", "scout", "competitor_crawl", 21600, '{"target_url": "https://brandista.eu", "competitor_urls": []}'),
+                ("admin@brandista.eu", "guardian", "threat_assessment", 43200, '{}'),
+                ("admin@brandista.eu", "bookkeeper", "expense_check", 86400, '{}'),
+            ]
+            for user_id, agent, task, interval, config in seed_schedules:
+                await conn.execute(
+                    """
+                    INSERT INTO agent_schedules (user_id, agent_name, task_type, interval_seconds, config, next_run)
+                    VALUES ($1, $2, $3, $4, $5::jsonb, NOW())
+                    ON CONFLICT (user_id, agent_name, task_type) DO NOTHING
+                    """,
+                    user_id, agent, task, interval, config,
+                )
             logger.info("✅ Alert tables ensured")
 
     # ------------------------------------------------------------------
@@ -571,6 +587,76 @@ async def create_test_alert(
         agent="test",
     )
     return alert.to_dict()
+
+
+# ============================================================================
+# SCHEDULES REST
+# ============================================================================
+
+schedules_router = APIRouter(prefix="/api/core/schedules", tags=["Schedules"])
+
+
+@schedules_router.get("")
+async def get_schedules(token: str = Query(...)):
+    """Get all agent schedules for the authenticated user."""
+    payload = _verify_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    user_id = _get_user_id(payload)
+
+    svc = get_alert_service()
+    async with svc.pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM agent_schedules WHERE user_id = $1 ORDER BY agent_name",
+            user_id,
+        )
+    return {
+        "schedules": [
+            {
+                "id": r["id"],
+                "agent_name": r["agent_name"],
+                "task_type": r["task_type"],
+                "interval_seconds": r["interval_seconds"],
+                "enabled": r["enabled"],
+                "last_run": r["last_run"].isoformat() if r["last_run"] else None,
+                "next_run": r["next_run"].isoformat() if r["next_run"] else None,
+                "config": r["config"] if isinstance(r["config"], dict) else json.loads(r["config"] or "{}"),
+            }
+            for r in rows
+        ]
+    }
+
+
+@schedules_router.post("")
+async def create_schedule(request: Request, token: str = Query(...)):
+    """Create or update an agent schedule."""
+    payload = _verify_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    user_id = _get_user_id(payload)
+
+    body = await request.json()
+    agent_name = body.get("agent_name")
+    task_type = body.get("task_type")
+    interval = body.get("interval_seconds", 21600)
+    config = body.get("config", {})
+    enabled = body.get("enabled", True)
+
+    if not agent_name or not task_type:
+        raise HTTPException(status_code=400, detail="agent_name and task_type required")
+
+    svc = get_alert_service()
+    async with svc.pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO agent_schedules (user_id, agent_name, task_type, interval_seconds, config, enabled, next_run)
+            VALUES ($1, $2, $3, $4, $5::jsonb, $6, NOW())
+            ON CONFLICT (user_id, agent_name, task_type)
+            DO UPDATE SET interval_seconds = $4, config = $5::jsonb, enabled = $6, updated_at = NOW()
+            """,
+            user_id, agent_name, task_type, interval, json.dumps(config), enabled,
+        )
+    return {"success": True, "message": f"Schedule {agent_name}/{task_type} saved"}
 
 
 # ============================================================================

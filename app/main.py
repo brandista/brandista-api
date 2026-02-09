@@ -309,9 +309,10 @@ except ImportError as e:
 
 # Alerts SSE + REST (Live Agent Runtime)
 try:
-    from core.alerts import alerts_router
+    from core.alerts import alerts_router, schedules_router
     app.include_router(alerts_router)
-    logger.info("✅ Alerts SSE + REST router registered")
+    app.include_router(schedules_router)
+    logger.info("✅ Alerts SSE + REST + Schedules router registered")
 except ImportError as e:
     logger.warning(f"⚠️ Alerts router not available: {e}")
 
