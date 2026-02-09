@@ -104,12 +104,50 @@ async def lifespan(app: FastAPI):
                     logger.warning("⚠️ History database URL not configured")
         except Exception as e:
             logger.error(f"❌ History DB initialization failed: {e}")
-    
+
+    # Initialize AlertService + AgentScheduler (Live Agent Runtime)
+    _alert_svc = None
+    _scheduler = None
+    try:
+        db_url = os.getenv('DATABASE_URL', '')
+        if db_url:
+            from core.alerts import get_alert_service
+            from core.scheduler import get_scheduler
+
+            _alert_svc = get_alert_service()
+            await _alert_svc.initialize(db_url)
+            logger.info("✅ AlertService initialized")
+
+            _scheduler = get_scheduler()
+            await _scheduler.initialize(db_url, _alert_svc)
+            await _scheduler.start()
+            logger.info("✅ AgentScheduler started")
+        else:
+            logger.warning("⚠️ DATABASE_URL not set — AlertService & Scheduler disabled")
+    except Exception as e:
+        logger.error(f"❌ AlertService/Scheduler initialization failed: {e}")
+
     yield
-    
+
     # Shutdown
     logger.info("🛑 Shutting down application")
-    
+
+    # Stop scheduler first (it depends on alert service)
+    if _scheduler:
+        try:
+            await _scheduler.stop()
+            logger.info("🛑 AgentScheduler stopped")
+        except Exception as e:
+            logger.error(f"❌ Error stopping scheduler: {e}")
+
+    # Close alert service
+    if _alert_svc:
+        try:
+            await _alert_svc.shutdown()
+            logger.info("🛑 AlertService closed")
+        except Exception as e:
+            logger.error(f"❌ Error closing AlertService: {e}")
+
     # Close history database
     if hasattr(legacy_main, 'history_db') and legacy_main.history_db:
         try:
@@ -268,6 +306,14 @@ try:
     logger.info("✅ Chat WebSocket registered: /ws/chat")
 except ImportError as e:
     logger.warning(f"⚠️ Chat WebSocket not available: {e}")
+
+# Alerts SSE + REST (Live Agent Runtime)
+try:
+    from core.alerts import alerts_router
+    app.include_router(alerts_router)
+    logger.info("✅ Alerts SSE + REST router registered")
+except ImportError as e:
+    logger.warning(f"⚠️ Alerts router not available: {e}")
 
 # ============================================================================
 # LEGACY ENDPOINTS (TO BE MIGRATED)
