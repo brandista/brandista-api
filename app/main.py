@@ -244,6 +244,14 @@ try:
 except Exception as e:
     logger.warning(f"⚠️ Chat router not available: {e}")
 
+# Books router — AI Bookkeeper
+try:
+    from app.routers import books
+    app.include_router(books.router, tags=["Books"])
+    logger.info("✅ Books (AI Bookkeeper) router registered")
+except Exception as e:
+    logger.warning(f"⚠️ Books router not available: {e}")
+
 # Import legacy routers from main.py
 # These will be gradually migrated to app/routers/
 
