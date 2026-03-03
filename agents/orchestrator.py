@@ -209,15 +209,21 @@ class GrowthEngineOrchestrator:
                     error=errors[0] if errors else None
                 )
 
+        # Verify learning predictions after all agents complete
+        learning_stats = self._verify_learning_predictions(context, run_context)
+
         duration = (datetime.now() - start_time).total_seconds()
 
         swarm_summary = {
             'total_messages': message_bus.get_stats()['total_sent'],
             'blackboard_entries': len(blackboard.get_all_keys()),
-            'run_id': run_context.run_id if run_context else None  # NEW: include run_id
+            'run_id': run_context.run_id if run_context else None,
+            'learning': learning_stats
         }
 
         logger.info(f"📊 Swarm: {swarm_summary['total_messages']} messages, {swarm_summary['blackboard_entries']} blackboard entries")
+        if learning_stats.get('verified', 0) > 0:
+            logger.info(f"🧠 Learning: {learning_stats['verified']} predictions verified, accuracy {learning_stats.get('accuracy', 'N/A')}")
 
         return self._build_result(context, int(duration * 1000), duration, errors, swarm_summary, run_context)
     
@@ -305,6 +311,96 @@ class GrowthEngineOrchestrator:
                     logger.warning(f"[Orchestrator] Missing dep {dep_id} for {agent_id}")
         return True
     
+    def _verify_learning_predictions(
+        self,
+        context: AnalysisContext,
+        run_context: Optional['RunContext'] = None
+    ) -> Dict[str, Any]:
+        """
+        Verify guardian predictions against actual analysis results.
+        Closes the learning feedback loop so agents improve over time.
+        """
+        stats = {'verified': 0, 'correct': 0, 'skipped': 0}
+
+        try:
+            guardian = self.agents.get('guardian')
+            if not guardian or not hasattr(guardian, '_predictions_made'):
+                return stats
+
+            guardian_result = context.agent_results.get('guardian')
+            strategist_result = context.agent_results.get('strategist')
+
+            if not guardian_result or not strategist_result:
+                stats['skipped_reason'] = 'missing guardian or strategist result'
+                return stats
+
+            # Get strategist's overall score for RASM verification
+            overall_score = strategist_result.data.get('overall_score', 50)
+            composite = strategist_result.data.get('composite_scores', {})
+
+            # Get guardian's threat data
+            threats = guardian_result.data.get('threats', [])
+            rasm_score = guardian_result.data.get('rasm_score', 50)
+
+            # Verify threat_impact predictions against strategist scoring
+            for threat in threats:
+                pred_id = threat.get('prediction_id')
+                if not pred_id:
+                    continue
+
+                predicted_severity = threat.get('severity', 'medium')
+                # Cross-verify: if overall_score < 40 → threats were indeed critical
+                # if overall_score > 70 → threats were low impact
+                if overall_score < 40:
+                    actual_severity = 'critical' if threat.get('category') in ('technical', 'seo') else 'high'
+                elif overall_score < 60:
+                    actual_severity = 'high' if predicted_severity in ('critical', 'high') else 'medium'
+                else:
+                    actual_severity = 'medium' if predicted_severity in ('critical', 'high') else 'low'
+
+                guardian._verify_prediction(pred_id, actual_severity)
+                stats['verified'] += 1
+                if predicted_severity == actual_severity:
+                    stats['correct'] += 1
+
+            # Verify RASM improvement prediction from shared knowledge
+            shared_predictions = context.shared_knowledge.get('predictions', [])
+            for pred in shared_predictions:
+                if isinstance(pred, dict) and pred.get('type') == 'rasm_improvement':
+                    pred_id = pred.get('prediction_id')
+                    if pred_id:
+                        # Actual: did score suggest improvement needed?
+                        actual = 'improve' if overall_score < 70 else 'maintain'
+                        guardian._verify_prediction(pred_id, actual)
+                        stats['verified'] += 1
+                        if pred.get('value') == actual:
+                            stats['correct'] += 1
+
+            # Get overall learning stats
+            learning_system = None
+            if run_context:
+                learning_system = run_context.learning_system
+            elif guardian._learning_system:
+                learning_system = guardian._learning_system
+
+            if learning_system:
+                all_stats = learning_system.get_all_stats()
+                stats['accuracy'] = round(
+                    stats['correct'] / stats['verified'], 2
+                ) if stats['verified'] > 0 else None
+                stats['cumulative'] = all_stats
+
+            logger.info(
+                f"[Orchestrator] 🧠 Learning verification: "
+                f"{stats['verified']} verified, {stats['correct']} correct"
+            )
+
+        except Exception as e:
+            logger.warning(f"[Orchestrator] Learning verification failed (non-blocking): {e}")
+            stats['error'] = str(e)
+
+        return stats
+
     def _build_result(
         self,
         context: AnalysisContext,
@@ -354,6 +450,16 @@ class GrowthEngineOrchestrator:
     
     def get_execution_plan(self) -> List[List[str]]:
         return self.EXECUTION_PLAN
+
+    def get_learning_stats(self) -> Dict[str, Any]:
+        """Get learning system statistics for monitoring."""
+        try:
+            guardian = self.agents.get('guardian')
+            if guardian and guardian._learning_system:
+                return guardian._learning_system.get_all_stats()
+        except Exception as e:
+            logger.warning(f"[Orchestrator] Failed to get learning stats: {e}")
+        return {'total_predictions': 0, 'total_verified': 0, 'agents': {}}
 
 
 _orchestrator = None
