@@ -5,6 +5,20 @@ Muoto: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.3.1] - 2026-03-05
+
+### Korjattu
+
+#### Structured Data -pisteytys — rekursiivinen JSON-LD parsinta
+- **Vaikutus**: Sivustot joilla on kattava JSON-LD schema (esim. AutoRepair + OfferCatalog + Service) saivat liian matalat pisteet koska sisäkkäiset @type:t eivät löytyneet
+- **Juurisyy**: `_check_schema_markup()` kävi vain top-level @type:t, ei sisäkkäisiä. Esim. BemuFix: AutoRepair-scheman sisällä OfferCatalog → 5 × Offer → Service — nämä kaikki jäivät tunnistamatta
+- **Korjaus**: Rekursiivinen `_extract_schema_types()` (max depth 5) käy kaikki sisäkkäiset objektit ja listat
+- **Lisäksi**: Quality-bonus nostettu 15→20, OfferCatalog richness -bonus (3+ tarjousta), rich schema coverage (5+ tyyppiä)
+- **Esimerkki**: BemuFix.fi Structured Data 50/100 → ~60/100
+- **Tiedostot**: `main.py` (`_check_schema_markup`)
+
+---
+
 ## [2.3.0] - 2026-03-05
 
 ### Lisätty

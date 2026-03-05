@@ -77,7 +77,7 @@ INDUSTRY_TRANSLATIONS = {
 - **Manuaalinen**: https://brandista.eu/growthengine/dashboard → aloita analyysi → tarkista Railway logit
 
 ## Versiohistoria
-- **Versio**: 2.3.0
+- **Versio**: 2.3.1
 - **Changelog**: `CHANGELOG.md`
 
 ## Kehityskäytännöt
