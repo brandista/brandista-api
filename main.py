@@ -4399,11 +4399,35 @@ def _check_schema_markup(html: str, soup: BeautifulSoup) -> AISearchFactor:
         score += 20  # Base: JSON-LD exists
         findings.append(f"Found {len(jsonld_scripts)} JSON-LD schema blocks")
 
-        # Parse and check schema types + quality
+        # Parse and check schema types + quality (recursive to find nested types)
         schema_types = []
         has_description = False
         has_address_or_geo = False
         all_schemas = []
+
+        def _extract_schema_types(obj, depth=0):
+            """Recursively extract @type from nested schema objects"""
+            nonlocal has_description, has_address_or_geo
+            if depth > 5 or not isinstance(obj, dict):
+                return
+            schema_type = obj.get('@type', '')
+            if schema_type:
+                schema_types.append(schema_type)
+                all_schemas.append(obj)
+            if obj.get('description'):
+                has_description = True
+            if obj.get('address') or obj.get('geo'):
+                has_address_or_geo = True
+            # Recurse into nested objects and arrays
+            for key, val in obj.items():
+                if key.startswith('@'):
+                    continue
+                if isinstance(val, dict):
+                    _extract_schema_types(val, depth + 1)
+                elif isinstance(val, list):
+                    for item in val:
+                        if isinstance(item, dict):
+                            _extract_schema_types(item, depth + 1)
 
         for script in jsonld_scripts:
             try:
@@ -4411,14 +4435,7 @@ def _check_schema_markup(html: str, soup: BeautifulSoup) -> AISearchFactor:
                 # Handle @graph arrays
                 items = data.get('@graph', [data]) if isinstance(data, dict) else [data]
                 for item in items:
-                    schema_type = item.get('@type', '')
-                    if schema_type:
-                        schema_types.append(schema_type)
-                        all_schemas.append(item)
-                    if item.get('description'):
-                        has_description = True
-                    if item.get('address') or item.get('geo'):
-                        has_address_or_geo = True
+                    _extract_schema_types(item)
             except Exception:
                 pass
 
@@ -4455,17 +4472,28 @@ def _check_schema_markup(html: str, soup: BeautifulSoup) -> AISearchFactor:
 
             score += min(40, type_score)
 
-            # Quality bonus
+            # Quality bonus (max 20p)
             quality_score = 0
             if has_description:
                 quality_score += 5
             if has_address_or_geo:
                 quality_score += 5
                 findings.append("Schema includes address/geo — strong local signal")
-            if len(unique_types) >= 3:
+            if len(unique_types) >= 5:
                 quality_score += 5
+                findings.append(f"Rich schema coverage ({len(unique_types)} types)")
+            elif len(unique_types) >= 3:
+                quality_score += 3
                 findings.append(f"Good schema coverage ({len(unique_types)} types)")
-            score += min(15, quality_score)
+            # Check for service/offer richness (OfferCatalog with multiple offers)
+            for schema in all_schemas:
+                if schema.get('@type') == 'OfferCatalog':
+                    items = schema.get('itemListElement', [])
+                    if len(items) >= 3:
+                        quality_score += 5
+                        findings.append(f"Rich service catalog ({len(items)} offers)")
+                    break
+            score += min(20, quality_score)
 
         if 'FAQPage' not in set(schema_types):
             recommendations.append("Add FAQPage schema — AI systems strongly prefer Q&A structured data")
