@@ -272,6 +272,24 @@ def get_positioning_tier(score: int) -> str:
             return label
     return 'Below Average'
 
+# Relative competitive positioning (SWOT) — difference vs competitor average
+COMPETITIVE_POSITION_TIERS = [
+    (15, 'Digital Leader'),
+    (5,  'Strong Performer'),
+    (0,  'Competitive'),
+    (-10, 'Challenged'),
+]
+COMPETITIVE_POSITION_DEFAULT = 'Urgent Action Required'
+
+def get_competitive_position(your_score: int, avg_competitor_score: float) -> str:
+    """Return competitive position label based on gap vs competitor average."""
+    diff = your_score - avg_competitor_score
+    for threshold, label in COMPETITIVE_POSITION_TIERS:
+        if diff >= threshold:
+            return label
+    return COMPETITIVE_POSITION_DEFAULT
+
+
 # Technology modernity classification
 TECH_MODERNITY_TIERS = [
     (85, 'cutting_edge'),

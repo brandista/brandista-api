@@ -59,8 +59,8 @@ from jwt import ExpiredSignatureError, InvalidTokenError
 from agents.scoring_constants import (
     DEFAULT_ANNUAL_REVENUE_EUR, CHATGPT_WEIGHTS, PERPLEXITY_WEIGHTS,
     SCORE_THRESHOLDS, factor_status, get_positioning_tier,
-    classify_tech_modernity, INDUSTRY_AVERAGE_SCORE,
-    INDUSTRY_TOP_QUARTILE, INDUSTRY_BOTTOM_QUARTILE,
+    get_competitive_position, classify_tech_modernity,
+    INDUSTRY_AVERAGE_SCORE, INDUSTRY_TOP_QUARTILE, INDUSTRY_BOTTOM_QUARTILE,
 )
 
 # Redis (optional)
@@ -6105,13 +6105,7 @@ async def generate_competitive_swot_analysis(
     
     # === SUMMARY ===
     swot['summary'] = {
-        'overall_position': (
-            'Digital Leader' if your_score >= avg_comp_score + 15 else
-            'Strong Performer' if your_score >= avg_comp_score + 5 else
-            'Competitive' if your_score >= avg_comp_score else
-            'Challenged' if your_score >= avg_comp_score - 10 else
-            'Urgent Action Required'
-        ),
+        'overall_position': get_competitive_position(your_score, avg_comp_score),
         'score_vs_market': your_score - int(avg_comp_score),
         'critical_issues': len([w for w in weaknesses if w.get('urgency') == 'CRITICAL']),
         'high_priority_issues': len([w for w in weaknesses if w.get('urgency') in ['CRITICAL', 'HIGH']]),
