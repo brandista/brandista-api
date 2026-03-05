@@ -34,11 +34,20 @@ Brandista Growth Engine - AI-pohjainen markkinointianalyysi- ja strategiatyökal
 - **Tilastot**: `swarm_summary.learning` sisältää verified/correct/accuracy per analyysi
 
 ## Tärkeät tiedostot
-- `main.py` - Pää-API, hakutermien käännökset (~rivit 7560-7630)
+- `main.py` - Pää-API, AI-näkyvyysanalyysi (6 faktoria), hakutermien käännökset
+- `agents/scoring_constants.py` - Yhtenäiset kynnysarvot, painot ja apufunktiot kaikille agenteille
 - `agents/scout_agent.py` - Toimialan tunnistus, kilpailijoiden pisteytys
 - `database.py` - Tietokantayhteydet
 - `auth_magic_link.py` - Magic link -kirjautuminen
 - `stripe_module.py` - Maksut
+
+## Pisteytysarkkitehtuuri (v2.3.0)
+- **Kaikki vakiot**: `agents/scoring_constants.py` — yksi lähde totuudelle
+- **Score-tulkinta**: 80/60/40/20 (excellent/good/average/poor/critical)
+- **Faktoristatus**: 70/50/30 (excellent/good/needs_improvement/poor)
+- **AI-näkyvyys**: 6 faktoria (structured_data, semantic_structure, content_depth, authority_signals, conversational_format, ai_accessibility)
+- **Painot**: `CHATGPT_WEIGHTS` (sisältö+rakenne), `PERPLEXITY_WEIGHTS` (auktoriteetti+saavutettavuus)
+- **Riski**: Prosenttipohjainen (>10%/5%/2% liikevaihdosta), ei kiinteitä EUR-rajoja
 
 ## Tunnetut ongelmat (5.2.2026)
 
@@ -68,7 +77,7 @@ INDUSTRY_TRANSLATIONS = {
 - **Manuaalinen**: https://brandista.eu/growthengine/dashboard → aloita analyysi → tarkista Railway logit
 
 ## Versiohistoria
-- **Versio**: 2.2.2
+- **Versio**: 2.3.0
 - **Changelog**: `CHANGELOG.md`
 
 ## Kehityskäytännöt

@@ -5,6 +5,69 @@ Muoto: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.3.0] - 2026-03-05
+
+### Lisätty
+
+#### AI-näkyvyysanalyysi uudistettu (6 faktoria)
+- **Uusi faktori: `ai_accessibility`** — tarkistaa llms.txt, robots.txt AI-bottidirektiivit, sitemap-laatu
+  - llms.txt / llms-full.txt tunnistus ja pisteytys
+  - robots.txt: GPTBot, ChatGPT-User, CCBot, PerplexityBot, Google-Extended, ClaudeBot, anthropic-ai
+  - Sitemap.xml URL-kattavuus
+- **E-E-A-T signaalit** lisätty `_check_authority_markers()`:iin
+  - Author metadata, rel="author", about-sivu, yhteystiedot, sosiaalinen todiste
+  - Freshness metadata (article:published_time, dateModified)
+- **JSON-LD laaduntarkistus** lisätty `_check_schema_markup()`:iin
+  - Tyyppikohtainen pisteytys (LocalBusiness, Product, FAQPage, Article, ym.)
+  - Laatutarkistus (description, address/geo, tyyppimonipuolisuus)
+- **Meta description -laatu** ja **kuva alt-teksti -kattavuus** lisätty `_assess_content_comprehensiveness()`:iin
+- **Painot päivitetty**: ChatGPT-readiness painottaa sisältöä+rakennetta, Perplexity painottaa auktoriteettia+saavutettavuutta
+- **Tiedostot**: `main.py` (AI-näkyvyysfunktiot)
+
+#### Yhtenäinen pisteytysmoduuli (`agents/scoring_constants.py`)
+- Kaikki kynnysarvot, painot ja apufunktiot yhdessä paikassa
+- `SCORE_THRESHOLDS` (80/60/40/20) — yhtenäinen kaikille agenteille (aiemmin 3 eri skaalaa)
+- `factor_status()` — yksittäisten faktorien luokittelu (70/50/30)
+- `get_positioning_tier()` — absoluuttinen positiointi (75/60/45)
+- `get_competitive_position()` — suhteellinen SWOT-positiointi vs. kilpailijat
+- `classify_tech_modernity()` — teknologiatason luokittelu
+- `classify_financial_risk()` — prosenttipohjainen riskiluokittelu (aiemmin kiinteät EUR-rajat)
+- `calculate_roi_score()` — impact × effort ROI-laskenta
+- `CHATGPT_WEIGHTS`, `PERPLEXITY_WEIGHTS` — AI-näkyvyyspainot
+- `INDUSTRY_AVERAGE_SCORE`, `INDUSTRY_TOP_QUARTILE`, `INDUSTRY_BOTTOM_QUARTILE`
+- `DEFAULT_ANNUAL_REVENUE_EUR` — yhtenäinen oletustuloluku (500k)
+
+### Korjattu
+
+#### html_content-bugi (analyst + guardian)
+- `basic.get('html_content', '')` ei koskaan sisältänyt dataa → AI-näkyvyyspisteet aina 0
+- Molemmat agentit käyttävät nyt valmiiksi laskettua `overall_ai_search_score` -arvoa
+- **Tiedostot**: `agents/analyst_agent.py`, `agents/guardian_agent.py`
+
+#### Duplikaatti Pydantic-mallit poistettu
+- 11 mallia oli määritelty kahdesti main.py:ssä (111 riviä duplikaattikoodia)
+- AISearchFactor, AISearchVisibility, AIAnalysis, SmartAction, SmartScores, DetailedAnalysis, ym.
+
+#### Syntaksivirhe korjattu
+- `perplexity_score = int(sum(...)` — puuttuva sulku
+
+#### Epäjohdonmukaisuudet korjattu
+- Revenue-oletus: 450k vs 500k → yhtenäinen `DEFAULT_ANNUAL_REVENUE_EUR`
+- Riskikynnykset: kiinteät EUR (>50k, >20k) → prosenttipohjainen (>10%, >5%, >2%)
+- Impact/effort-pisteytys: 3 eri skaalaa → yhtenäinen `IMPACT_SCORES`/`EFFORT_SCORES`
+- Score-tulkinta: analyst (90/75/60/40), strategist (80/65/50/35), guardian (<40/<70) → yhtenäinen (80/60/40/20)
+- Hardcoded positioning strings → `get_positioning_tier()`, `classify_tech_modernity()`, jne.
+
+### Muutetut tiedostot
+- `main.py` — AI-näkyvyys, mallit, importit, pisteytys
+- `agents/scoring_constants.py` — **UUSI**: yhtenäinen vakiomoduuli
+- `agents/analyst_agent.py` — html_content-korjaus, vakioiden käyttö
+- `agents/guardian_agent.py` — html_content-korjaus, vakioiden käyttö, riskiluokittelu
+- `agents/strategist_agent.py` — vakioiden käyttö, painot, maturity levels
+- `agents/prospector_agent.py` — vakioiden käyttö, market gap threshold
+
+---
+
 ## [2.2.2] - 2026-03-03
 
 ### Lisätty
