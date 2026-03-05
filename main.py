@@ -56,6 +56,13 @@ from bs4 import BeautifulSoup
 import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
 
+from agents.scoring_constants import (
+    DEFAULT_ANNUAL_REVENUE_EUR, CHATGPT_WEIGHTS, PERPLEXITY_WEIGHTS,
+    SCORE_THRESHOLDS, factor_status, get_positioning_tier,
+    classify_tech_modernity, INDUSTRY_AVERAGE_SCORE,
+    INDUSTRY_TOP_QUARTILE, INDUSTRY_BOTTOM_QUARTILE,
+)
+
 # Redis (optional)
 try:
     import redis
@@ -1199,21 +1206,15 @@ def analyze_modern_web_features(html: str, spa_info: Dict[str, Any]) -> Dict[str
         modernity_score = min(100, modernity_score)
         
         # Technology level
-        if modernity_score >= 85:
-            tech_level = 'cutting_edge'
-            tech_description = 'State-of-the-art technology stack'
-        elif modernity_score >= 65:
-            tech_level = 'modern'
-            tech_description = 'Modern and well-maintained'
-        elif modernity_score >= 40:
-            tech_level = 'standard'
-            tech_description = 'Standard implementation'
-        elif modernity_score >= 20:
-            tech_level = 'basic'
-            tech_description = 'Basic implementation, needs modernization'
-        else:
-            tech_level = 'legacy'
-            tech_description = 'Legacy technology, requires significant updates'
+        tech_level = classify_tech_modernity(modernity_score)
+        tech_descriptions = {
+            'cutting_edge': 'State-of-the-art technology stack',
+            'modern': 'Modern and well-maintained',
+            'standard': 'Standard implementation',
+            'basic': 'Basic implementation, needs modernization',
+            'legacy': 'Legacy technology, requires significant updates',
+        }
+        tech_description = tech_descriptions.get(tech_level, tech_descriptions['standard'])
         
         # Missing features (NEW!)
         missing_modern_features = [
@@ -2251,7 +2252,7 @@ class UserQuotaView(BaseModel):
     username: str
     role: str
     search_limit: int
-    searches_used: int# --- NEW: humanized analysis models ---
+    searches_used: int
 
 
 class RevenueInputRequest(BaseModel):
@@ -2287,118 +2288,6 @@ class BusinessImpactDetailed(BaseModel):
     revenue_uplift_low: Optional[int] = None
     revenue_uplift_high: Optional[int] = None
     revenue_uplift_expected: Optional[int] = None
-
-class RoleSummaries(BaseModel):
-    CEO: Optional[str] = None
-    CMO: Optional[str] = None
-    CTO: Optional[str] = None
-
-
-
-class RiskItem(BaseModel):
-    risk: str
-    likelihood: int = Field(1, ge=1, le=5)
-    impact: int = Field(1, ge=1, le=5)
-    mitigation: Optional[str] = None
-    risk_score: Optional[int] = None   # computed later as L*I
-
-class SnippetExamples(BaseModel):
-    seo_title: List[str] = []
-    meta_desc: List[str] = []
-    h1_intro: List[str] = []
-    product_copy: List[str] = []
-
-class AISearchFactor(BaseModel):
-    name: str
-    score: int = Field(0, ge=0, le=100)
-    status: str  # "excellent" | "good" | "needs_improvement" | "poor"
-    findings: List[str] = []
-    recommendations: List[str] = []
-
-class AISearchVisibility(BaseModel):
-    chatgpt_readiness_score: int = Field(0, ge=0, le=100)
-    perplexity_readiness_score: int = Field(0, ge=0, le=100)
-    overall_ai_search_score: int = Field(0, ge=0, le=100)
-    competitive_advantage: str = ""
-    validation_status: str = "not_analyzed"  # "not_analyzed" | "estimated" | "validated"
-    factors: Dict[str, AISearchFactor] = {}
-    key_insights: List[str] = []
-    priority_actions: List[str] = []
-
-class AIAnalysis(BaseModel):
-    summary: str = ""
-    strengths: List[str] = []
-    weaknesses: List[str] = []
-    opportunities: List[str] = []
-    threats: List[str] = []
-    recommendations: List[str] = []
-    confidence_score: int = Field(0, ge=0, le=100)
-    sentiment_score: float = Field(0.0, ge=-1.0, le=1.0)
-    key_metrics: Dict[str, Any] = {}
-    action_priority: List[Dict[str, Any]] = []
-
-    # NEW humanized layers
-    business_impact: Optional[BusinessImpact] = None
-    role_summaries: Optional[RoleSummaries] = None
-    plan_90d: Optional[Plan90D] = None
-    risk_register: Optional[List[RiskItem]] = None
-    snippet_examples: Optional[SnippetExamples] = None
-    ai_search_visibility: AISearchVisibility = Field(default_factory=lambda: AISearchVisibility())
-
-
-class SmartAction(BaseModel):
-    title: str
-    description: str
-    priority: str = Field(..., pattern="^(critical|high|medium|low)$")
-    effort: str = Field(..., pattern="^(low|medium|high)$")
-    impact: str = Field(..., pattern="^(low|medium|high|critical)$")
-    estimated_score_increase: int = Field(0, ge=0, le=100)
-    category: str = ""
-    estimated_time: str = ""
-
-    # NEW humanized fields (optional → backward compatible)
-    so_what: Optional[str] = None
-    why_now: Optional[str] = None
-    what_to_do: Optional[str] = None
-    owner: Optional[str] = None
-    eta_days: Optional[int] = None
-
-    # Lightweight prioritization
-    reach: Optional[int] = None        # 0–100
-    confidence: Optional[int] = None   # 1–10
-    rice_score: Optional[int] = None   # computed
-
-    # Evidence & confidence
-    signals: Optional[List[str]] = None
-    evidence_confidence: Optional[str] = None  # "L|M|H"
-
-class SmartScores(BaseModel):
-    overall: int = Field(0, ge=0, le=100)
-    technical: int = Field(0, ge=0, le=100)
-    content: int = Field(0, ge=0, le=100)
-    social: int = Field(0, ge=0, le=100)
-    ux: int = Field(0, ge=0, le=100)
-    competitive: int = Field(0, ge=0, le=100)
-    trend: str = "stable"
-    percentile: int = Field(0, ge=0, le=100)
-
-class DetailedAnalysis(BaseModel):
-    social_media: SocialMediaAnalysis
-    technical_audit: TechnicalAudit
-    content_analysis: ContentAnalysis
-    ux_analysis: UXAnalysis
-    competitive_analysis: CompetitiveAnalysis
-
-class QuotaUpdateRequest(BaseModel):
-    search_limit: Optional[int] = None
-    grant_extra: Optional[int] = Field(None, ge=1)
-    reset_count: bool = False
-
-class UserQuotaView(BaseModel):
-    username: str
-    role: str
-    search_limit: int
-    searches_used: int
 
 # ============================================================================
 # AUTH FUNCTIONS
@@ -3985,38 +3874,43 @@ async def analyze_competitive_positioning(url: str, basic: Dict[str, Any]) -> Di
     """Complete competitive analysis"""
     score = basic.get('digital_maturity_score', 0)
     
-    if score >= 75:
-        position = "Digital Leader"
-        advantages = ["Excellent digital presence", "Advanced technical execution", "Superior user experience"]
-        threats = ["Pressure to innovate continuously", "High expectations from users"]
-        comp_score = 85
-    elif score >= 60:
-        position = "Strong Performer"
-        advantages = ["Solid digital foundation", "Good technical implementation", "Above-average user experience"]
-        threats = ["Gap to market leaders", "Risk of being overtaken"]
-        comp_score = 70
-    elif score >= 45:
-        position = "Average Competitor"
-        advantages = ["Baseline digital presence established", "Core functionality working"]
-        threats = ["At risk of falling behind", "Below-average user expectations"]
-        comp_score = 50
-    else:
-        position = "Below Average"
-        advantages = ["Significant upside potential", "Room for major improvements"]
-        threats = ["Major competitive disadvantage", "Poor user experience"]
-        comp_score = 30
-    
+    position = get_positioning_tier(score)
+
+    positioning_data = {
+        'Digital Leader': {
+            'advantages': ["Excellent digital presence", "Advanced technical execution", "Superior user experience"],
+            'threats': ["Pressure to innovate continuously", "High expectations from users"],
+            'comp_score': 85,
+        },
+        'Strong Performer': {
+            'advantages': ["Solid digital foundation", "Good technical implementation", "Above-average user experience"],
+            'threats': ["Gap to market leaders", "Risk of being overtaken"],
+            'comp_score': 70,
+        },
+        'Developing': {
+            'advantages': ["Baseline digital presence established", "Core functionality working"],
+            'threats': ["At risk of falling behind", "Below-average user expectations"],
+            'comp_score': 50,
+        },
+        'Below Average': {
+            'advantages': ["Significant upside potential", "Room for major improvements"],
+            'threats': ["Major competitive disadvantage", "Poor user experience"],
+            'comp_score': 30,
+        },
+    }
+    data = positioning_data.get(position, positioning_data['Below Average'])
+
     return {
         'market_position': position,
-        'competitive_advantages': advantages,
-        'competitive_threats': threats,
+        'competitive_advantages': data['advantages'],
+        'competitive_threats': data['threats'],
         'market_share_estimate': "Data not available",
-        'competitive_score': comp_score,
+        'competitive_score': data['comp_score'],
         'industry_comparison': {
             'your_score': score,
-            'industry_average': 45,
-            'top_quartile': 70,
-            'bottom_quartile': 30
+            'industry_average': INDUSTRY_AVERAGE_SCORE,
+            'top_quartile': INDUSTRY_TOP_QUARTILE,
+            'bottom_quartile': INDUSTRY_BOTTOM_QUARTILE,
         }
     }
 
@@ -4058,7 +3952,7 @@ def compute_business_impact_with_input(
     # ===== REVENUE DETERMINATION =====
     calculation_basis = "estimated"
     metrics_used = {}
-    annual_revenue = 450_000  # Default EU SME average
+    annual_revenue = DEFAULT_ANNUAL_REVENUE_EUR
     
     # ✅ KORJAUS: Handle both Pydantic model AND dict
     if revenue_input:
@@ -4597,7 +4491,7 @@ def _check_schema_markup(html: str, soup: BeautifulSoup) -> AISearchFactor:
     if score < 30:
         recommendations.append("Implement comprehensive schema markup strategy")
 
-    status = "excellent" if score >= 70 else "good" if score >= 50 else "needs_improvement" if score >= 30 else "poor"
+    status = factor_status(score)
 
     return AISearchFactor(
         name="Structured Data Quality",
@@ -4662,7 +4556,7 @@ def _check_semantic_structure(html: str, soup: BeautifulSoup) -> AISearchFactor:
     elif lists:
         score += 5
     
-    status = "excellent" if score >= 70 else "good" if score >= 50 else "needs_improvement" if score >= 30 else "poor"
+    status = factor_status(score)
     
     return AISearchFactor(
         name="Semantic Structure",
@@ -4912,7 +4806,7 @@ def _check_authority_markers(technical: Dict[str, Any], basic: Dict[str, Any], h
     if technical.get('has_robots_txt', False):
         score += 5
 
-    status = "excellent" if score >= 70 else "good" if score >= 50 else "needs_improvement" if score >= 30 else "poor"
+    status = factor_status(score)
 
     return AISearchFactor(
         name="Authority Signals",
@@ -5112,7 +5006,7 @@ async def _check_ai_accessibility(url: str, technical: Dict[str, Any]) -> AISear
         else:
             recommendations.append("Add sitemap.xml to help AI systems discover all content")
 
-    status = "excellent" if score >= 70 else "good" if score >= 50 else "needs_improvement" if score >= 30 else "poor"
+    status = factor_status(score)
 
     return AISearchFactor(
         name="AI Accessibility",
@@ -5152,25 +5046,19 @@ async def analyze_ai_search_visibility(
     factor_scores = [f.score for f in factors.values()]
     overall_score = int(sum(factor_scores) / len(factor_scores))
 
-    # ChatGPT readiness (emphasizes content + structure + accessibility)
-    chatgpt_score = int(
-        factors['content_depth'].score * 0.25 +
-        factors['structured_data'].score * 0.20 +
-        factors['conversational_format'].score * 0.20 +
-        factors['ai_accessibility'].score * 0.15 +
-        factors['semantic_structure'].score * 0.10 +
-        factors['authority_signals'].score * 0.10
-    )
+    # ChatGPT readiness — weights from shared constants
+    chatgpt_score = int(sum(
+        factors[factor].score * weight
+        for factor, weight in CHATGPT_WEIGHTS.items()
+        if factor in factors
+    ))
 
-    # Perplexity readiness (emphasizes authority + accessibility + content)
-    perplexity_score = int(
-        factors['authority_signals'].score * 0.25 +
-        factors['ai_accessibility'].score * 0.20 +
-        factors['content_depth'].score * 0.20 +
-        factors['structured_data'].score * 0.15 +
-        factors['semantic_structure'].score * 0.10 +
-        factors['conversational_format'].score * 0.10
-    )
+    # Perplexity readiness — weights from shared constants
+    perplexity_score = int(sum(
+        factors[factor].score * weight
+        for factor, weight in PERPLEXITY_WEIGHTS.items()
+        if factor in factors
+    ))
 
     # Determine validation status based on factor coverage
     all_above_50 = all(f.score >= 50 for f in factors.values())
@@ -6487,19 +6375,14 @@ async def generate_enhanced_features(
             "name": "Industry Benchmarking",
             "value": f"{score} / 100",
             "description": "Position relative to market standards",
-            "status": "above_average" if score > 45 else "below_average",
+            "status": "above_average" if score > INDUSTRY_AVERAGE_SCORE else "below_average",
             "details": {
                 "your_score": score,
-                "industry_average": 45,
-                "top_quartile": 70,
-                "bottom_quartile": 30,
+                "industry_average": INDUSTRY_AVERAGE_SCORE,
+                "top_quartile": INDUSTRY_TOP_QUARTILE,
+                "bottom_quartile": INDUSTRY_BOTTOM_QUARTILE,
                 "percentile": percentile,
-                "interpretation": (
-                    "Top performer" if score >= 70 else
-                    "Above average" if score >= 50 else
-                    "Below average" if score >= 30 else
-                    "Needs improvement"
-                )
+                "interpretation": get_positioning_tier(score),
             }
         }
         

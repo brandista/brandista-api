@@ -22,6 +22,12 @@ from typing import Dict, Any, List, Optional, Set
 from urllib.parse import urlparse
 
 from .base_agent import BaseAgent
+from .scoring_constants import (
+    IMPACT_SCORES, EFFORT_SCORES, calculate_roi_score,
+    score_to_risk_level, DEFAULT_ANNUAL_REVENUE_EUR,
+    classify_financial_risk, MAX_RISK_PERCENT,
+    COMPETITOR_RELEVANCE_THRESHOLD, COMPETITOR_HIGH_THREAT_THRESHOLD,
+)
 from .agent_types import (
     AnalysisContext,
     AgentPriority,
@@ -212,7 +218,7 @@ class GuardianAgent(BaseAgent):
         """Quick risk assessment for on-demand requests"""
         score = target.get('score', 50)
         return {
-            'risk_level': 'high' if score < 40 else 'medium' if score < 70 else 'low',
+            'risk_level': score_to_risk_level(score),
             'score': score,
             'quick_analysis': True
         }
@@ -254,7 +260,7 @@ class GuardianAgent(BaseAgent):
             logger.info(f"[Guardian] 📋 Using Blackboard competitor data in analysis")
             bb_competitors = self._received_competitor_data.get('enriched', [])
             for comp in bb_competitors[:5]:  # Top 5 from blackboard
-                if comp.get('relevance_score', 0) >= 70:
+                if comp.get('relevance_score', 0) >= COMPETITOR_RELEVANCE_THRESHOLD:
                     external_threat_boost.append({
                         'category': 'blackboard_competitor',
                         'title': f"Relevant competitor: {comp.get('name', 'Unknown')}",
@@ -377,7 +383,7 @@ class GuardianAgent(BaseAgent):
             USE_NEW_REVENUE_MODEL = False
         
         # Hae liikevaihto
-        annual_revenue = 500000  # Default EUR500k fallback
+        annual_revenue = DEFAULT_ANNUAL_REVENUE_EUR
         revenue_source = "default"
         company_name = "Company"
         revenue_warning = None
@@ -415,7 +421,7 @@ class GuardianAgent(BaseAgent):
                 
         except Exception as e:
             logger.warning(f"[Guardian] Revenue logic failed, using default: {e}")
-            if annual_revenue == 500000:
+            if annual_revenue == DEFAULT_ANNUAL_REVENUE_EUR:
                 revenue_warning = f"Revenue fetch failed: {e}"
         
         # Kayta uutta mallia jos saatavilla
@@ -502,7 +508,7 @@ class GuardianAgent(BaseAgent):
                 multiplier = risk_multipliers.get(risk_score, risk_score * 0.005)
                 total_risk_percent += multiplier
             
-            total_risk_percent = min(total_risk_percent, 0.25)
+            total_risk_percent = min(total_risk_percent, MAX_RISK_PERCENT)
             annual_risk = int(annual_revenue * total_risk_percent)
             
             business_impact = {
@@ -510,27 +516,28 @@ class GuardianAgent(BaseAgent):
                 'total_annual_risk': annual_risk
             }
         
-        # Emit revenue risk insight
-        if annual_risk > 50000:
+        # Emit revenue risk insight — use percentage-based thresholds
+        risk_level = classify_financial_risk(annual_risk, annual_revenue)
+        if risk_level == 'critical':
             self._emit_insight(
                 self._t("guardian.risk_critical", amount=f"{annual_risk:,.0f}"),
                 priority=AgentPriority.CRITICAL,
                 insight_type=InsightType.THREAT,
-                data={'annual_risk': annual_risk}
+                data={'annual_risk': annual_risk, 'risk_level': risk_level}
             )
-        elif annual_risk > 20000:
+        elif risk_level == 'high':
             self._emit_insight(
                 self._t("guardian.risk_high", amount=f"{annual_risk:,.0f}"),
                 priority=AgentPriority.HIGH,
                 insight_type=InsightType.THREAT,
-                data={'annual_risk': annual_risk}
+                data={'annual_risk': annual_risk, 'risk_level': risk_level}
             )
-        elif annual_risk > 0:
+        elif risk_level == 'medium':
             self._emit_insight(
                 self._t("guardian.risk_medium", amount=f"{annual_risk:,.0f}"),
                 priority=AgentPriority.MEDIUM,
                 insight_type=InsightType.FINDING,
-                data={'annual_risk': annual_risk}
+                data={'annual_risk': annual_risk, 'risk_level': risk_level}
             )
         
         self._update_progress(45, self._task("identifying_threats"))
@@ -984,7 +991,7 @@ class GuardianAgent(BaseAgent):
             })
         
         # AI Visibility threats (2025 priority)
-        ai_score = self._calculate_ai_visibility_score(basic, tech, content)
+        ai_score = self._calculate_ai_visibility_score(basic, tech, content, analysis)
         if ai_score < 40:
             threats.append({
                 'category': 'ai_visibility',
@@ -1002,42 +1009,56 @@ class GuardianAgent(BaseAgent):
         return threats
     
     def _calculate_ai_visibility_score(
-        self, 
-        basic: Dict[str, Any], 
-        tech: Dict[str, Any], 
-        content: Dict[str, Any]
+        self,
+        basic: Dict[str, Any],
+        tech: Dict[str, Any],
+        content: Dict[str, Any],
+        analysis: Dict[str, Any] = None
     ) -> int:
-        """Calculate AI/GEO visibility score for threat detection."""
+        """Calculate AI/GEO visibility score for threat detection.
+        Uses pre-computed score from analyze_ai_search_visibility() when available.
+        """
+        # Use pre-computed score if available (from main.py analyze_ai_search_visibility)
+        if analysis:
+            ai_vis = analysis.get('enhanced_features', {}).get('ai_search_visibility', {})
+            if isinstance(ai_vis, dict) and ai_vis.get('overall_ai_search_score', 0) > 0:
+                return ai_vis['overall_ai_search_score']
+
+            ai_vis2 = analysis.get('detailed_analysis', {}).get('ai_search_visibility', {})
+            if isinstance(ai_vis2, dict) and ai_vis2.get('overall_ai_search_score', 0) > 0:
+                return ai_vis2['overall_ai_search_score']
+
+        # Fallback: simplified scoring from available metrics
+        # NOTE: basic dict does NOT contain html_content — don't try to check it
         ai_score = 0
-        
-        # Structured data
+
+        # Structured data (25p)
         if basic.get('has_schema') or tech.get('has_structured_data'):
             ai_score += 25
-        
-        # Content depth
+
+        # Content depth (20p)
         word_count = content.get('word_count', 0)
         if word_count >= 1500:
             ai_score += 20
         elif word_count >= 800:
             ai_score += 10
-        
-        # FAQ presence
-        html_content = basic.get('html_content', '').lower()
-        if 'faq' in html_content or 'frequently asked' in html_content:
-            ai_score += 15
-        
-        # Clear structure
+
+        # Heading structure (15p)
         if basic.get('h1_text'):
             ai_score += 15
-        
-        # Authority signals
-        if 'author' in html_content or 'about us' in html_content:
-            ai_score += 15
-        
-        # SSL
+
+        # SSL (10p)
         if tech.get('has_ssl') or basic.get('has_ssl'):
             ai_score += 10
-        
+
+        # Sitemap (10p)
+        if tech.get('has_sitemap'):
+            ai_score += 10
+
+        # Robots.txt (5p)
+        if tech.get('has_robots_txt'):
+            ai_score += 5
+
         return min(ai_score, 100)
     
     def _prioritize_actions(
@@ -1047,14 +1068,11 @@ class GuardianAgent(BaseAgent):
     ) -> List[Dict[str, Any]]:
         actions = []
         
-        impact_scores = {'critical': 100, 'high': 75, 'medium': 50, 'low': 25}
-        effort_scores = {'low': 100, 'medium': 60, 'high': 30}
-        
         for threat in threats:
-            impact = impact_scores.get(threat.get('impact', 'medium'), 50)
-            effort = effort_scores.get(threat.get('effort', 'medium'), 60)
-            
-            roi_score = (impact * effort) / 100
+            roi_score = calculate_roi_score(
+                threat.get('impact', 'medium'),
+                threat.get('effort', 'medium')
+            )
             
             actions.append({
                 'title': threat.get('title', ''),

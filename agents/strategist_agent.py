@@ -21,6 +21,11 @@ import logging
 from typing import Dict, Any, List
 
 from .base_agent import BaseAgent
+from .scoring_constants import (
+    SCORE_THRESHOLDS, STRATEGIC_CATEGORY_WEIGHTS,
+    STRATEGIC_DEFENSE_THRESHOLD, STRATEGIC_GROWTH_THRESHOLD,
+    IMPACT_SCORES, EFFORT_SCORES, interpret_score,
+)
 from .agent_types import (
     AnalysisContext,
     AgentPriority,
@@ -417,17 +422,8 @@ class StrategistAgent(BaseAgent):
             edge = your_score - avg_comp
             scores['competitive_edge'] = max(0, min(100, 50 + edge))
         
-        # Calculate weighted overall - 2025 priorities
-        weights = {
-            'seo': 0.10,            # Reduced - less important in AI era
-            'performance': 0.10,
-            'security': 0.10,
-            'content': 0.20,        # E-E-A-T matters more
-            'ux': 0.15,             # Conversion focus
-            'ai_visibility': 0.15,  # NEW: AI search readiness
-            'security_posture': 0.10,
-            'competitive_edge': 0.10
-        }
+        # Calculate weighted overall — weights from shared constants
+        weights = STRATEGIC_CATEGORY_WEIGHTS
         
         weighted_sum = 0
         weight_total = 0
@@ -445,16 +441,15 @@ class StrategistAgent(BaseAgent):
         return scores
     
     def _get_maturity_level(self, score: int) -> str:
-        if score >= 80:
-            return self._maturity("advanced")
-        elif score >= 65:
-            return self._maturity("developed")
-        elif score >= 50:
-            return self._maturity("average")
-        elif score >= 35:
-            return self._maturity("developing")
-        else:
-            return self._maturity("beginner")
+        level = interpret_score(score)
+        maturity_map = {
+            'excellent': 'advanced',
+            'good': 'developed',
+            'average': 'average',
+            'poor': 'developing',
+            'critical': 'beginner',
+        }
+        return self._maturity(maturity_map.get(level, 'average'))
     
     def _analyze_competitive_position(self, benchmark: Dict[str, Any]) -> Dict[str, Any]:
         your_position = benchmark.get('your_position', 1)
@@ -495,9 +490,9 @@ class StrategistAgent(BaseAgent):
     ) -> List[Dict[str, Any]]:
         all_priorities = []
         
-        # Determine weight balance
-        defense_weight = 1.5 if overall_score < 50 else 1.0
-        growth_weight = 1.5 if overall_score >= 60 else 1.0
+        # Determine weight balance using shared thresholds
+        defense_weight = 1.5 if overall_score < STRATEGIC_DEFENSE_THRESHOLD else 1.0
+        growth_weight = 1.5 if overall_score >= STRATEGIC_GROWTH_THRESHOLD else 1.0
         
         # Add guardian actions
         for action in guardian_actions:
@@ -515,11 +510,8 @@ class StrategistAgent(BaseAgent):
         
         # Add growth opportunities
         for opp in growth_opportunities:
-            impact_scores = {'high': 80, 'medium': 50, 'low': 30}
-            effort_scores = {'low': 80, 'medium': 50, 'high': 30}
-            
-            impact = impact_scores.get(opp.get('impact', 'medium'), 50)
-            effort = effort_scores.get(opp.get('effort', 'medium'), 50)
+            impact = IMPACT_SCORES.get(opp.get('impact', 'medium'), 50)
+            effort = EFFORT_SCORES.get(opp.get('effort', 'medium'), 50)
             roi = (impact + effort) / 2
             strategic_score = roi * growth_weight
             

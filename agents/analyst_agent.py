@@ -11,6 +11,10 @@ import logging
 from typing import Dict, Any, List, Optional
 
 from .base_agent import BaseAgent
+from .scoring_constants import (
+    SCORE_THRESHOLDS, COMPETITIVE_DIFF_THRESHOLD, MARKET_GAP_THRESHOLD,
+    interpret_score, interpret_score_detailed, IMPACT_SCORES, EFFORT_SCORES,
+)
 from .agent_types import (
     AnalysisContext,
     AgentPriority,
@@ -291,15 +295,15 @@ class AnalystAgent(BaseAgent):
                     comp_name = result.get('domain', f'Competitor {idx+1}')
                     diff = comp_score - your_analysis.get('final_score', 0)
                     
-                    if diff > 10:
+                    if diff > COMPETITIVE_DIFF_THRESHOLD:
                         self._emit_insight(
-                            self._t("analyst.competitor_stronger", 
+                            self._t("analyst.competitor_stronger",
                                    name=comp_name, score=comp_score, diff=f"+{diff}"),
                             priority=AgentPriority.HIGH,
                             insight_type=InsightType.THREAT,
                             data={'competitor': comp_name, 'score': comp_score, 'diff': diff}
                         )
-                    elif diff < -10:
+                    elif diff < -COMPETITIVE_DIFF_THRESHOLD:
                         self._emit_insight(
                             self._t("analyst.competitor_weaker",
                                    name=comp_name, score=comp_score, diff=str(diff)),
@@ -607,48 +611,20 @@ class AnalystAgent(BaseAgent):
         return 50
     
     def _interpret_score(self, score: int) -> Dict[str, Any]:
-        """
-        Interpret score to avoid false precision.
-        Returns level (Low/Medium/High) + description.
-        
-        Scale:
-        - 0-39: Low (Critical issues)
-        - 40-59: Medium (Needs improvement)  
-        - 60-74: Good (Solid foundation)
-        - 75-89: High (Strong position)
-        - 90-100: Excellent (Industry leader)
-        """
-        if score >= 90:
-            level = 'excellent'
-            level_label = {'fi': 'Erinomainen', 'en': 'Excellent'}.get(self._language)
-            description = {'fi': 'Toimialan kärkitasoa', 'en': 'Industry leading'}.get(self._language)
-        elif score >= 75:
-            level = 'high'
-            level_label = {'fi': 'Korkea', 'en': 'High'}.get(self._language)
-            description = {'fi': 'Vahva asema', 'en': 'Strong position'}.get(self._language)
-        elif score >= 60:
-            level = 'good'
-            level_label = {'fi': 'Hyvä', 'en': 'Good'}.get(self._language)
-            description = {'fi': 'Hyvä pohja, parannettavaa', 'en': 'Solid foundation, room to improve'}.get(self._language)
-        elif score >= 40:
-            level = 'medium'
-            level_label = {'fi': 'Keskitaso', 'en': 'Medium'}.get(self._language)
-            description = {'fi': 'Vaatii parannuksia', 'en': 'Needs improvement'}.get(self._language)
-        else:
-            level = 'low'
-            level_label = {'fi': 'Matala', 'en': 'Low'}.get(self._language)
-            description = {'fi': 'Kriittisiä puutteita', 'en': 'Critical issues'}.get(self._language)
-        
+        """Interpret score using shared thresholds from scoring_constants."""
+        interp = interpret_score_detailed(score)
+        level_label = interp['label'] if self._language == 'fi' else interp['label_en']
+
         return {
             'score': score,
-            'level': level,
+            'level': interp['level'],
             'level_label': level_label,
-            'description': description,
+            'description': interp['description'],
             'scale': {
                 'min': 0,
                 'max': 100,
-                'good_threshold': 60,
-                'high_threshold': 75
+                'good_threshold': SCORE_THRESHOLDS['good'],
+                'high_threshold': SCORE_THRESHOLDS['excellent']
             }
         }
     
@@ -702,7 +678,7 @@ class AnalystAgent(BaseAgent):
         
         # 2. COMPETITIVE GAPS (where you're behind)
         for cat, data in category_comparison.items():
-            if data.get('status') == 'behind' and data.get('difference', 0) < -10:
+            if data.get('status') == 'behind' and data.get('difference', 0) < -COMPETITIVE_DIFF_THRESHOLD:
                 cat_names = {
                     'seo': {'fi': 'SEO', 'en': 'SEO'},
                     'performance': {'fi': 'Suorituskyky', 'en': 'Performance'},
@@ -725,7 +701,7 @@ class AnalystAgent(BaseAgent):
         
         # 3. OPPORTUNITIES (where you're ahead)
         for cat, data in category_comparison.items():
-            if data.get('status') == 'ahead' and data.get('difference', 0) > 15:
+            if data.get('status') == 'ahead' and data.get('difference', 0) > COMPETITIVE_DIFF_THRESHOLD:
                 cat_names = {
                     'seo': {'fi': 'SEO', 'en': 'SEO'},
                     'performance': {'fi': 'Suorituskyky', 'en': 'Performance'},

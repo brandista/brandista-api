@@ -21,6 +21,10 @@ import logging
 from typing import Dict, Any, List, Optional
 
 from .base_agent import BaseAgent
+from .scoring_constants import (
+    COMPETITIVE_DIFF_THRESHOLD, MARKET_GAP_THRESHOLD,
+    IMPACT_SCORES, EFFORT_SCORES,
+)
 from .agent_types import (
     AnalysisContext,
     AgentPriority,
@@ -412,7 +416,7 @@ class ProspectorAgent(BaseAgent):
         
         # Categories where you're ahead
         for cat, data in category_comparison.items():
-            if data.get('status') == 'ahead' and data.get('difference', 0) > 10:
+            if data.get('status') == 'ahead' and data.get('difference', 0) > COMPETITIVE_DIFF_THRESHOLD:
                 title_map = {
                     'seo': {'fi': 'Vahva SEO-asema', 'en': 'Strong SEO position'},
                     'performance': {'fi': 'Nopeampi sivusto', 'en': 'Faster website'},
@@ -435,7 +439,7 @@ class ProspectorAgent(BaseAgent):
         if competitor_analyses:
             for cat in ['seo', 'performance', 'content']:
                 cat_comp = category_comparison.get(cat, {})
-                if cat_comp.get('competitor_avg', 100) < 45:
+                if cat_comp.get('competitor_avg', 100) < MARKET_GAP_THRESHOLD:
                     title_map = {
                         'seo': {'fi': 'Kilpailijoiden heikko SEO', 'en': 'Competitors weak SEO'},
                         'performance': {'fi': 'Kilpailijoiden hitaat sivustot', 'en': 'Competitors slow websites'},
