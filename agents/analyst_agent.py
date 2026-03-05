@@ -555,42 +555,53 @@ class AnalystAgent(BaseAgent):
             return min(ux_score, 100)
         
         elif category == 'ai_visibility':
-            # AI/GEO Visibility Score - readiness for ChatGPT, Perplexity, etc.
-            # Based on factors that help AI systems understand and cite content
+            # Use pre-computed AI visibility score if available (from analyze_ai_search_visibility)
+            ai_vis = analysis.get('detailed_analysis', {}).get('ai_search_visibility', {})
+            if isinstance(ai_vis, dict) and ai_vis.get('overall_ai_search_score', 0) > 0:
+                return ai_vis['overall_ai_search_score']
+
+            # Also check enhanced_features (alternative location)
+            enhanced = analysis.get('enhanced_features', {})
+            if isinstance(enhanced, dict):
+                ai_vis2 = enhanced.get('ai_search_visibility', {})
+                if isinstance(ai_vis2, dict) and ai_vis2.get('overall_ai_search_score', 0) > 0:
+                    return ai_vis2['overall_ai_search_score']
+
+            # Fallback: simplified scoring from basic metrics
+            # NOTE: html_content is NOT available in basic_analysis dict
             ai_score = 0
             content = analysis.get('detailed_analysis', {}).get('content_analysis', analysis.get('content', {}))
             tech = analysis.get('detailed_analysis', {}).get('technical_audit', analysis.get('technical', {}))
-            
-            # Structured data (Schema.org) - critical for AI understanding
+
+            # Structured data (Schema.org)
             if basic.get('has_schema') or tech.get('has_structured_data'):
                 ai_score += 25
-            
-            # Clear, factual content structure
+
+            # Content depth
             word_count = content.get('word_count', 0)
             if word_count >= 1500:
                 ai_score += 20
             elif word_count >= 800:
                 ai_score += 10
-            
-            # FAQ sections (direct answers AI can cite)
-            html_content = basic.get('html_content', '').lower()
-            if 'faq' in html_content or 'frequently asked' in html_content or 'usein kysyt' in html_content:
-                ai_score += 15
-            
-            # Clear headings structure (H1, H2, H3)
+
+            # Heading structure
             if basic.get('h1_text'):
                 ai_score += 10
             if basic.get('has_proper_heading_hierarchy', True):
                 ai_score += 10
-            
-            # Author/expertise signals (E-E-A-T)
-            if 'author' in html_content or 'kirjoittaja' in html_content or 'about us' in html_content:
-                ai_score += 10
-            
+
             # SSL (trust signal)
             if tech.get('has_ssl') or basic.get('has_ssl'):
                 ai_score += 10
-            
+
+            # Sitemap (content discoverability)
+            if tech.get('has_sitemap'):
+                ai_score += 10
+
+            # Robots.txt (basic crawl control)
+            if tech.get('has_robots_txt'):
+                ai_score += 5
+
             return min(ai_score, 100)
         
         return 50

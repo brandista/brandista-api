@@ -2172,8 +2172,8 @@ class AISearchVisibility(BaseModel):
     chatgpt_readiness_score: int = Field(0, ge=0, le=100)
     perplexity_readiness_score: int = Field(0, ge=0, le=100)
     overall_ai_search_score: int = Field(0, ge=0, le=100)
-    competitive_advantage: str = "First Nordic company to systematically analyze AI search readiness"
-    validation_status: str = "estimated"  # "estimated" | "validated" | "monitored"
+    competitive_advantage: str = ""
+    validation_status: str = "not_analyzed"  # "not_analyzed" | "estimated" | "validated"
     factors: Dict[str, AISearchFactor] = {}
     key_insights: List[str] = []
     priority_actions: List[str] = []
@@ -2319,8 +2319,8 @@ class AISearchVisibility(BaseModel):
     chatgpt_readiness_score: int = Field(0, ge=0, le=100)
     perplexity_readiness_score: int = Field(0, ge=0, le=100)
     overall_ai_search_score: int = Field(0, ge=0, le=100)
-    competitive_advantage: str = "First Nordic company to systematically analyze AI search readiness"
-    validation_status: str = "estimated"  # "estimated" | "validated" | "monitored"
+    competitive_advantage: str = ""
+    validation_status: str = "not_analyzed"  # "not_analyzed" | "estimated" | "validated"
     factors: Dict[str, AISearchFactor] = {}
     key_insights: List[str] = []
     priority_actions: List[str] = []
@@ -4498,57 +4498,110 @@ def _check_schema_markup(html: str, soup: BeautifulSoup) -> AISearchFactor:
     score = 0
     findings = []
     recommendations = []
-    
+
     # Check for JSON-LD
     jsonld_scripts = soup.find_all('script', type='application/ld+json')
     if jsonld_scripts:
-        score += 40
+        score += 20  # Base: JSON-LD exists
         findings.append(f"Found {len(jsonld_scripts)} JSON-LD schema blocks")
-        
-        # Parse and check schema types
+
+        # Parse and check schema types + quality
         schema_types = []
+        has_description = False
+        has_address_or_geo = False
+        all_schemas = []
+
         for script in jsonld_scripts:
             try:
                 data = json.loads(script.string or '{}')
-                schema_type = data.get('@type', '')
-                if schema_type:
-                    schema_types.append(schema_type)
-            except:
+                # Handle @graph arrays
+                items = data.get('@graph', [data]) if isinstance(data, dict) else [data]
+                for item in items:
+                    schema_type = item.get('@type', '')
+                    if schema_type:
+                        schema_types.append(schema_type)
+                        all_schemas.append(item)
+                    if item.get('description'):
+                        has_description = True
+                    if item.get('address') or item.get('geo'):
+                        has_address_or_geo = True
+            except Exception:
                 pass
-        
+
         if schema_types:
-            findings.append(f"Schema types: {', '.join(set(schema_types))}")
-            if 'FAQPage' in schema_types or 'QAPage' in schema_types:
-                score += 20
-                findings.append("FAQ/QA schema found - excellent for AI parsing")
-            if 'Organization' in schema_types:
-                score += 10
-                findings.append("Organization schema provides entity context")
+            unique_types = set(schema_types)
+            findings.append(f"Schema types: {', '.join(unique_types)}")
+
+            # Type-specific scoring (cumulative, max 40p)
+            type_score = 0
+            local_business_types = {'LocalBusiness', 'AutoRepair', 'Restaurant', 'Store', 'MedicalBusiness', 'LegalService', 'FinancialService', 'RealEstateAgent'}
+            commercial_types = {'Product', 'Service', 'Offer', 'OfferCatalog'}
+            content_types = {'Article', 'BlogPosting', 'HowTo', 'NewsArticle', 'TechArticle'}
+
+            if unique_types & local_business_types:
+                type_score += 10
+                findings.append(f"Local business schema ({', '.join(unique_types & local_business_types)})")
+            if unique_types & commercial_types:
+                type_score += 10
+                findings.append("Commercial schemas (Product/Service/Offer)")
+            if 'FAQPage' in unique_types or 'QAPage' in unique_types:
+                type_score += 10
+                findings.append("FAQ/QA schema — excellent for AI citation")
+            if 'BreadcrumbList' in unique_types:
+                type_score += 5
+                findings.append("BreadcrumbList — navigation context for AI")
+            if unique_types & content_types:
+                type_score += 10
+                findings.append("Content type schemas (Article/HowTo)")
+            if 'Organization' in unique_types:
+                type_score += 5
+                findings.append("Organization schema — entity context")
+            if 'WebSite' in unique_types:
+                type_score += 5
+
+            score += min(40, type_score)
+
+            # Quality bonus
+            quality_score = 0
+            if has_description:
+                quality_score += 5
+            if has_address_or_geo:
+                quality_score += 5
+                findings.append("Schema includes address/geo — strong local signal")
+            if len(unique_types) >= 3:
+                quality_score += 5
+                findings.append(f"Good schema coverage ({len(unique_types)} types)")
+            score += min(15, quality_score)
+
+        if 'FAQPage' not in set(schema_types):
+            recommendations.append("Add FAQPage schema — AI systems strongly prefer Q&A structured data")
     else:
-        recommendations.append("Add JSON-LD structured data (especially FAQPage)")
-    
+        recommendations.append("Add JSON-LD structured data (FAQPage, LocalBusiness/Service)")
+
     # Check for microdata/RDFa
     if soup.find_all(attrs={'itemtype': True}):
-        score += 10
+        score += 5
         findings.append("Microdata markup detected")
-    
+
     # Check Open Graph
     og_tags = soup.find_all('meta', property=lambda x: x and x.startswith('og:'))
     if len(og_tags) >= 4:
-        score += 15
+        score += 10
         findings.append(f"Rich Open Graph metadata ({len(og_tags)} tags)")
     elif og_tags:
         score += 5
-        recommendations.append("Expand Open Graph metadata coverage")
-    
+        recommendations.append("Expand Open Graph metadata (og:title, og:description, og:image, og:type)")
+    else:
+        recommendations.append("Add Open Graph metadata for social/AI sharing")
+
     if score < 30:
         recommendations.append("Implement comprehensive schema markup strategy")
-    
+
     status = "excellent" if score >= 70 else "good" if score >= 50 else "needs_improvement" if score >= 30 else "poor"
-    
+
     return AISearchFactor(
         name="Structured Data Quality",
-        score=score,
+        score=min(100, score),
         status=status,
         findings=findings,
         recommendations=recommendations
@@ -4670,16 +4723,41 @@ def _assess_content_comprehensiveness(content: Dict[str, Any], html: str, soup: 
         score += 8
     else:
         recommendations.append("Update content with current year/dates")
-    
+
     # Check for examples/case studies
     example_keywords = ['example', 'case study', 'for instance', 'such as']
     example_count = sum(html_lower.count(keyword) for keyword in example_keywords)
     if example_count >= 5:
         score += 10
         findings.append("Rich with examples and case studies")
-    
+
+    # Meta description quality (AI uses this for context)
+    meta_desc = soup.find('meta', attrs={'name': 'description'})
+    if meta_desc:
+        desc_len = len(meta_desc.get('content', ''))
+        if 120 <= desc_len <= 160:
+            score += 5
+            findings.append(f"Optimal meta description length ({desc_len} chars)")
+        elif desc_len > 50:
+            score += 3
+        else:
+            recommendations.append("Improve meta description (target: 120-160 characters)")
+
+    # Image alt text coverage (accessibility + AI understanding)
+    images = soup.find_all('img')
+    if images:
+        imgs_with_alt = sum(1 for img in images if img.get('alt') and len(img['alt'].strip()) > 3)
+        alt_ratio = imgs_with_alt / len(images) if images else 0
+        if alt_ratio >= 0.8:
+            score += 5
+            findings.append(f"Good image alt text coverage ({imgs_with_alt}/{len(images)} images)")
+        elif alt_ratio >= 0.5:
+            score += 3
+        else:
+            recommendations.append(f"Add descriptive alt text to images ({imgs_with_alt}/{len(images)} have alt)")
+
     status = "excellent" if score >= 75 else "good" if score >= 55 else "needs_improvement" if score >= 35 else "poor"
-    
+
     return AISearchFactor(
         name="Content Comprehensiveness",
         score=min(100, score),
@@ -4688,62 +4766,154 @@ def _assess_content_comprehensiveness(content: Dict[str, Any], html: str, soup: 
         recommendations=recommendations
     )
 
-def _check_authority_markers(technical: Dict[str, Any], basic: Dict[str, Any]) -> AISearchFactor:
-    """Check authority signals that AI models consider"""
+def _check_authority_markers(technical: Dict[str, Any], basic: Dict[str, Any], html: str = "", soup: BeautifulSoup = None) -> AISearchFactor:
+    """Check authority signals that AI models consider, including E-E-A-T"""
     score = 0
     findings = []
     recommendations = []
-    
-    # HTTPS (trust signal)
+
+    # HTTPS (trust signal) — 10p (baseline, nearly all sites have it)
     if basic.get('has_ssl', False):
-        score += 20
-        findings.append("HTTPS enabled - trusted source")
+        score += 10
+        findings.append("HTTPS enabled")
     else:
         recommendations.append("CRITICAL: Enable HTTPS for trust")
-    
-    # Security headers (additional trust)
+
+    # Security headers — 10p
     security_headers = technical.get('security_headers', {})
+    sec_pts = 0
     if security_headers.get('csp'):
-        score += 10
-        findings.append("Content Security Policy configured")
+        sec_pts += 5
     if security_headers.get('strict_transport'):
-        score += 10
-        findings.append("HSTS enabled")
-    
-    # Analytics/tracking (shows site is monitored)
-    if technical.get('has_analytics', False):
-        score += 15
-        findings.append("Analytics tracking - monitored website")
-    else:
-        recommendations.append("Add analytics to demonstrate active monitoring")
-    
-    # Technical SEO basics
-    if technical.get('has_sitemap', False):
-        score += 10
-        findings.append("Sitemap available")
-    else:
-        recommendations.append("Add XML sitemap")
-    
-    if technical.get('has_robots_txt', False):
-        score += 5
-        findings.append("Robots.txt configured")
-    
-    # Overall digital maturity as authority proxy
-    maturity = basic.get('digital_maturity_score', 0)
-    if maturity >= 70:
-        score += 20
-        findings.append("High digital maturity indicates authority")
-    elif maturity >= 50:
-        score += 10
-    
-    # Performance (fast sites = better user experience = authority signal)
+        sec_pts += 5
+    if sec_pts > 0:
+        score += sec_pts
+        findings.append(f"Security headers configured ({sec_pts}/10)")
+
+    # E-E-A-T signals — 30p (NEW)
+    eeat_score = 0
+    html_lower = html.lower() if html else ""
+
+    # Author/expertise signals
+    if soup:
+        # Check meta author
+        meta_author = soup.find('meta', attrs={'name': 'author'})
+        if meta_author and meta_author.get('content'):
+            eeat_score += 5
+            findings.append(f"Author metadata: {meta_author['content'][:30]}")
+
+        # Check rel="author" links or byline patterns
+        author_links = soup.find_all('a', rel='author') or soup.find_all(class_=lambda c: c and ('author' in str(c).lower() or 'byline' in str(c).lower()))
+        if author_links:
+            eeat_score += 5
+            findings.append("Author bylines found — E-E-A-T signal")
+
+    # About page / company info linked
+    about_patterns = ['about', 'about-us', 'tietoa', 'tietoa-meista', 'meistä', 'yritys', 'company']
+    if soup:
+        for a_tag in soup.find_all('a', href=True):
+            href = a_tag['href'].lower()
+            if any(p in href for p in about_patterns):
+                eeat_score += 5
+                findings.append("About/company page linked — trust signal")
+                break
+
+    # Contact info visible
+    if html_lower:
+        has_phone = bool(re.search(r'[\+]?\d{2,4}[\s\-]?\d{3,}[\s\-]?\d{3,}', html_lower))
+        has_email = bool(re.search(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', html_lower))
+        if has_phone or has_email:
+            eeat_score += 5
+            found = []
+            if has_phone: found.append("phone")
+            if has_email: found.append("email")
+            findings.append(f"Contact info visible ({', '.join(found)}) — trust signal")
+
+    # Credentials / expertise markers
+    expertise_patterns = ['certified', 'sertifioitu', 'licensed', 'toimilupa', 'akkreditoitu', 'accredited',
+                         'years of experience', 'vuoden kokemus', 'ammattitaito', 'expertise']
+    if html_lower and any(p in html_lower for p in expertise_patterns):
+        eeat_score += 5
+        findings.append("Expertise/credential markers found — E-E-A-T")
+
+    # Social proof
+    if html_lower:
+        social_proof = ['review', 'arvostelu', 'testimonial', 'suosittele', 'google review', 'rating']
+        if any(p in html_lower for p in social_proof):
+            eeat_score += 5
+            findings.append("Social proof/reviews detected — trust signal")
+
+    score += min(30, eeat_score)
+    if eeat_score < 10:
+        recommendations.append("Add E-E-A-T signals: author info, about page, expertise markers, reviews")
+
+    # Freshness metadata — 10p (NEW)
+    freshness_score = 0
+    if soup:
+        date_metas = [
+            ('article:published_time', 'og:updated_time', 'article:modified_time'),
+            ('datePublished', 'dateModified'),
+        ]
+        # Check meta tags
+        for meta in soup.find_all('meta'):
+            prop = meta.get('property', '') or meta.get('name', '')
+            if prop in ('article:published_time', 'article:modified_time', 'og:updated_time'):
+                freshness_score += 5
+                findings.append(f"Content date metadata found ({prop})")
+                break
+
+        # Check JSON-LD dateModified/datePublished
+        for script in soup.find_all('script', type='application/ld+json'):
+            try:
+                data = json.loads(script.string or '{}')
+                items = data.get('@graph', [data]) if isinstance(data, dict) else [data]
+                for item in items:
+                    if item.get('dateModified') or item.get('datePublished'):
+                        freshness_score += 5
+                        findings.append("Schema dateModified/datePublished — freshness signal for AI")
+                        break
+            except Exception:
+                pass
+            if freshness_score >= 10:
+                break
+
+    score += min(10, freshness_score)
+    if freshness_score == 0:
+        recommendations.append("Add date metadata (article:published_time, dateModified in JSON-LD)")
+
+    # Performance — 10p
     page_speed = technical.get('page_speed_score', 0)
     if page_speed >= 70:
         score += 10
-        findings.append("Fast page speed - good user experience")
-    
+        findings.append("Fast page speed — good user experience")
+    elif page_speed >= 40:
+        score += 5
+
+    # Analytics — 5p (minor, not direct AI signal)
+    if technical.get('has_analytics', False):
+        score += 5
+        findings.append("Analytics tracking active")
+
+    # Digital maturity — 10p
+    maturity = basic.get('digital_maturity_score', 0)
+    if maturity >= 70:
+        score += 10
+        findings.append("High digital maturity")
+    elif maturity >= 50:
+        score += 5
+
+    # Sitemap quality — 15p (moved here from ai_accessibility for authority context)
+    if technical.get('has_sitemap', False):
+        score += 10
+        findings.append("Sitemap available — content discoverability")
+    else:
+        recommendations.append("Add XML sitemap for content discoverability")
+
+    if technical.get('has_robots_txt', False):
+        score += 5
+
     status = "excellent" if score >= 70 else "good" if score >= 50 else "needs_improvement" if score >= 30 else "poor"
-    
+
     return AISearchFactor(
         name="Authority Signals",
         score=min(100, score),
@@ -4828,6 +4998,130 @@ def _check_conversational_readiness(html: str, soup: BeautifulSoup, content: Dic
         recommendations=recommendations
     )
 
+async def _check_ai_accessibility(url: str, technical: Dict[str, Any]) -> AISearchFactor:
+    """Check AI bot accessibility: llms.txt, robots.txt AI directives, sitemap quality"""
+    score = 0
+    findings = []
+    recommendations = []
+
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    base_url = f"{parsed.scheme}://{parsed.netloc}"
+
+    async with httpx.AsyncClient(
+        timeout=10,
+        follow_redirects=True,
+        verify=True,
+        limits=httpx.Limits(max_keepalive_connections=2, max_connections=4)
+    ) as client:
+        # --- a) llms.txt / llms-full.txt ---
+        has_llms_txt = False
+        for llms_path in ['/llms.txt', '/llms-full.txt']:
+            try:
+                res = await client.get(f"{base_url}{llms_path}", headers={"User-Agent": USER_AGENT})
+                if res.status_code == 200 and len(res.text.strip()) > 50:
+                    has_llms_txt = True
+                    score += 30
+                    findings.append(f"llms.txt found ({len(res.text)} chars) — explicit AI-friendly signal")
+                    if len(res.text) > 500:
+                        score += 10
+                        findings.append("Comprehensive llms.txt content (>500 chars)")
+                    break  # Don't double-count
+            except Exception:
+                pass
+
+        if not has_llms_txt:
+            recommendations.append("Add /llms.txt — structured content for AI systems (see llmstxt.org)")
+
+        # --- b) robots.txt AI bot directives ---
+        ai_bots = ['GPTBot', 'ChatGPT-User', 'CCBot', 'PerplexityBot', 'Google-Extended', 'Amazonbot', 'ClaudeBot', 'anthropic-ai']
+        robots_text = None
+        try:
+            res = await client.get(f"{base_url}/robots.txt", headers={"User-Agent": USER_AGENT})
+            if res.status_code == 200:
+                robots_text = res.text
+                score += 5  # Has robots.txt at all
+                findings.append("robots.txt found")
+        except Exception:
+            pass
+
+        if robots_text:
+            # Parse robots.txt for AI bot rules
+            blocked_bots = []
+            allowed_bots = []
+            lines = robots_text.lower().split('\n')
+            current_agents = []
+
+            for line in lines:
+                line = line.strip()
+                if line.startswith('user-agent:'):
+                    agent = line.split(':', 1)[1].strip()
+                    current_agents = [agent]
+                elif line.startswith('disallow:') and current_agents:
+                    path = line.split(':', 1)[1].strip()
+                    if path == '/' or path == '/*':
+                        for agent in current_agents:
+                            for bot in ai_bots:
+                                if bot.lower() == agent or agent == '*':
+                                    if agent != '*':  # Only count specific blocks
+                                        blocked_bots.append(bot)
+
+            # Check which AI bots are specifically blocked
+            blocked_set = set(b.lower() for b in blocked_bots)
+            for bot in ai_bots:
+                if bot.lower() not in blocked_set:
+                    allowed_bots.append(bot)
+
+            if len(blocked_bots) == 0:
+                score += 25
+                findings.append(f"All AI bots allowed (GPTBot, PerplexityBot, ClaudeBot, etc.)")
+            elif len(blocked_bots) < len(ai_bots) // 2:
+                score += 15
+                findings.append(f"Most AI bots allowed ({len(blocked_bots)} blocked: {', '.join(blocked_bots[:3])})")
+                recommendations.append(f"Consider unblocking: {', '.join(blocked_bots)}")
+            else:
+                findings.append(f"AI bots blocked in robots.txt: {', '.join(blocked_bots)}")
+                recommendations.append("Unblock AI crawlers (GPTBot, PerplexityBot) to improve AI visibility")
+        else:
+            score += 10  # No robots.txt = default allow
+            findings.append("No robots.txt — AI bots can access by default")
+            recommendations.append("Add robots.txt with explicit AI bot permissions")
+
+        # --- c) Bonus: both llms.txt AND allowed bots ---
+        if has_llms_txt and (not robots_text or len(blocked_bots) == 0):
+            score += 15
+            findings.append("Excellent: both llms.txt and open AI bot access — proactive AI strategy")
+
+        # --- d) Sitemap quality check ---
+        if technical.get('has_sitemap', False):
+            try:
+                sitemap_url = f"{base_url}/sitemap.xml"
+                res = await client.get(sitemap_url, headers={"User-Agent": USER_AGENT})
+                if res.status_code == 200 and '<url>' in res.text:
+                    url_count = res.text.count('<url>')
+                    score += 15
+                    findings.append(f"Sitemap.xml with {url_count} URLs — helps AI discover content")
+                    # Check lastmod dates
+                    if '<lastmod>' in res.text:
+                        findings.append("Sitemap includes lastmod dates — freshness signal")
+                else:
+                    score += 5
+                    recommendations.append("Improve sitemap.xml with proper <url> entries")
+            except Exception:
+                score += 5  # Has sitemap but couldn't verify quality
+        else:
+            recommendations.append("Add sitemap.xml to help AI systems discover all content")
+
+    status = "excellent" if score >= 70 else "good" if score >= 50 else "needs_improvement" if score >= 30 else "poor"
+
+    return AISearchFactor(
+        name="AI Accessibility",
+        score=min(100, score),
+        status=status,
+        findings=findings,
+        recommendations=recommendations
+    )
+
 async def analyze_ai_search_visibility(
     url: str,
     html: str,
@@ -4837,81 +5131,112 @@ async def analyze_ai_search_visibility(
     social: Dict[str, Any]
 ) -> AISearchVisibility:
     """
-    Complete AI search visibility analysis
-    Nordic First: Systematic analysis of ChatGPT & Perplexity readiness
+    Complete AI search visibility analysis — 6 factors
+    Checks: structured data, semantic structure, content depth,
+    authority/E-E-A-T, conversational readiness, AI accessibility (llms.txt + robots.txt)
     """
-    
+
     soup = BeautifulSoup(html, 'html.parser')
-    
-    # Run all factor analyses
+
+    # Run all factor analyses (6 factors)
     factors = {
         'structured_data': _check_schema_markup(html, soup),
         'semantic_structure': _check_semantic_structure(html, soup),
         'content_depth': _assess_content_comprehensiveness(content, html, soup),
-        'authority_signals': _check_authority_markers(technical, basic),
-        'conversational_format': _check_conversational_readiness(html, soup, content)
+        'authority_signals': _check_authority_markers(technical, basic, html, soup),
+        'conversational_format': _check_conversational_readiness(html, soup, content),
+        'ai_accessibility': await _check_ai_accessibility(url, technical),
     }
-    
+
     # Calculate overall scores
     factor_scores = [f.score for f in factors.values()]
     overall_score = int(sum(factor_scores) / len(factor_scores))
-    
-    # ChatGPT readiness (emphasizes content depth + structure)
+
+    # ChatGPT readiness (emphasizes content + structure + accessibility)
     chatgpt_score = int(
-        factors['content_depth'].score * 0.35 +
-        factors['structured_data'].score * 0.25 +
-        factors['conversational_format'].score * 0.20 +
-        factors['semantic_structure'].score * 0.15 +
-        factors['authority_signals'].score * 0.05
-    )
-    
-    # Perplexity readiness (emphasizes authority + freshness)
-    perplexity_score = int(
-        factors['authority_signals'].score * 0.30 +
         factors['content_depth'].score * 0.25 +
         factors['structured_data'].score * 0.20 +
-        factors['semantic_structure'].score * 0.15 +
+        factors['conversational_format'].score * 0.20 +
+        factors['ai_accessibility'].score * 0.15 +
+        factors['semantic_structure'].score * 0.10 +
+        factors['authority_signals'].score * 0.10
+    )
+
+    # Perplexity readiness (emphasizes authority + accessibility + content)
+    perplexity_score = int(
+        factors['authority_signals'].score * 0.25 +
+        factors['ai_accessibility'].score * 0.20 +
+        factors['content_depth'].score * 0.20 +
+        factors['structured_data'].score * 0.15 +
+        factors['semantic_structure'].score * 0.10 +
         factors['conversational_format'].score * 0.10
     )
-    
+
+    # Determine validation status based on factor coverage
+    all_above_50 = all(f.score >= 50 for f in factors.values())
+    validation_status = "validated" if all_above_50 else "estimated"
+
     # Generate key insights
     key_insights = []
     priority_actions = []
-    
-    # Find weakest factors
+
+    # Find weakest and strongest factors
     weak_factors = [(name, factor) for name, factor in factors.items() if factor.score < 50]
     strong_factors = [(name, factor) for name, factor in factors.items() if factor.score >= 70]
-    
+
     if strong_factors:
-        key_insights.append(f"Strong in: {', '.join(f[1].name for f in strong_factors[:2])}")
-    
+        key_insights.append(f"Strong in: {', '.join(f[1].name for f in strong_factors[:3])}")
+
     if weak_factors:
-        key_insights.append(f"Improvement needed: {', '.join(f[1].name for f in weak_factors[:2])}")
+        key_insights.append(f"Improvement needed: {', '.join(f[1].name for f in weak_factors[:3])}")
         for name, factor in weak_factors[:3]:
             if factor.recommendations:
                 priority_actions.extend(factor.recommendations[:2])
-    
-    # Add specific insights based on scores
+
+    # AI accessibility specific insight
+    ai_acc = factors['ai_accessibility']
+    if ai_acc.score < 30:
+        key_insights.append("AI bots may be blocked or llms.txt missing — low AI discoverability")
+    elif ai_acc.score >= 70:
+        key_insights.append("Proactive AI strategy: content accessible to AI systems")
+
+    # ChatGPT/Perplexity specific insights
     if chatgpt_score < 50:
-        key_insights.append("Limited ChatGPT citation likelihood - focus on content depth and Q&A format")
+        key_insights.append("Limited ChatGPT citation likelihood — focus on content depth and Q&A format")
     elif chatgpt_score >= 70:
-        key_insights.append("Good ChatGPT readiness - likely to be cited in relevant queries")
-    
+        key_insights.append("Good ChatGPT readiness — likely to be cited in relevant queries")
+
     if perplexity_score < 50:
-        key_insights.append("Weak Perplexity ranking signals - strengthen authority markers")
+        key_insights.append("Weak Perplexity ranking — strengthen authority markers and AI accessibility")
     elif perplexity_score >= 70:
-        key_insights.append("Strong Perplexity positioning - authoritative source signals present")
-    
-    # Nordic first positioning
+        key_insights.append("Strong Perplexity positioning — authoritative source signals present")
+
+    # Use model_dump() for Pydantic v2 compatibility
+    factor_dicts = {}
+    for name, factor in factors.items():
+        if hasattr(factor, 'model_dump'):
+            factor_dicts[name] = factor.model_dump()
+        else:
+            factor_dicts[name] = factor.dict()
+
+    # Competitive advantage — derived from score, not hardcoded
     if overall_score >= 70:
-        key_insights.append("🌟 Above-average AI search readiness - competitive advantage in Nordics")
-    
+        competitive_advantage = "Strong AI search readiness — ahead of most competitors"
+    elif overall_score >= 50:
+        competitive_advantage = "Moderate AI readiness — room for improvement"
+    elif overall_score >= 30:
+        competitive_advantage = "Basic AI presence — significant improvement needed"
+    else:
+        competitive_advantage = "Low AI visibility — not discoverable by AI search engines"
+
     return AISearchVisibility(
         chatgpt_readiness_score=chatgpt_score,
         perplexity_readiness_score=perplexity_score,
         overall_ai_search_score=overall_score,
-        factors={name: factor.dict() for name, factor in factors.items()},
-        key_insights=key_insights[:5],
+        competitive_advantage=competitive_advantage,
+        validation_status=validation_status,
+        factors=factor_dicts,
+        key_insights=key_insights[:6],
         priority_actions=priority_actions[:5]
     )
     
