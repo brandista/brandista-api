@@ -24,6 +24,7 @@ from .agent_types import (
 )
 from .communication import MessageType, MessagePriority
 from .blackboard import DataCategory
+from .url_utils import clean_url, get_domain_from_url
 
 # Company Intelligence for due diligence
 try:
@@ -90,8 +91,6 @@ class ScoutAgent(BaseAgent):
             get_website_content,
             multi_provider_search,
             generate_smart_search_terms,
-            clean_url,
-            get_domain_from_url
         )
         
         # DEBUG: Log at very start of run
@@ -528,7 +527,6 @@ class ScoutAgent(BaseAgent):
         url_lower = url.lower()
 
         # Also check domain name for industry hints
-        from main import get_domain_from_url
         domain = get_domain_from_url(url).lower()
 
         # Combine all text for analysis
@@ -588,8 +586,6 @@ class ScoutAgent(BaseAgent):
         competitor_urls: List[str],
         own_url: str
     ) -> List[str]:
-        from main import get_domain_from_url, clean_url
-        
         own_domain = get_domain_from_url(own_url)
         validated = []
         
@@ -626,8 +622,6 @@ class ScoutAgent(BaseAgent):
         own_url: str,
         industry: str
     ) -> List[Dict[str, Any]]:
-        from main import get_domain_from_url
-
         own_domain = get_domain_from_url(own_url)
         scored = []
 
