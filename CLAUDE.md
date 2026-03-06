@@ -37,6 +37,7 @@ Brandista Growth Engine - AI-pohjainen markkinointianalyysi- ja strategiatyökal
 - `main.py` - Pää-API, AI-näkyvyysanalyysi (6 faktoria), hakutermien käännökset
 - `agents/scoring_constants.py` - Yhtenäiset kynnysarvot, painot ja apufunktiot kaikille agenteille
 - `agents/scout_agent.py` - Toimialan tunnistus, kilpailijoiden pisteytys
+- `agents/url_utils.py` - URL-apufunktiot (clean_url, get_domain_from_url) — eristetty main.py:stä
 - `database.py` - Tietokantayhteydet
 - `auth_magic_link.py` - Magic link -kirjautuminen
 - `stripe_module.py` - Maksut
@@ -72,12 +73,11 @@ INDUSTRY_TRANSLATIONS = {
 ```
 
 ## Testaus
-- **Testit**: `python3 -m pytest tests/ -x -q` (342 testiä / 29 skipped)
-- **Tunnettu**: `test_detect_industry_technology` failaa lokaalisti (puuttuva `jwt`-moduuli)
+- **Testit**: `python3 -m pytest tests/ -x -q` (416 testiä läpi, 29 skipped, 0 failed)
 - **Manuaalinen**: https://brandista.eu/growthengine/dashboard → aloita analyysi → tarkista Railway logit
 
 ## Versiohistoria
-- **Versio**: 2.3.1
+- **Versio**: 2.3.2
 - **Changelog**: `CHANGELOG.md`
 
 ## Kehityskäytännöt

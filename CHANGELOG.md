@@ -5,6 +5,33 @@ Muoto: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [2.3.2] - 2026-03-06
+
+### Lisätty
+
+#### Yksikkötestit — scoring_constants + schema markup
+- **58 uutta testiä** (40 + 18), kaikki läpi
+- `tests/unit/test_scoring_constants.py` — kattaa kaikki scoring_constants.py:n funktiot:
+  - `interpret_score()` raja-arvot ja boundary-testit
+  - `factor_status()` luokittelut
+  - `score_to_risk_level()`, `calculate_roi_score()`, `classify_financial_risk()`
+  - `get_positioning_tier()`, `get_competitive_position()`, `classify_tech_modernity()`
+  - Painojen konsistenssi: ChatGPT/Perplexity/Strategic summat = 1.0, samat faktorit
+- `tests/unit/test_schema_markup.py` — testaa `_check_schema_markup()` eristetysti (exec-lähestymistapa, ei tarvitse main.py:n raskaita importteja):
+  - BemuFix.fi:n oikea AutoRepair + OfferCatalog schema
+  - Sisäkkäisten tyyppien tunnistus, address/geo, catalog richness
+  - @graph-muoto (WordPress/Yoast), FAQPage, microdata, OG-tagit
+
+#### URL-utilityjen eristäminen (`agents/url_utils.py`)
+- `get_domain_from_url()` ja `clean_url()` siirretty `main.py`:stä omaan moduuliin
+- `scout_agent.py` importtaa nyt `url_utils`:sta → ei enää vedä koko main.py:tä mukaansa
+- **Korjasi 4 failaavaa testiä** (TestIndustryDetection): `ModuleNotFoundError: jwt` poistui
+
+### Korjattu
+- **416/416 testiä läpi**, 0 virhettä (aiemmin 412/445 + 4 failed)
+
+---
+
 ## [2.3.1] - 2026-03-05
 
 ### Korjattu
