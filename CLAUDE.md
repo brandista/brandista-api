@@ -21,10 +21,36 @@ Brandista Growth Engine - AI-pohjainen markkinointianalyysi- ja strategiatyökal
 - `analyst_agent.py` - Data-analyysi
 - `strategist_agent.py` - Strategiasuositukset
 - `planner_agent.py` - 90 päivän suunnitelmat
-- `guardian_agent.py` - Laadunvalvonta ja uhka-ennusteet (Learning System)
+- `guardian_agent.py` - Laadunvalvonta, uhka-ennusteet + Gustav 2.0 Competitive Intelligence integraatio
 - `prospector_agent.py` - Liiketoimintamahdollisuudet
 - `orchestrator.py` - Agenttien koordinointi + oppimisen verifikaatio
 - `blackboard.py` - Agenttien välinen tiedonjako
+
+### Gustav 2.0 — Business Threat Intelligence (v3.0.0)
+- `competitive_intelligence.py` - Battlecards, action playbooks, uhkakorrelaatiot, inaction cost
+- `threat_history.py` - Snapshots, deltas, trend prediction, recurring threats
+- `intelligence_brief.py` - Executive briefs (CEO-luettava, template + LLM)
+- `guardian_pulse.py` - Pulse monitoring, ContentHashTracker, kilpailijamuutosten havaitseminen
+- `hallucination_guard.py` - 4-kerroksinen anti-hallusinaatiojärjestelmä (provenance, guardrails, validation, transparency)
+
+## Anti-Hallusinaatio (Hallucination Guard) — AKTIIVINEN v3.0.0
+- **4 kerrosta**: Data Provenance → Prompt Guardrails → Post-generation Validation → Transparency Markers
+- **ProvenanceTracker**: Jokainen luku jäljitettävissä lähteeseen (HTML_ANALYSIS, WHOIS, BUSINESS_REGISTRY, SCORE_CALCULATION, ym.)
+- **ConfidenceLevel**: VERIFIED → CALCULATED → ESTIMATED → SPECULATIVE (heikoin lenkki määrää kokonaisluottamuksen)
+- **Prompt Guardrails**: ANTI_HALLUCINATION_SUFFIX (fi/en) lisätään kaikkiin LLM-prompteihin
+- **OutputValidator**: Tarkistaa LLM-outputin tunnettujen faktojen perusteella (yritysnimet, euromäärät, prosentit)
+- **TransparencyEnvelope**: Rahoitusestimaatit wrappautuvat {value, best_case, worst_case, is_estimate, confidence}
+- **IntelligenceGuard**: Korkean tason API — käytössä competitive_intelligence.py:ssä + guardian_pulse.py:ssä
+
+## Competitive Intelligence (Gustav 2.0) — AKTIIVINEN v3.0.0
+- **Battlecards**: Head-to-head vertailu 8 ulottuvuudessa per kilpailija (content, seo, performance, trust, mobile, company_size, digital_breadth, growth_signals)
+- **Action Playbooks**: Konkreettiset toimenpiteet ROI-laskelmilla (ACTION_COST_MATRIX: 9 toimenpidetyyppiä)
+- **6 uhkakorrelaatiota**: Content Gap Attack, Digital Erosion, Competitive Surge, AI Invisibility, Trust Collapse, Market Displacement
+- **Inaction Cost**: Toimimattomuuden hinta per kategoria (estimaatti + vaihteluväli)
+- **Threat History**: Snapshots + deltas (NEW/ESCALATED/MITIGATED/RESOLVED/RECURRING) + lineaarinen regressio trendi
+- **Executive Briefs**: CEO-luettava brief: key findings, top actions, trend, competitive position
+- **Guardian Pulse**: Kilpailijoiden muutosten havaitseminen (content hash), HTTP health, SSL, response time
+- **Integraatio**: `guardian_agent.py` execute() → `competitive_intelligence` dict returnissa
 
 ## Oppiminen (Learning System) — AKTIIVINEN v2.2.2
 - **Infra**: `agents/learning.py` — ennusteiden seuranta, verifikaatio, trendit
@@ -38,6 +64,11 @@ Brandista Growth Engine - AI-pohjainen markkinointianalyysi- ja strategiatyökal
 - `agents/scoring_constants.py` - Yhtenäiset kynnysarvot, painot ja apufunktiot kaikille agenteille
 - `agents/scout_agent.py` - Toimialan tunnistus, kilpailijoiden pisteytys
 - `agents/url_utils.py` - URL-apufunktiot (clean_url, get_domain_from_url) — eristetty main.py:stä
+- `agents/competitive_intelligence.py` - Gustav 2.0 Competitive Intelligence Engine (~1180 riviä)
+- `agents/hallucination_guard.py` - Anti-hallusinaatiojärjestelmä (~450 riviä)
+- `agents/threat_history.py` - Threat History & Predictive Analytics (~420 riviä)
+- `agents/intelligence_brief.py` - Executive Intelligence Briefs (~310 riviä)
+- `agents/guardian_pulse.py` - Guardian Pulse Monitoring (~290 riviä)
 - `database.py` - Tietokantayhteydet
 - `auth_magic_link.py` - Magic link -kirjautuminen
 - `stripe_module.py` - Maksut
@@ -73,11 +104,17 @@ INDUSTRY_TRANSLATIONS = {
 ```
 
 ## Testaus
-- **Testit**: `python3 -m pytest tests/ -x -q` (416 testiä läpi, 29 skipped, 0 failed)
+- **Testit**: `python3 -m pytest tests/ -x -q` (545 testiä läpi, 29 skipped, 0 failed)
+- **Gustav 2.0 testit** (115 uutta):
+  - `test_hallucination_guard.py` — 28 testiä
+  - `test_competitive_intelligence.py` — 42 testiä
+  - `test_threat_history.py` — 23 testiä
+  - `test_intelligence_brief.py` — 8 testiä
+  - `test_guardian_pulse.py` — 14 testiä
 - **Manuaalinen**: https://brandista.eu/growthengine/dashboard → aloita analyysi → tarkista Railway logit
 
 ## Versiohistoria
-- **Versio**: 2.3.2
+- **Versio**: 3.0.0 (Gustav 2.0: Business Threat Intelligence)
 - **Changelog**: `CHANGELOG.md`
 
 ## Kehityskäytännöt

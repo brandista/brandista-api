@@ -5,6 +5,55 @@ Muoto: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.0.0] - 2026-03-07 — Gustav 2.0: Business Threat Intelligence
+
+### Lisätty
+
+#### Gustav 2.0 — Competitive Intelligence Engine (Phase 1)
+- **`agents/competitive_intelligence.py`** — CompetitiveIntelligenceEngine
+  - Battlecards: head-to-head vertailu 8 ulottuvuudessa per kilpailija
+  - Action Playbooks: konkreettiset toimenpiteet ROI-laskelmilla (ACTION_COST_MATRIX)
+  - 6 uhkakorrelaatiota: Content Gap Attack, Digital Erosion, Competitive Surge, AI Invisibility, Trust Collapse, Market Displacement
+  - Inaction Cost: toimimattomuuden hinta per kategoria (estimaatti + vaihteluväli)
+  - Integroitu `guardian_agent.py` execute():iin → `competitive_intelligence` dict returnissa
+
+#### Gustav 2.0 — Threat History & Predictive Analytics (Phase 2)
+- **`agents/threat_history.py`** — ThreatHistoryManager
+  - Snapshots: analyysitilanteen tallennus (in-memory, DB-backing API-tasolla)
+  - Deltas: NEW, ESCALATED, MITIGATED, RESOLVED, RECURRING uhkakategoriat
+  - Trend Prediction: lineaarinen regressio, confidence scoring, threshold detection
+  - Recurring Threats: uhkat joita ei korjata + kumulatiivinen hinta
+
+#### Gustav 2.0 — Executive Intelligence Briefs (Phase 3)
+- **`agents/intelligence_brief.py`** — IntelligenceBriefGenerator
+  - CEO-luettava brief: key findings, top actions, trend, competitive position
+  - Template-pohjainen narratiivi (ei vaadi LLM:ää perusversiolle)
+  - LLM-prompt rakentaja anti-hallusinaatio-guardrailsein
+
+#### Gustav 2.0 — Guardian Pulse Monitoring (Phase 4)
+- **`agents/guardian_pulse.py`** — GuardianPulse
+  - ContentHashTracker: kilpailijoiden muutosten havaitseminen (title, content, schema, pages)
+  - Pulse checks: HTTP health, response time, SSL, kilpailijamuutokset
+  - Alert generation kontekstuaalisilla LLM-prompteilla
+
+#### Anti-Hallucination Guard System
+- **`agents/hallucination_guard.py`** — 4-kerroksinen suojajärjestelmä
+  - Data Provenance: jokainen luku jäljitettävissä lähteeseen (DataSource, ConfidenceLevel)
+  - Prompt Guardrails: ANTI_HALLUCINATION_SUFFIX kaikissa LLM-prompteissa
+  - Post-generation Validation: OutputValidator tarkistaa LLM-outputin input-dataa vasten
+  - Transparency Markers: estimaatit wrappautuvat best/worst case -arvioilla
+  - IntelligenceGuard: korkean tason API koko järjestelmään
+  - Data Quality Summary: kokonaislaatu 0-100 + kuvaus fi/en
+
+#### 115 uutta yksikkötestiä (545 yhteensä, 0 failannutta)
+- `test_hallucination_guard.py` — 28 testiä (provenance, guardrails, validation, transparency)
+- `test_competitive_intelligence.py` — 42 testiä (battlecards, actions, correlations, inaction cost)
+- `test_threat_history.py` — 23 testiä (snapshots, deltas, trends, recurring)
+- `test_intelligence_brief.py` — 8 testiä (brief generation, narratives, prompts)
+- `test_guardian_pulse.py` — 14 testiä (hash tracking, pulse checks, alerts)
+
+---
+
 ## [2.3.2] - 2026-03-06
 
 ### Lisätty
