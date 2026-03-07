@@ -741,6 +741,66 @@ class GuardianAgent(BaseAgent):
 
         logger.info(f"[Guardian] ✅ Added {len(threats)} threats and {len(priority_actions)} actions to SharedKnowledge")
 
+        # ====================================================================
+        # GUSTAV 2.0: Competitive Intelligence Engine
+        # Generates battlecards, correlations, and inaction cost with
+        # anti-hallucination guardrails (data provenance + transparency)
+        # ====================================================================
+        competitive_intelligence = {}
+        try:
+            from .competitive_intelligence import CompetitiveIntelligenceEngine
+
+            # Detect industry for cost/ROI benchmarks
+            detected_industry = 'general'
+            if USE_NEW_REVENUE_MODEL:
+                try:
+                    detected_industry = industry  # from detect_industry() above
+                except NameError:
+                    pass
+
+            engine = CompetitiveIntelligenceEngine(
+                your_analysis=your_analysis,
+                competitor_analyses=competitor_analyses,
+                competitor_assessments=competitor_threat_assessment.get('assessments', []),
+                category_comparison=category_comparison,
+                benchmark=benchmark,
+                annual_revenue=annual_revenue,
+                industry=detected_industry,
+                language=context.language or 'fi',
+            )
+
+            competitive_intelligence = engine.generate_full_intelligence()
+            bc_count = len(competitive_intelligence.get('battlecards', []))
+            corr_count = len(competitive_intelligence.get('correlated_intelligence', []))
+            quality = competitive_intelligence.get('data_quality', {}).get('quality_score', 0)
+
+            logger.info(
+                f"[Guardian] 🏆 Gustav 2.0: {bc_count} battlecards, "
+                f"{corr_count} correlations, data quality: {quality}/100"
+            )
+
+            # Emit insight (use direct string since translation key may not exist yet)
+            intel_msg = (
+                f"Kilpailutiedustelu valmis: {bc_count} battlecardia, {corr_count} korrelaatiota"
+                if (context.language or 'fi') == 'fi' else
+                f"Competitive intelligence ready: {bc_count} battlecards, {corr_count} correlations"
+            )
+            self._emit_insight(
+                intel_msg,
+                priority=AgentPriority.HIGH,
+                insight_type=InsightType.FINDING,
+                data={'battlecard_count': bc_count, 'correlation_count': corr_count}
+            )
+
+        except Exception as e:
+            logger.error(f"[Guardian] Gustav 2.0 competitive intelligence failed: {e}", exc_info=True)
+            competitive_intelligence = {
+                'error': str(e),
+                'battlecards': [],
+                'correlated_intelligence': [],
+                'inaction_cost': {},
+            }
+
         return {
             'threats': threats,
             'risk_register': risk_register,
@@ -761,7 +821,9 @@ class GuardianAgent(BaseAgent):
             'swarm_contributions': {
                 'external_alerts_processed': len(self._external_alerts),
                 'blackboard_data_used': self._has_new_competitor_data
-            }
+            },
+            # GUSTAV 2.0: Competitive Intelligence
+            'competitive_intelligence': competitive_intelligence,
         }
 
     async def _collaborate_with_prospector(
