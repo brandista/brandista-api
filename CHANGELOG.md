@@ -45,7 +45,7 @@ Muoto: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   - IntelligenceGuard: korkean tason API koko järjestelmään
   - Data Quality Summary: kokonaislaatu 0-100 + kuvaus fi/en
 
-#### 115 uutta yksikkötestiä (545 yhteensä, 0 failannutta)
+#### 115 uutta yksikkötestiä
 - `test_hallucination_guard.py` — 28 testiä (provenance, guardrails, validation, transparency)
 - `test_competitive_intelligence.py` — 42 testiä (battlecards, actions, correlations, inaction cost)
 - `test_threat_history.py` — 23 testiä (snapshots, deltas, trends, recurring)

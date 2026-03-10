@@ -12,7 +12,7 @@ Brandista Growth Engine - AI-pohjainen markkinointianalyysi- ja strategiatyökal
 - **Frontend**: Erillinen repo `brandista-frontend 2 agentit`
 
 ## Tuotanto
-- **API URL**: Railway project `69c31d7d-071c-4a66-9d8c-35ea735327ed`
+- **Railway project ID**: `69c31d7d-071c-4a66-9d8c-35ea735327ed`
 - **Frontend**: https://brandista.eu/growthengine/dashboard
 - **Logit**: Railway Logs-välilehti
 
@@ -60,7 +60,8 @@ Brandista Growth Engine - AI-pohjainen markkinointianalyysi- ja strategiatyökal
 - **Tilastot**: `swarm_summary.learning` sisältää verified/correct/accuracy per analyysi
 
 ## Tärkeät tiedostot
-- `main.py` - Pää-API, AI-näkyvyysanalyysi (6 faktoria), hakutermien käännökset
+- `main.py` - Legacy pää-API (11500+ riviä), AI-näkyvyysanalyysi (6 faktoria), hakutermien käännökset. **Tuotannon entrypoint** (Railway Nixpacks auto-detect)
+- `app/main.py` - Refaktoroitu modulaarinen entrypoint (importtaa agentteja `agents/`-kansiosta). Kehitysversio, EI vielä tuotannossa
 - `agents/scoring_constants.py` - Yhtenäiset kynnysarvot, painot ja apufunktiot kaikille agenteille
 - `agents/scout_agent.py` - Toimialan tunnistus, kilpailijoiden pisteytys
 - `agents/url_utils.py` - URL-apufunktiot (clean_url, get_domain_from_url) — eristetty main.py:stä
@@ -81,20 +82,6 @@ Brandista Growth Engine - AI-pohjainen markkinointianalyysi- ja strategiatyökal
 - **Painot**: `CHATGPT_WEIGHTS` (sisältö+rakenne), `PERPLEXITY_WEIGHTS` (auktoriteetti+saavutettavuus)
 - **Riski**: Prosenttipohjainen (>10%/5%/2% liikevaihdosta), ei kiinteitä EUR-rajoja
 
-## Tunnetut ongelmat (5.2.2026)
-
-### ✅ KORJATTU: Progress-palkit katoavat
-- Syy: `useEffect` kutsuttiin uudelleen GrowthEngine.tsx:ssä
-- Korjaus: Jaettu kahteen erilliseen `useEffect`-hookiin
-
-### 🔄 ODOTTAA TESTAUSTA: Kilpailijahaku
-- Ongelma: kultajousi.fi → löytää "Laite-Saraka Oy" (väärä toimiala)
-- Korjaukset:
-  - Hakutermit käännetty oikeaksi suomeksi
-  - Domain-nimi tarkistetaan toimialaavainsanoista
-  - Tunnetut brändit lisätty (kultajousi, kultakeskus)
-- Jos ei toimi: Lisää kovakoodattu kilpailijalista per toimiala
-
 ## Toimialakäännökset (main.py)
 ```python
 INDUSTRY_TRANSLATIONS = {
@@ -104,13 +91,9 @@ INDUSTRY_TRANSLATIONS = {
 ```
 
 ## Testaus
-- **Testit**: `python3 -m pytest tests/ -x -q` (545 testiä läpi, 29 skipped, 0 failed)
-- **Gustav 2.0 testit** (115 uutta):
-  - `test_hallucination_guard.py` — 28 testiä
-  - `test_competitive_intelligence.py` — 42 testiä
-  - `test_threat_history.py` — 23 testiä
-  - `test_intelligence_brief.py` — 8 testiä
-  - `test_guardian_pulse.py` — 14 testiä
+- **Aja testit**: `python3 -m pytest tests/ -x -q` (tarkista aina tuore tulos, älä luota dokumentoituun lukuun)
+- **Gustav 2.0 testisuitet**:
+  - `test_hallucination_guard.py`, `test_competitive_intelligence.py`, `test_threat_history.py`, `test_intelligence_brief.py`, `test_guardian_pulse.py`
 - **Manuaalinen**: https://brandista.eu/growthengine/dashboard → aloita analyysi → tarkista Railway logit
 
 ## Versiohistoria
