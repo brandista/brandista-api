@@ -443,17 +443,27 @@ class GuardianAgent(BaseAgent):
             logger.info(f"[Guardian] Detected risks: {detected_risks}")
             
             # Hae HTML sisalto presence-tunnistusta varten
-            html_content = basic_data.get('html_content', '')
+            # Prefer HTML already fetched by ScoutAgent (stored in run context)
+            html_content = (
+                getattr(context, 'html_content', None)
+                or basic_data.get('html_content', '')
+                or ""
+            )
+
             if not html_content:
-                # Yritetaan hakea URL:sta
+                # Fallback: fetch only if not available from earlier agents
+                logger.debug("[Guardian] html_content not in context, fetching from %s", context.url)
                 try:
                     import httpx
                     async with httpx.AsyncClient(timeout=10.0) as client:
                         resp = await client.get(context.url)
                         html_content = resp.text[:50000]  # Max 50KB
                 except Exception as e:
-                    logger.warning(f"[Guardian] Could not fetch HTML for presence detection: {e}")
+                    logger.warning("[Guardian] Could not fetch HTML for presence detection: %s", e)
                     html_content = ''
+            else:
+                html_content = html_content[:50000]
+                logger.debug("[Guardian] Using cached HTML from context (%d chars)", len(html_content))
             
             # Laske realistinen revenue impact
             revenue_impact_analysis = calculate_revenue_impact(

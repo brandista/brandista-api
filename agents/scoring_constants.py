@@ -210,13 +210,15 @@ PERPLEXITY_WEIGHTS = {
 STRATEGIC_CATEGORY_WEIGHTS = {
     'seo': 0.10,
     'performance': 0.10,
-    'security': 0.10,
+    'security': 0.10,          # Technical security audit score (from analyst/category comparison)
     'content': 0.20,
     'ux': 0.15,
     'ai_visibility': 0.15,
-    'security_posture': 0.10,
+    'security_posture': 0.10,  # RASM risk-assessment score (from guardian_agent, rasm_score)
     'competitive_edge': 0.10,
 }
+assert abs(sum(STRATEGIC_CATEGORY_WEIGHTS.values()) - 1.0) < 0.001, \
+    f"STRATEGIC_CATEGORY_WEIGHTS must sum to 1.0, got {sum(STRATEGIC_CATEGORY_WEIGHTS.values())}"
 
 # Strategic defense/growth mode thresholds
 STRATEGIC_DEFENSE_THRESHOLD = 50   # Below 50 = defense mode (1.5x weight)

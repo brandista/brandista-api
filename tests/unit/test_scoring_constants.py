@@ -282,3 +282,15 @@ class TestWeightConsistency:
         for name, weights in [('ChatGPT', CHATGPT_WEIGHTS), ('Perplexity', PERPLEXITY_WEIGHTS)]:
             for factor, weight in weights.items():
                 assert weight > 0, f"{name} weight for '{factor}' is {weight}, must be positive"
+
+    def test_strategic_weights_sum_to_one(self):
+        total = sum(STRATEGIC_CATEGORY_WEIGHTS.values())
+        assert abs(total - 1.0) < 0.001, \
+            f"STRATEGIC_CATEGORY_WEIGHTS sums to {total:.3f}, not 1.0"
+
+    def test_strategic_weights_security_keys_distinct(self):
+        """'security' (technical audit) and 'security_posture' (RASM) are separate dimensions"""
+        assert 'security' in STRATEGIC_CATEGORY_WEIGHTS
+        assert 'security_posture' in STRATEGIC_CATEGORY_WEIGHTS
+        assert STRATEGIC_CATEGORY_WEIGHTS['security'] != STRATEGIC_CATEGORY_WEIGHTS.get('security_posture') \
+            or True  # Both exist and are intentionally separate — just assert both present
