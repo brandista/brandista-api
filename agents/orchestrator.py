@@ -159,7 +159,9 @@ class GrowthEngineOrchestrator:
         if user_id:
             try:
                 from unified_context import get_unified_context
-                unified_context_data = get_unified_context(user_id).to_dict()
+                from database import run_in_db_thread
+                raw = await run_in_db_thread(get_unified_context, user_id)
+                unified_context_data = raw.to_dict() if raw else {}
             except Exception as e:
                 logger.warning(f"[Orchestrator] Unified context error: {e}")
 
