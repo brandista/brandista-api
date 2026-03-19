@@ -1705,9 +1705,6 @@ async def lifespan(app: FastAPI):
     # 6. Environment warnings
     
     
-    if SECRET_KEY.startswith("DEV-ONLY"):
-        logger.warning("⚠️ Using default SECRET_KEY - set custom SECRET_KEY in production!")
-    
     yield
     
     # Shutdown (cleanup code here if needed)
@@ -11540,8 +11537,6 @@ if __name__ == "__main__":
     
     if not WAPPALYZER_AVAILABLE:
         logger.warning("⚠️  Install Wappalyzer for better framework detection: pip install python-Wappalyzer")
-    if SECRET_KEY.startswith("DEV-ONLY"):
-        logger.warning("⚠️  Using default SECRET_KEY - set SECRET_KEY environment variable in production!")
     if PLAYWRIGHT_AVAILABLE and not PLAYWRIGHT_ENABLED:
         logger.info("📝 Playwright available but disabled - set PLAYWRIGHT_ENABLED=true to enable SPA rendering")
     

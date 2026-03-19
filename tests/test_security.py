@@ -29,3 +29,15 @@ def test_hardcoded_passwords_not_present():
         source = f.read()
     for pw in ["user123", "kaikka123", "superpower123"]:
         assert pw not in source, f"Hardcoded password '{pw}' found in main.py"
+
+
+def test_secret_key_fails_fast_in_production(monkeypatch):
+    """config.py must raise RuntimeError when in production with no SECRET_KEY set."""
+    import agents.config as cfg
+    import importlib
+
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT", "production")
+
+    with pytest.raises(RuntimeError, match="SECRET_KEY environment variable is required"):
+        importlib.reload(cfg)
