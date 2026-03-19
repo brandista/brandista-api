@@ -105,6 +105,39 @@ INDUSTRY_TRANSLATIONS = {
 - **Versiohistoria**: Päivitä `CHANGELOG.md` jokaisessa muutoksessa — päivämäärät, mitä, miksi
 - **Learning System**: Jos lisäät uusia ennusteita agenttiin, varmista että verifikaatio on kytketty orchestratorissa
 
+## Liiketoiminta & Go-to-Market
+
+### Yritystiedot
+- **Yritys**: T.Tuomisto, toiminimi (62010 Ohjelmistojen suunnittelu ja valmistus)
+- **Yrittäjä**: Tuukka Tuomisto, Espoo
+- **Aloitus**: Q2/2026
+- **Rahoitus**: Omat säästöt 10K€ + Starttiraha ~4.2K€ + ELY-kehittämisavustus 75K€ (haetaan)
+
+### Go-to-Market (4 kerrosta)
+1. **Suoramyynti & kassavirta (kk 1–6)**: BemuFix ylläpitosopimukseksi, 20–30 pk-yritystä kontaktoitu. Growth Engine = myyntityökalu (ilmainen analyysi → avaa konsultointikeskustelun)
+2. **Asiantuntija-asema (kk 1–12)**: LinkedIn + blogi, 3 ydinatarinaa (moniagentti, BemuFix-case, persistentti muisti)
+3. **Growth Engine: konsultoinnista SaaS:iin (kk 4–12)**: Vaihe A ilmainen myyntityökalu → Vaihe B konsultointipaketti 1.5–2.5K€ → Vaihe C self-service SaaS
+4. **Kansainvälinen valmistautuminen (kk 6–12)**: Koodi/API-dokumentaatio englanniksi, UI monikielinen, Product Hunt vuosi 2
+
+### Growth Engine hinnoittelu
+| Taso | Hinta | Kohderyhmä |
+|---|---|---|
+| Free Scan | Ilmainen | Liidien generointi |
+| Pro Analysis | 149€/kerta tai 99€/kk | Pk-yritykset |
+| Agency | 499€/kk | Markkinointitoimistot |
+| Enterprise | 1000+€/kk sopimuksella | Suuremmat yritykset |
+
+### ELY-hankkeen kaupallistamispolku
+1. **Tutkimus & validointi (kk 1–8)**: Persistentti muisti BemuFix-ympäristössä, konkreettiset hyödyt mitattu
+2. **Tuotteistus (kk 6–12)**: Muisti integroitu Growth Engineen + chatbot-tuotteisiin
+3. **SaaS-tuote & skaalaus (vuosi 2+)**: Persistentti muisti itsenäisenä SaaS-komponenttina, Pohjoismaat/Eurooppa
+
+### Liiketoimintadokumentit
+- Sijainti: `toiminimi-ttuomisto/` -kansio (ei tässä repossa)
+- `starttiraha-liiketoimintasuunnitelma-v2.pdf` — Päivitetty liiketoimintasuunnitelma (GTM, hinnoittelu, ELY-kaupallistaminen)
+- `starttiraha-liiketoimintasuunnitelma-v2.md` — Sama md-muodossa
+- `saatekirje-taydennys.md` — Saatekirje hakemuksen täydennykseen
+
 ## Käyttäjäpreferenssit
 - Kieli: Suomi
 - Omistaja: Tuukka
