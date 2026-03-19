@@ -96,14 +96,43 @@ INDUSTRY_TRANSLATIONS = {
   - `test_hallucination_guard.py`, `test_competitive_intelligence.py`, `test_threat_history.py`, `test_intelligence_brief.py`, `test_guardian_pulse.py`
 - **Manuaalinen**: https://brandista.eu/growthengine/dashboard → aloita analyysi → tarkista Railway logit
 
+## Tärkeät tiedostot — lisäykset v3.1.0
+- `agents/config.py` — **UUSI** — yhteinen SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES. Kaikki moduulit importtaavat tästä, ei omia määrittelyjä.
+- `database.py` — ThreadedConnectionPool (min=2/max=10) + `run_in_db_thread()` async-wrappi. Käytä `connect_db()` / `release_connection()` kaikkialla.
+- `agents/base_agent.py` — `_call_llm()` metodi LLM-kutsuille. Käyttää `_LLM_SEMAPHORE` (max 5 samanaikaista OpenAI-kutsua).
+
+## Tietoturva-arkkitehtuuri (v3.1.0)
+- **Salasanat**: `passlib.CryptContext(schemes=["bcrypt"])` — ei SHA256, ei hardkoodattuja salasanoja
+- **Käyttäjät**: `_build_users_db()` lukee `ADMIN_USER_EMAIL` / `ADMIN_USER_PASSWORD_HASH` env-muuttujista
+- **SECRET_KEY**: `agents/config.py` — fail-fast tuotannossa jos ei asetettu, vakaa dev-fallback kehityksessä
+- **Rate limiting**: 10 pyyntöä/min/IP oletuksena (`RATE_LIMIT_ENABLED=true`, `RATE_LIMIT_PER_MINUTE=10`)
+
+## Agenttien eristys (v3.1.0)
+- `orchestrator._create_agents_for_run()` — luo tuoreet agent-instanssit per analyysiajo
+- `orchestrator.is_running` — property, käyttää `_active_runs: set` seuraamiseen
+- `run_analysis()` käyttää aina per-run instansseja — ei singleton-jakoa käyttäjien välillä
+
+## Railway ympäristömuuttujat (pakolliset)
+| Muuttuja | Kuvaus |
+|---|---|
+| `SECRET_KEY` | JWT-allekirjoitusavain — pakollinen tuotannossa |
+| `ADMIN_USER_EMAIL` | Admin-kirjautumissähköposti |
+| `ADMIN_USER_PASSWORD_HASH` | bcrypt-hash (`python3 -c "from passlib.context import CryptContext; print(CryptContext(schemes=['bcrypt']).hash('salasana'))"`) |
+| `SUPER_USER_EMAIL` | Super-admin sähköposti |
+| `SUPER_USER_PASSWORD_HASH` | bcrypt-hash |
+| `RAILWAY_BACKEND_URL` | Backend-URL CORS-listaan |
+
 ## Versiohistoria
-- **Versio**: 3.0.0 (Gustav 2.0: Business Threat Intelligence)
+- **Versio**: 3.1.0 (Quality Overhaul: Security, Reliability & Performance)
 - **Changelog**: `CHANGELOG.md`
 
 ## Kehityskäytännöt
 - **AINA aja testit** ennen committia: `python3 -m pytest tests/ -x -q`
 - **Versiohistoria**: Päivitä `CHANGELOG.md` jokaisessa muutoksessa — päivämäärät, mitä, miksi
 - **Learning System**: Jos lisäät uusia ennusteita agenttiin, varmista että verifikaatio on kytketty orchestratorissa
+- **SECRET_KEY**: Älä koskaan määrittele paikallisesti — importtaa `agents.config`:sta
+- **DB-yhteydet**: Käytä aina `connect_db()` + `release_connection()` — älä kutsu `psycopg2.connect()` suoraan
+- **LLM-kutsut**: Käytä `base_agent._call_llm()` — semafoorin ohitus kuormittaa OpenAI-ratelimitin
 
 ## Liiketoiminta & Go-to-Market
 

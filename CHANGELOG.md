@@ -5,6 +5,63 @@ Muoto: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.1.0] - 2026-03-19 — Quality Overhaul: Security, Reliability & Performance
+
+### Korjattu — Kriittiset tietoturvaongelmat
+- **Salasanojen hajautus**: SHA256 staattisella saltilla → passlib bcrypt (`CryptContext`). Hardkoodatut salasanat poistettu lähdekoodista kokonaan.
+- **Yhteinen SECRET_KEY**: `agents/config.py` yhtenä totuuden lähteenä. Fail-fast tuotannossa jos `SECRET_KEY`-ympäristömuuttujaa ei ole asetettu. Aiemmin avain generoitui satunnaisesti jokaisella käynnistyksellä (kaikki JWT-tokenit mitätöityivät restartin yhteydessä).
+- **WebSocket-autentikointi**: `agent_api.py` ja `main.py` käyttävät nyt samaa `SECRET_KEY`-lähdettä — aiemmin eri defaultit estivät WS-autentikoinnin.
+- **CORS siivottu**: Manus VM -kehitysURL poistettu, Railway backend URL siirretty `RAILWAY_BACKEND_URL`-ympäristömuuttujaan.
+
+### Korjattu — Agenttien eristys
+- **Per-run agent-instanssit**: `_create_agents_for_run()` luo uudet instanssit jokaiselle analyysiajolle. Aiemmin kaikki käyttäjät jakoivat samat singleton-agentit → samanaikaiset analyysit ylikirjoittivat toistensa tulokset.
+- **`is_running`-property**: Lisätty orchestratoriin, seuraa aktiivisia ajoja `_active_runs`-setissä.
+
+### Korjattu — Runtime-kaatumiset ja async-bugit
+- **`publish_sync`**: Lisätty done-callback virheenloggaukseen, varoitus jos kutsutaan async-kontekstin ulkopuolelta.
+- **`Blackboard.get()`**: GIL-atominen `dict.pop()` sen sijaan että mutoi tilaa lukuoperaatiossa.
+- **`RunContext._get_lock()`**: Double-checked locking `threading.Lock`-vartijalukon avulla — aiemmin race condition mahdollinen.
+
+### Korjattu — Tietokanta
+- **Yhteyspooli**: `psycopg2.pool.ThreadedConnectionPool` (min=2, max=10) — aiemmin uusi TCP-yhteys jokaiselle kyselylle.
+- **Event loop ei enää blokkaannu**: `run_in_db_thread()` ajaa synkroniset DB-kutsut thread pool executorin kautta.
+- **`unified_context.py`**: Synkroninen DB-kutsu async-orchestratorissa korjattu `run_in_db_thread`-wrapperilla.
+- **Yhteysten palautus**: `conn.close()` → `release_connection(conn)` kaikissa kutsukohdissa (unified_context, context_api).
+
+### Korjattu — Muisti ja luotettavuus
+- **Blackboard-historia**: Rajoitettu 500 merkintään (FIFO), aiemmin kasvoi rajattomasti.
+- **Redis-fallback**: Eksplisiittinen varoituslogi kun pudotaan `InMemoryRunStore`:iin — aiemmin hiljainen.
+- **Rate limiting**: Oletuksena käytössä (10 pyyntöä/min/IP), aiemmin oletuksena pois.
+
+### Korjattu — Suorituskyky
+- **LLM-semafoorit**: Aiemmin määritelty mutta ei koskaan pakotettu. Nyt max 5 samanaikaista OpenAI-kutsua (`_LLM_SEMAPHORE`).
+- **OpenAI-client singleton**: `agent_api.py` loi aiemmin uuden `AsyncOpenAI`-instanssin jokaiselle chat-pyynnölle.
+- **Guardian-optimointi**: Käyttää nyt `context.html_content`:ia (ScoutAgentin hakema), ei uudelleenhae samaa URL:ia.
+
+### Korjattu — Pisteytysvakiot
+- `STRATEGIC_CATEGORY_WEIGHTS`: Lisätty runtime-assert `sum == 1.0`, selvennetty `security` vs `security_posture` -jaottelu.
+
+### Poistettu — Kuollut koodi (~100 000 riviä)
+- `Enhanced_90day_plan.py` (~36 000 riviä), `agent_chat_v2.py` (~40 000 riviä), `agent_reports.py` (~30 000 riviä)
+- `scoring_config.json` (korvattu `scoring_constants.py`:llä)
+- Duplikaatti OpenAI-client-alustus `main.py`:ssä
+- 10 käyttämätöntä raskasta riippuvuutta: celery, spacy, numpy, reportlab, python-docx, openpyxl, python-pptx, prometheus-client, sentry-sdk, textstat
+
+### Lisätty — Testit
+- `tests/test_security.py` — bcrypt-hajautus, SECRET_KEY fail-fast, hardkoodattujen salasanojen puuttuminen (5 testiä)
+- `tests/test_agent_isolation.py` — per-run instanssit, is_running-property (2 testiä)
+- `tests/test_integration_pipeline.py` — core-pipeline: orchestrator, isolation, scoring weights (4 testiä + 1 skip)
+- **Yhteensä**: 559 testiä läpi, 30 skipattua
+
+### Ympäristömuuttujat (Railway)
+Uudet pakolliset muuttujat:
+- `SECRET_KEY` — JWT-allekirjoitusavain (pakollinen tuotannossa)
+- `ADMIN_USER_EMAIL` / `ADMIN_USER_PASSWORD_HASH` — admin-kirjautuminen (bcrypt-hash)
+- `SUPER_USER_EMAIL` / `SUPER_USER_PASSWORD_HASH` — super-admin
+- `RAILWAY_BACKEND_URL` — backend-URL CORS-listaan
+
+---
+
 ## [3.0.0] - 2026-03-07 — Gustav 2.0: Business Threat Intelligence
 
 ### Lisätty
