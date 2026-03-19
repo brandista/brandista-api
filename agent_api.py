@@ -6,11 +6,28 @@ REST & WebSocket endpointit agenttijärjestelmälle
 import json
 import logging
 import asyncio
+import os
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends, Header
 from pydantic import BaseModel, Field
+
+# Module-level OpenAI client — initialized once, reused across all requests
+_openai_client = None
+
+def _get_openai_client():
+    """Get (or lazily initialize) the module-level OpenAI client."""
+    global _openai_client
+    if _openai_client is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if api_key:
+            try:
+                from openai import AsyncOpenAI
+                _openai_client = AsyncOpenAI(api_key=api_key)
+            except ImportError:
+                pass
+    return _openai_client
 
 def serialize_for_json(obj: Any) -> Any:
     """
@@ -1262,9 +1279,7 @@ async def agent_chat(
     Chat with an AI agent about analysis results.
     """
     try:
-        from openai import AsyncOpenAI
-        
-        openai_client = AsyncOpenAI()
+        openai_client = _get_openai_client()
         
         agent_id = request.agent_id
         language = request.language
