@@ -26,7 +26,7 @@ async def run_in_db_thread(func, *args, **kwargs):
     Use this wrapper for all synchronous DB calls made from async FastAPI routes.
     Prevents blocking the event loop.
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         _db_executor,
         lambda: func(*args, **kwargs)

@@ -20,6 +20,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any
 from dataclasses import dataclass, asdict
+from database import release_connection
 
 logger = logging.getLogger(__name__)
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -238,7 +239,7 @@ def init_unified_context_tables():
         return False
     finally:
         cursor.close()
-        conn.close()
+        release_connection(conn)
 
 
 # ============================================================================
@@ -302,7 +303,7 @@ def save_user_profile(
         return False
     finally:
         cursor.close()
-        conn.close()
+        release_connection(conn)
 
 
 def get_user_profile(user_id: str) -> Optional[Dict[str, Any]]:
@@ -341,7 +342,7 @@ def get_user_profile(user_id: str) -> Optional[Dict[str, Any]]:
         return None
     finally:
         cursor.close()
-        conn.close()
+        release_connection(conn)
 
 
 # ============================================================================
@@ -417,7 +418,7 @@ def save_analysis(
         return None
     finally:
         cursor.close()
-        conn.close()
+        release_connection(conn)
 
 
 def get_recent_analyses(user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
@@ -462,7 +463,7 @@ def get_recent_analyses(user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         return []
     finally:
         cursor.close()
-        conn.close()
+        release_connection(conn)
 
 
 # ============================================================================
@@ -513,7 +514,7 @@ def add_tracked_competitor(
         return False
     finally:
         cursor.close()
-        conn.close()
+        release_connection(conn)
 
 
 def get_tracked_competitors(user_id: str, active_only: bool = True) -> List[Dict[str, Any]]:
@@ -559,7 +560,7 @@ def get_tracked_competitors(user_id: str, active_only: bool = True) -> List[Dict
         return []
     finally:
         cursor.close()
-        conn.close()
+        release_connection(conn)
 
 
 # ============================================================================
@@ -603,7 +604,7 @@ def save_discovered_competitor(
         return False
     finally:
         cursor.close()
-        conn.close()
+        release_connection(conn)
 
 
 def get_discovered_competitors(
@@ -655,7 +656,7 @@ def get_discovered_competitors(
         return []
     finally:
         cursor.close()
-        conn.close()
+        release_connection(conn)
 
 
 def update_discovered_status(user_id: str, url: str, status: str) -> bool:
@@ -679,7 +680,7 @@ def update_discovered_status(user_id: str, url: str, status: str) -> bool:
         return False
     finally:
         cursor.close()
-        conn.close()
+        release_connection(conn)
 
 
 # ============================================================================
@@ -721,7 +722,7 @@ def save_agent_insight(
         return False
     finally:
         cursor.close()
-        conn.close()
+        release_connection(conn)
 
 
 def get_agent_insights(
@@ -773,7 +774,7 @@ def get_agent_insights(
         return []
     finally:
         cursor.close()
-        conn.close()
+        release_connection(conn)
 
 
 # ============================================================================

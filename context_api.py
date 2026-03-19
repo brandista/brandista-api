@@ -269,6 +269,7 @@ async def track_competitor(user_id: str, competitor: CompetitorTrack):
 async def untrack_competitor(user_id: str, url: str):
     """Remove competitor from tracking"""
     from unified_context import connect_db
+    from database import release_connection
     
     conn = connect_db()
     if not conn:
@@ -289,7 +290,7 @@ async def untrack_competitor(user_id: str, url: str):
         return {"status": "ok", "message": "Competitor untracked"}
     finally:
         cursor.close()
-        conn.close()
+        release_connection(conn)
 
 
 # ============================================================================
