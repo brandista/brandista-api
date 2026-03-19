@@ -399,7 +399,7 @@ class ConnectionManager:
             self.active_connections.append(websocket)
             if run_id:
                 self.run_connections[run_id] = websocket
-        logger.info(f"[WS] Client connected. Total: {len(self.active_connections)}, run_id: {run_id}")
+        logger.debug(f"[WS] Client connected. Total: {len(self.active_connections)}, run_id: {run_id}")
 
     async def disconnect(self, websocket: WebSocket, run_id: str = None):
         async with self._lock:
@@ -407,7 +407,7 @@ class ConnectionManager:
                 self.active_connections.remove(websocket)
             if run_id and run_id in self.run_connections:
                 del self.run_connections[run_id]
-        logger.info(f"[WS] Client disconnected. Total: {len(self.active_connections)}")
+        logger.debug(f"[WS] Client disconnected. Total: {len(self.active_connections)}")
 
     async def register_run(self, run_id: str, websocket: WebSocket):
         """Register a run_id to websocket mapping."""
@@ -490,7 +490,7 @@ async def websocket_agent_analysis(
         await websocket.close(code=4001, reason="Invalid or missing token")
         return
     
-    logger.info(f"[WS] Authenticated: {user.get('sub', 'unknown')}")
+    logger.debug(f"[WS] Authenticated: {user.get('sub', 'unknown')}")
 
     # Track current run_id for this connection
     current_run_id = None
@@ -527,7 +527,7 @@ async def websocket_agent_analysis(
                 current_run_id = run_context.run_id
                 await manager.register_run(current_run_id, websocket)
 
-                logger.info(f"[WS] Starting analysis for {url} (run_id={current_run_id})")
+                logger.debug(f"[WS] Starting analysis for {url} (run_id={current_run_id})")
                 
                 # Luo orchestrator
                 orchestrator = get_orchestrator()
@@ -583,14 +583,14 @@ async def websocket_agent_analysis(
                         # Send immediately via queue
                         message_queue.put_nowait(msg)
                         pending_messages.append(msg)
-                        logger.info(f"[WS] Queued insight: {insight.agent_name} - {insight.message[:50]}...")
+                        logger.debug(f"[WS] Queued insight: {insight.agent_name} - {insight.message[:50]}...")
                     except Exception as e:
                         logger.error(f"[WS] Failed to queue insight: {e}")
                 
                 def sync_progress(progress: AgentProgress):
                     try:
                         # 🔍 DEBUG: Log every progress callback
-                        logger.info(f"[WS] 📊 sync_progress called: agent={progress.agent_id}, progress={progress.progress}%, task={progress.current_task}")
+                        logger.debug(f"[WS] 📊 sync_progress called: agent={progress.agent_id}, progress={progress.progress}%, task={progress.current_task}")
 
                         msg = {
                             "type": WSMessageType.AGENT_PROGRESS.value,
@@ -606,7 +606,7 @@ async def websocket_agent_analysis(
                         # Send immediately via queue
                         message_queue.put_nowait(msg)
                         pending_messages.append(msg)
-                        logger.info(f"[WS] ✅ Progress queued for {progress.agent_id}: {progress.progress}%")
+                        logger.debug(f"[WS] ✅ Progress queued for {progress.agent_id}: {progress.progress}%")
                     except Exception as e:
                         logger.error(f"[WS] Failed to queue progress: {e}")
                 
@@ -645,7 +645,7 @@ async def websocket_agent_analysis(
                         }
                         message_queue.put_nowait(msg)
                         pending_messages.append(msg)
-                        logger.info(f"[WS] Agent {agent_name} started - status sent")
+                        logger.debug(f"[WS] Agent {agent_name} started - status sent")
                     except Exception as e:
                         logger.error(f"[WS] Failed to queue start status: {e}")
 
@@ -667,7 +667,7 @@ async def websocket_agent_analysis(
                         }
                         message_queue.put_nowait(msg)
                         pending_messages.append(msg)
-                        logger.info(f"[WS] 🐝 Swarm event: {event.from_agent} -> {event.to_agent or 'blackboard'}: {event.subject}")
+                        logger.debug(f"[WS] 🐝 Swarm event: {event.from_agent} -> {event.to_agent or 'blackboard'}: {event.subject}")
                     except Exception as e:
                         logger.error(f"[WS] Failed to queue swarm event: {e}")
 
@@ -688,7 +688,7 @@ async def websocket_agent_analysis(
                             'annual_revenue': int(annual_revenue),
                             'source': 'user_provided'
                         }
-                        logger.info(f"[WS] User provided revenue: EUR {annual_revenue:,}")
+                        logger.debug(f"[WS] User provided revenue: EUR {annual_revenue:,}")
 
                     result = await orchestrator.run_analysis(
                         url=url,
@@ -710,7 +710,7 @@ async def websocket_agent_analysis(
                     except asyncio.CancelledError:
                         pass
                     
-                    logger.info(f"[WS] Analysis complete. Sent {len(pending_messages)} messages in real-time.")
+                    logger.debug(f"[WS] Analysis complete. Sent {len(pending_messages)} messages in real-time.")
                     
                     # Extract data from agent results for frontend
                     agent_results = result.agent_results or {}
@@ -722,7 +722,7 @@ async def websocket_agent_analysis(
                     # Debug: log analyst result to detect timeout/empty data
                     analyst_status = analyst_data.status.value if hasattr(analyst_data, 'status') else 'unknown'
                     analyst_error = analyst_data.error if hasattr(analyst_data, 'error') else None
-                    logger.info(f"[WS] Analyst status={analyst_status}, error={analyst_error}, data_keys={list(analyst_result.keys()) if isinstance(analyst_result, dict) else 'not-dict'}")
+                    logger.debug(f"[WS] Analyst status={analyst_status}, error={analyst_error}, data_keys={list(analyst_result.keys()) if isinstance(analyst_result, dict) else 'not-dict'}")
 
                     # Get benchmark which contains ranking info
                     benchmark_raw = analyst_result.get('benchmark', {})
@@ -748,8 +748,8 @@ async def websocket_agent_analysis(
                     # Get your_analysis for detailed data
                     your_analysis = analyst_result.get('your_analysis', {})
                     
-                    logger.info(f"[WS] Analyst data: score={your_score}, rank={your_ranking}, total={total_competitors_from_analyst}")
-                    logger.info(f"[WS] Benchmark: avg={avg_score}, max={best_score}")
+                    logger.debug(f"[WS] Analyst data: score={your_score}, rank={your_ranking}, total={total_competitors_from_analyst}")
+                    logger.debug(f"[WS] Benchmark: avg={avg_score}, max={best_score}")
                     
                     # Guardian data
                     guardian_data = agent_results.get('guardian', {})
@@ -761,7 +761,7 @@ async def websocket_agent_analysis(
                     
                     # Log competitor threat scores
                     for ct in competitor_threats[:3]:
-                        logger.info(f"[WS] Competitor threat: {ct.get('name')} score={ct.get('digital_score')}")
+                        logger.debug(f"[WS] Competitor threat: {ct.get('name')} score={ct.get('digital_score')}")
                     
                     # Map competitor_threats to frontend format
                     competitor_threats_mapped = []
@@ -927,14 +927,14 @@ async def websocket_agent_analysis(
                                 'url': url,
                                 'source': 'web_analysis',
                             })
-                    logger.info(f"[WS] competitor_companies: {len(competitor_companies)} (enriched: {len(competitors_enriched)}, with intel: {len([c for c in competitor_companies if c.get('business_id')])})")
+                    logger.debug(f"[WS] competitor_companies: {len(competitor_companies)} (enriched: {len(competitors_enriched)}, with intel: {len([c for c in competitor_companies if c.get('business_id')])})")
                     
                     # Reconcile total_competitors: use max of Analyst benchmark and Scout findings
                     total_competitors = max(
                         total_competitors_from_analyst,
                         len(competitor_urls_found) + 1  # Scout found N competitors + your site
                     ) if competitor_urls_found else total_competitors_from_analyst
-                    logger.info(f"[WS] total_competitors reconciled: analyst={total_competitors_from_analyst}, scout_found={len(competitor_urls_found)}, final={total_competitors}")
+                    logger.debug(f"[WS] total_competitors reconciled: analyst={total_competitors_from_analyst}, scout_found={len(competitor_urls_found)}, final={total_competitors}")
                     
                     # Update benchmark with reconciled total
                     benchmark['total_analyzed'] = total_competitors
@@ -964,15 +964,15 @@ async def websocket_agent_analysis(
                         })
                     
                     # DEBUG: Log what we're about to send
-                    logger.info(f"[WS] competitor_threats count: {len(competitor_threats)}")
-                    logger.info(f"[WS] action_plan_mapped: phase1={len(action_plan_mapped.get('phase1', []))} phase2={len(action_plan_mapped.get('phase2', []))} phase3={len(action_plan_mapped.get('phase3', []))} this_week={action_plan_mapped.get('this_week') is not None}" if action_plan_mapped else "[WS] action_plan_mapped: None")
-                    logger.info(f"[WS] market_gaps_mapped count: {len(market_gaps_mapped)}")
+                    logger.debug(f"[WS] competitor_threats count: {len(competitor_threats)}")
+                    logger.debug(f"[WS] action_plan_mapped: phase1={len(action_plan_mapped.get('phase1', []))} phase2={len(action_plan_mapped.get('phase2', []))} phase3={len(action_plan_mapped.get('phase3', []))} this_week={action_plan_mapped.get('this_week') is not None}" if action_plan_mapped else "[WS] action_plan_mapped: None")
+                    logger.debug(f"[WS] market_gaps_mapped count: {len(market_gaps_mapped)}")
                     
                     # Log AI analysis data
                     ai_analysis_data = your_analysis.get('ai_analysis', {})
-                    logger.info(f"[WS] ai_analysis keys: {list(ai_analysis_data.keys()) if ai_analysis_data else 'empty'}")
+                    logger.debug(f"[WS] ai_analysis keys: {list(ai_analysis_data.keys()) if ai_analysis_data else 'empty'}")
                     if ai_analysis_data.get('ai_search_visibility'):
-                        logger.info(f"[WS] ai_search_visibility score: {ai_analysis_data.get('ai_search_visibility', {}).get('overall_ai_search_score', 'N/A')}")
+                        logger.debug(f"[WS] ai_search_visibility score: {ai_analysis_data.get('ai_search_visibility', {}).get('overall_ai_search_score', 'N/A')}")
                     
                     # Lähetä lopputulos with all mapped data
                     await manager.send_json(websocket, {
@@ -1091,7 +1091,7 @@ async def websocket_agent_analysis(
                                         analysis_id=analysis_id
                                     )
                         
-                        logger.info(f"[WS] Saved analysis {analysis_id} to unified context")
+                        logger.debug(f"[WS] Saved analysis {analysis_id} to unified context")
                     except Exception as save_error:
                         logger.warning(f"[WS] Could not save to unified context: {save_error}")
                     
@@ -1110,7 +1110,7 @@ async def websocket_agent_analysis(
                                 "url": url
                             }
                         ))
-                        logger.info(f"[WS] Notification sent to user {user_id}")
+                        logger.debug(f"[WS] Notification sent to user {user_id}")
                     except Exception as notify_error:
                         logger.debug(f"[WS] Notification not sent (user may not have dashboard open): {notify_error}")
 
@@ -1139,7 +1139,7 @@ async def websocket_agent_analysis(
     
     except WebSocketDisconnect:
         await manager.disconnect(websocket, current_run_id)
-        logger.info(f"[WS] Client disconnected (run_id={current_run_id})")
+        logger.debug(f"[WS] Client disconnected (run_id={current_run_id})")
 
     except Exception as e:
         logger.error(f"[WS] Error: {e}", exc_info=True)

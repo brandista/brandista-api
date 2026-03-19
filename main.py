@@ -817,25 +817,7 @@ except ImportError as e:
 
 # ============================================================================
 # GLOBAL VARIABLES - Already defined above at line 335+
-# ============================================================================
-# NOTE: Global variables defined earlier to avoid duplicates
-
-# ============================================================================
-# OPENAI SETUP
-# ============================================================================
-
-# Use global openai_client defined above
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-
-if OPENAI_AVAILABLE and os.getenv("OPENAI_API_KEY"):
-    try:
-        openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        logger.info(f"OpenAI client initialized (model={OPENAI_MODEL})")
-    except Exception as e:
-        logger.warning(f"OpenAI init failed: {e}")
-        openai_client = None
-else:
-    logger.info("OpenAI not configured")
+# NOTE: OpenAI client initialized earlier (see line ~452). No duplicate needed.
 
 # ============================================================================
 # PLAYWRIGHT UTILITIES
@@ -2142,8 +2124,34 @@ class RoleSummaries(BaseModel):
     CMO: Optional[str] = None
     CTO: Optional[str] = None
 
-# Import Enhanced 90-day plan models and function
-from Enhanced_90day_plan import ActionItem, Plan90D, generate_enhanced_90day_plan
+# Enhanced 90-day plan models (inlined from deleted Enhanced_90day_plan.py)
+class ActionItem(BaseModel):
+    """Detailed action item with all necessary context"""
+    week: str
+    title: str
+    description: str
+    steps: List[str] = []
+    owner: str
+    time_estimate: str
+    dependencies: List[str] = []
+    success_metric: str
+    priority: str
+
+class Plan90D(BaseModel):
+    """Complete 90-day plan structure"""
+    wave_1: List[ActionItem] = []
+    wave_2: List[ActionItem] = []
+    wave_3: List[ActionItem] = []
+    one_thing_this_week: Optional[str] = None
+    summary: Optional[Dict[str, Any]] = None
+
+try:
+    from Enhanced_90day_plan import generate_enhanced_90day_plan
+    _ENHANCED_90DAY_AVAILABLE = True
+except ImportError:
+    _ENHANCED_90DAY_AVAILABLE = False
+    def generate_enhanced_90day_plan(basic=None, content=None, technical=None, language='en', competitor_gap=None) -> 'Plan90D':
+        return Plan90D(summary={"total_actions": 0, "note": "Enhanced plan generator unavailable"})
 
 class RiskItem(BaseModel):
     risk: str
