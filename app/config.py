@@ -82,9 +82,8 @@ SCORING_CONFIG = load_scoring_config()
 # SECURITY SETTINGS
 # ============================================================================
 
-SECRET_KEY = os.getenv("SECRET_KEY", "brandista-key-" + os.urandom(32).hex())
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
+# Single source of truth — fail-fast in production, stable dev fallback
+from agents.config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
 
 # ============================================================================
 # PERFORMANCE SETTINGS

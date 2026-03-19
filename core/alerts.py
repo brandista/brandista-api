@@ -409,8 +409,8 @@ def _verify_token(token: str) -> Optional[dict]:
         return None
     try:
         import jwt as pyjwt
-        secret = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
-        payload = pyjwt.decode(token, secret, algorithms=["HS256"])
+        from agents.config import SECRET_KEY as _secret_key
+        payload = pyjwt.decode(token, _secret_key, algorithms=["HS256"])
         return payload
     except Exception as e:
         logger.warning(f"JWT verification failed: {e}")

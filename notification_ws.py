@@ -19,8 +19,8 @@ from enum import Enum
 import asyncio
 import logging
 import json
-import os
 import jwt
+from agents.config import SECRET_KEY as _SECRET_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -176,8 +176,7 @@ def verify_notification_token(token: str) -> Optional[dict]:
         return None
     
     try:
-        SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
-        payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+        payload = jwt.decode(token, _SECRET_KEY, algorithms=["HS256"])
         return payload
     except jwt.ExpiredSignatureError:
         logger.warning("[Notification WS] Token expired")
