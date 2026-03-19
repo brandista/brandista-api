@@ -35,6 +35,11 @@ def test_concurrent_analyses_do_not_share_state():
     agents_a = orchestrator._create_agents_for_run()
     agents_b = orchestrator._create_agents_for_run()
 
+    # Ensure at least some agents have mutable state to verify isolation isn't vacuous
+    agents_with_insights = [a for a in agents_a.values() if hasattr(a, 'insights')]
+    if not agents_with_insights:
+        pytest.skip("No agents have 'insights' attribute — update test to target actual mutable state")
+
     # Simulate state modification in run A
     for agent in agents_a.values():
         if hasattr(agent, 'insights'):
@@ -98,6 +103,9 @@ async def test_scout_agent_execute_does_not_crash():
     mock_main.multi_provider_search = AsyncMock(return_value=[])
     mock_main.generate_smart_search_terms = AsyncMock(return_value=["test query"])
 
+    # TODO: BaseAgent lacks an injectable _call_llm abstraction — agents call OpenAI directly.
+    # This test will skip until BaseAgent is refactored to accept an injectable LLM client.
+    # Tracked design gap: patch("agents.base_agent.BaseAgent._call_llm") cannot intercept calls.
     try:
         with patch.dict("sys.modules", {"main": mock_main}):
             with patch("httpx.AsyncClient", return_value=mock_client):
