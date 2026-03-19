@@ -451,8 +451,8 @@ def verify_ws_token(token: str) -> Optional[dict]:
         return None
     
     try:
-        SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
-        payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+        from agents.config import SECRET_KEY, ALGORITHM
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         return payload
     except jwt.ExpiredSignatureError:
         logger.warning("[WS] Token expired")

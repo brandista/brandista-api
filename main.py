@@ -371,10 +371,8 @@ SCORING_CONFIG = load_scoring_config()
 # CONFIGURATION - ENVIRONMENT VARIABLES
 # ============================================================================
 
-# Security
-SECRET_KEY = os.getenv("SECRET_KEY", "brandista-key-" + os.urandom(32).hex())
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
+# Security — single source of truth in agents/config.py
+from agents.config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
 
 # Performance settings
 CACHE_TTL = int(os.getenv("CACHE_TTL", "3600"))
@@ -1707,7 +1705,7 @@ async def lifespan(app: FastAPI):
     # 6. Environment warnings
     
     
-    if SECRET_KEY.startswith("brandista-key-"):
+    if SECRET_KEY.startswith("DEV-ONLY"):
         logger.warning("⚠️ Using default SECRET_KEY - set custom SECRET_KEY in production!")
     
     yield
@@ -1746,13 +1744,13 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-        "http://localhost:3000", 
+        "http://localhost:3000",
         "http://127.0.0.1:3000",
         "https://brandista.eu",
         "https://www.brandista.eu",
         "https://api.brandista.eu",
         "https://fastapi-production-51f9.up.railway.app",
-        "https://3000-ip92lxeccquecaiidxzl0-6aa4782a.manusvm.computer"
+        *([os.getenv("RAILWAY_BACKEND_URL")] if os.getenv("RAILWAY_BACKEND_URL") else []),
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -11542,7 +11540,7 @@ if __name__ == "__main__":
     
     if not WAPPALYZER_AVAILABLE:
         logger.warning("⚠️  Install Wappalyzer for better framework detection: pip install python-Wappalyzer")
-    if SECRET_KEY.startswith("brandista-key-"):
+    if SECRET_KEY.startswith("DEV-ONLY"):
         logger.warning("⚠️  Using default SECRET_KEY - set SECRET_KEY environment variable in production!")
     if PLAYWRIGHT_AVAILABLE and not PLAYWRIGHT_ENABLED:
         logger.info("📝 Playwright available but disabled - set PLAYWRIGHT_ENABLED=true to enable SPA rendering")

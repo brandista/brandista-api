@@ -411,3 +411,21 @@ class TestRevenueInputValidation:
             revenue_input={"annual_revenue": 1000000, "unknown_field": "value"}
         )
         assert "unknown_field" not in schema.revenue_input
+
+
+def test_secret_key_is_deterministic_on_reload():
+    """SECRET_KEY must not change on module reload (would invalidate all JWTs)."""
+    import importlib
+    import agents.config as cfg
+    key_before = cfg.SECRET_KEY
+    importlib.reload(cfg)
+    key_after = cfg.SECRET_KEY
+    assert key_before == key_after, \
+        "SECRET_KEY changed after reload — all existing JWTs would be invalidated"
+
+
+def test_secret_key_not_random_per_import():
+    """SECRET_KEY must be stable across imports (not regenerated each time)."""
+    from agents.config import SECRET_KEY as key1
+    from agents.config import SECRET_KEY as key2
+    assert key1 == key2, "SECRET_KEY must not change between imports"
