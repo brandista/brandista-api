@@ -427,6 +427,9 @@ task_queue = None
 openai_client = None
 history_db = None  # Type hint added in imports if AnalysisHistoryDB available
 
+# Module-level semaphore — max 5 concurrent LLM calls (mirrors RunContext.limits.llm_concurrency)
+_LLM_SEMAPHORE = asyncio.Semaphore(5)
+
 # Log initial configuration
 logger.info(f"Starting {APP_NAME} v{APP_VERSION}")
 logger.info(f"Scoring weights: {SCORING_CONFIG.weights}")
@@ -5207,11 +5210,12 @@ async def generate_ai_insights(
                 "Each should be one clear sentence covering different areas (technical, content, SEO, UX, social). "
                 "Return as a list with hyphens, no introduction:\n" + context
             )
-            response = await openai_client.chat.completions.create(
-                model=OPENAI_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=500, temperature=0.6
-            )
+            async with _LLM_SEMAPHORE:
+                response = await openai_client.chat.completions.create(
+                    model=OPENAI_MODEL,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=500, temperature=0.6
+                )
             ai_text = response.choices[0].message.content.strip()
             lines = [line.strip() for line in ai_text.splitlines() if line.strip()]
             cleaned = []
@@ -10656,14 +10660,15 @@ Respond in JSON:
 }}}}
 """
     
-    response = await openai_client.chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=1500,
-        temperature=0.4,  # Hieman korkeampi creativity mutta silti fokus
-        response_format={"type": "json_object"}
-    )
-    
+    async with _LLM_SEMAPHORE:
+        response = await openai_client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1500,
+            temperature=0.4,  # Hieman korkeampi creativity mutta silti fokus
+            response_format={"type": "json_object"}
+        )
+
     return json.loads(response.choices[0].message.content)
 
 def _calculate_differentiation_scores(comparison_matrix: Dict) -> Dict[str, int]:
@@ -11003,16 +11008,17 @@ Respond in JSON (max 3 gaps):
 }}}}
 """
     
-    response = await openai_client.chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=1200,
-        temperature=0.6,
-        response_format={"type": "json_object"}
-    )
-    
+    async with _LLM_SEMAPHORE:
+        response = await openai_client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1200,
+            temperature=0.6,
+            response_format={"type": "json_object"}
+        )
+
     result = json.loads(response.choices[0].message.content)
-    
+
     # Muotoile AI:n löydökset yhtenäiseen muotoon
     formatted_gaps = []
     for gap in result.get('gaps', []):
@@ -11307,16 +11313,17 @@ Provide 3 strategic recommendations in JSON:
 }}}}
 """
     
-    response = await openai_client.chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=1500,
-        temperature=0.5,
-        response_format={"type": "json_object"}
-    )
-    
+    async with _LLM_SEMAPHORE:
+        response = await openai_client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1500,
+            temperature=0.5,
+            response_format={"type": "json_object"}
+        )
+
     result = json.loads(response.choices[0].message.content)
-    
+
     # Muotoile AI:n suositukset yhtenäiseen muotoon
     formatted = []
     for rec in result.get('recommendations', []):

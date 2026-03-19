@@ -65,7 +65,9 @@ class RunLimits:
         async with run_context.limits.scrape_semaphore:
             result = await scraper.fetch(url)
 
-    TODO: Implement semaphore usage in actual LLM and scraping code.
+    Semaphore usage is enforced in:
+    - main.py: all chat.completions.create() calls wrapped with _LLM_SEMAPHORE
+    - BaseAgent._call_llm(): injectable helper for agent-level LLM calls
     """
     # Semaphores
     llm_concurrency: int = 5          # Max concurrent LLM calls

@@ -973,6 +973,37 @@ class BaseAgent(ABC):
         pass
     
     # ========================================================================
+    # LLM CALL HELPER — semaphore-enforced
+    # ========================================================================
+
+    async def _call_llm(self, openai_client, **kwargs) -> Any:
+        """
+        Call OpenAI chat completions with the run-scoped LLM semaphore enforced.
+
+        All agents should use this instead of calling openai_client directly.
+        This ensures RunContext.limits.llm_concurrency (default: 5) is respected
+        across all concurrent agent LLM calls.
+
+        Usage:
+            response = await self._call_llm(
+                openai_client,
+                model="gpt-4o-mini",
+                messages=[...],
+                max_tokens=500,
+            )
+        """
+        semaphore = None
+        if self._run_context is not None:
+            semaphore = self._run_context.limits.llm_semaphore
+
+        if semaphore is not None:
+            async with semaphore:
+                return await openai_client.chat.completions.create(**kwargs)
+        else:
+            # No RunContext (e.g. tests with global singleton fallback) — call directly
+            return await openai_client.chat.completions.create(**kwargs)
+
+    # ========================================================================
     # UTILITY METHODS
     # ========================================================================
     
