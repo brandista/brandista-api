@@ -414,8 +414,8 @@ USER_AGENT = os.getenv("USER_AGENT",
 )
 
 # Rate limiting
-RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "false").lower() == "true"
-RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "20"))
+RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true"
+RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "10"))
 
 # Google Search
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -682,9 +682,6 @@ USER_AGENT = os.getenv("USER_AGENT",
 
 # CORS settings
 ALLOWED_ORIGINS = ["*"]
-
-RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "false").lower() == "true"
-RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "20"))
 
 # ============================================================================
 # LOGGING (already configured at top of file)

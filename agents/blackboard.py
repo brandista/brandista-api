@@ -119,6 +119,7 @@ class Blackboard:
         
         # History: all entries ever posted (for replay)
         self._history: List[BlackboardEntry] = []
+        self._max_history: int = 500  # Prevent unbounded memory growth
         
         # Subscriptions: pattern -> [Subscription]
         self._subscriptions: Dict[str, List[Subscription]] = defaultdict(list)
@@ -216,6 +217,9 @@ class Blackboard:
             # Store entry
             self._data[key] = entry
             self._history.append(entry)
+            # Trim oldest entries if over limit
+            if len(self._history) > self._max_history:
+                self._history = self._history[-self._max_history:]
             
             # Update indexes
             if category:

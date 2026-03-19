@@ -584,7 +584,13 @@ def get_run_store(redis_url: str = None, force_memory: bool = False) -> RunStore
         try:
             return RedisRunStore(redis_url=redis_url)
         except Exception as e:
-            logger.warning(f"[RunStore] Redis unavailable ({e}), falling back to InMemory")
+            logger.warning(
+                "⚠️  Redis connection failed (%s). Falling back to InMemoryRunStore. "
+                "Run state will NOT be shared across workers. "
+                "Cancel operations will not propagate. "
+                "Set REDIS_URL environment variable to fix this.",
+                e
+            )
 
     logger.info("[RunStore] Using InMemoryRunStore (no REDIS_URL)")
     return InMemoryRunStore()
