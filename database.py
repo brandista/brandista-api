@@ -89,8 +89,9 @@ def init_database():
                 cursor.execute("ALTER TABLE users RENAME COLUMN password_hash TO hashed_password")
                 logger.info("🔧 Auto-fixed: Renamed password_hash to hashed_password")
         except Exception as e:
+            conn.rollback()  # Reset aborted transaction so subsequent SQL can run
             logger.warning(f"Column rename check: {e}")
-        
+
         # Create table if not exists
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (

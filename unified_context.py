@@ -20,7 +20,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any
 from dataclasses import dataclass, asdict
-from database import release_connection
+from database import connect_db, release_connection
 
 logger = logging.getLogger(__name__)
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -246,15 +246,7 @@ def init_unified_context_tables():
 # DATABASE HELPERS
 # ============================================================================
 
-def connect_db():
-    """Get database connection"""
-    if not DATABASE_URL:
-        return None
-    try:
-        return psycopg2.connect(DATABASE_URL)
-    except Exception as e:
-        logger.error(f"Database connection failed: {e}")
-        return None
+# connect_db and release_connection are imported from database module (pool-based)
 
 
 # ============================================================================

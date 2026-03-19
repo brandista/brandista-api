@@ -1870,12 +1870,16 @@ def _build_users_db() -> dict:
             "hashed_password": admin_hash,
             "role": "admin",
             "name": os.getenv("ADMIN_USER_NAME", "Admin"),
+            "search_limit": int(os.getenv("ADMIN_SEARCH_LIMIT", "100")),
+            "email": admin_email,
         }
     if super_email and super_hash:
         users[super_email] = {
             "hashed_password": super_hash,
             "role": "super",
             "name": os.getenv("SUPER_USER_NAME", "Super"),
+            "search_limit": int(os.getenv("SUPER_SEARCH_LIMIT", "1000")),
+            "email": super_email,
         }
 
     if not users:
