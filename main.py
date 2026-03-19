@@ -88,6 +88,12 @@ try:
 except ImportError:
     MAGIC_LINK_AVAILABLE = False
     logger.warning("Magic link authentication module not available")
+    # Stub classes so route definitions don't raise NameError
+    from pydantic import BaseModel as _BaseModel
+    class MagicLinkRequest(_BaseModel):  # type: ignore[no-redef]
+        email: str
+    class MagicLinkVerify(_BaseModel):  # type: ignore[no-redef]
+        token: str
 
 try:
     from authlib.integrations.starlette_client import OAuth
@@ -1895,18 +1901,8 @@ if RATE_LIMIT_ENABLED:
 # AUTHENTICATION
 # ============================================================================
 
-import hashlib
-
-class SimplePasswordContext:
-    def hash(self, password: str) -> str:
-        """Generate SHA256 hash with salt"""
-        return hashlib.sha256(f"brandista_{password}_salt".encode()).hexdigest()
-    
-    def verify(self, plain_password: str, hashed_password: str) -> bool:
-        """Verify password - simple SHA256 comparison"""
-        return self.hash(plain_password) == hashed_password
-
-pwd_context = SimplePasswordContext()
+from passlib.context import CryptContext
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
 
 # ✅ PLACEHOLDER - Täytetään init_users() funktiossa
@@ -1915,38 +1911,46 @@ USERS_DB = {}
 # ✅ User storage for email verification
 user_store = {}
 
-def init_users():
-    """Initialize users with hashed passwords"""
-    global USERS_DB
-    
-    USERS_DB = {
-        "user@example.com": {
-            "username": "user",
-            "email": "user@example.com",
-            "hashed_password": pwd_context.hash("user123"),
-            "role": "user", 
-            "search_limit": DEFAULT_USER_LIMIT
-        },
-        "admin@brandista.eu": {
-            "username": "admin",
-            "email": "admin@brandista.eu", 
-            "hashed_password": pwd_context.hash("kaikka123"),
-            "role": "admin", 
-            "search_limit": -1
-        },
-        "super@brandista.eu": {
-            "username": "super_user",
-            "email": "super@brandista.eu",
-            "hashed_password": pwd_context.hash("superpower123"),
-            "role": "super_user",
-            "search_limit": -1
+def _build_users_db() -> dict:
+    """
+    Load admin users from environment variables.
+    Set ADMIN_USER_EMAIL and ADMIN_USER_PASSWORD_HASH env vars.
+    Generate hash with: python3 -c "from passlib.context import CryptContext; c=CryptContext(schemes=['bcrypt']); print(c.hash('yourpassword'))"
+    """
+    users = {}
+    admin_email = os.getenv("ADMIN_USER_EMAIL")
+    admin_hash = os.getenv("ADMIN_USER_PASSWORD_HASH")
+    super_email = os.getenv("SUPER_USER_EMAIL")
+    super_hash = os.getenv("SUPER_USER_PASSWORD_HASH")
+
+    if admin_email and admin_hash:
+        users[admin_email] = {
+            "hashed_password": admin_hash,
+            "role": "admin",
+            "name": os.getenv("ADMIN_USER_NAME", "Admin"),
         }
-    }
-    
+    if super_email and super_hash:
+        users[super_email] = {
+            "hashed_password": super_hash,
+            "role": "super",
+            "name": os.getenv("SUPER_USER_NAME", "Super"),
+        }
+
+    if not users:
+        logger.warning(
+            "⚠️ No admin users configured via env vars. "
+            "Set ADMIN_USER_EMAIL and ADMIN_USER_PASSWORD_HASH."
+        )
+    return users
+
+
+def init_users():
+    """Initialize users from environment variables"""
+    global USERS_DB
+    USERS_DB = _build_users_db()
     # Security: Do not log password hashes, even partial
     logger.info("🔐 User authentication initialized")
     logger.info(f"   Loaded {len(USERS_DB)} users")
-    
     return USERS_DB
 
 # ✅ KUTSU HETI
