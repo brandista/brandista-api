@@ -5,6 +5,16 @@ Muoto: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.1.1] - 2026-03-19 — SECRET_KEY unification & rate limit defaults
+
+### Korjattu — Tietoturva
+- **`app/config.py` random SECRET_KEY**: Generoi aiemmin uuden satunnaisen avaimen jokaisella käynnistyksellä (`os.urandom(32).hex()`) — kaikki JWT-tokenit mitätöityisivät restartin yhteydessä. Nyt importtaa `agents.config`:sta kuten muutkin moduulit.
+- **`notification_ws.py`**: Putosi aiemmin kovakoodattuun `"your-secret-key-change-in-production"` -defaulttiin. Nyt `agents.config.SECRET_KEY`.
+- **`core/alerts.py`**: Sama kovakoodattu fallback kuin notification_ws. Nyt `agents.config.SECRET_KEY`.
+- **`app/config.py` rate limit -defaultit**: `RATE_LIMIT_ENABLED` oli `false` (oletuksena pois) ja `RATE_LIMIT_PER_MINUTE` oli 20 — ristiriidassa legacy-polun (`main.py`) ja dokumentaation kanssa (true/10). Korjattu yhtenäisiksi.
+
+---
+
 ## [3.1.0] - 2026-03-19 — Quality Overhaul: Security, Reliability & Performance
 
 ### Korjattu — Kriittiset tietoturvaongelmat
