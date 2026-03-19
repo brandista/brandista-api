@@ -253,31 +253,17 @@ except ImportError as e:
 # ============================================================================
 # GROWTH ENGINE 2.0 - ENHANCED AGENT CHAT V2
 # ============================================================================
-try:
-    from agent_chat_v2 import (
-        router as agent_chat_router,
-        init_chat_tables,
-        AGENT_PERSONALITIES
-    )
-    AGENT_CHAT_V2_AVAILABLE = True
-    logger.info("✅ Enhanced Agent Chat V2 imported successfully")
-except ImportError as e:
-    logger.warning(f"⚠️ Agent Chat V2 not available: {e}")
-    AGENT_CHAT_V2_AVAILABLE = False
-    agent_chat_router = None
-    init_chat_tables = None
+# Module agent_chat_v2 permanently deleted — feature disabled
+AGENT_CHAT_V2_AVAILABLE = False
+agent_chat_router = None
+init_chat_tables = None
 
 # ============================================================================
 # GROWTH ENGINE 2.0 - AI REPORT GENERATOR
 # ============================================================================
-try:
-    from agent_reports import router as reports_router
-    AI_REPORTS_AVAILABLE = True
-    logger.info("✅ AI Report Generator imported successfully")
-except ImportError as e:
-    logger.warning(f"⚠️ AI Report Generator not available: {e}")
-    AI_REPORTS_AVAILABLE = False
-    reports_router = None
+# Module agent_reports permanently deleted — feature disabled
+AI_REPORTS_AVAILABLE = False
+reports_router = None
 
 # ============================================================================
 # COMPANY INTELLIGENCE - DUE DILIGENCE (YTJ + Kauppalehti)
@@ -1677,8 +1663,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"🗃️ Database: {'connected' if DATABASE_ENABLED else 'not connected'}")
     logger.info(f"📜 Analysis History: {'enabled' if history_db else 'disabled'}")
     logger.info(f"🤖 Agent System: {'enabled (6 agents)' if AGENT_SYSTEM_AVAILABLE else 'disabled'}")
-    logger.info(f"💬 Agent Chat V2: {'enabled (full context + history)' if AGENT_CHAT_V2_AVAILABLE else 'disabled'}")
-    logger.info(f"📧 AI Reports: {'enabled (email reports)' if AI_REPORTS_AVAILABLE else 'disabled'}")
+
     logger.info(f"⏰ Scheduled Analysis: {'enabled' if scheduled_manager else 'disabled'}")
     
     # 6. Environment warnings
@@ -1779,26 +1764,6 @@ if AGENT_SYSTEM_AVAILABLE and agent_router:
 if NOTIFICATION_WS_AVAILABLE and notification_router:
     app.include_router(notification_router)
     logger.info("✅ Notification WebSocket routes registered: /ws/growth-engine/{user_id}")
-
-# ============================================================================
-# GROWTH ENGINE 2.0 - ENHANCED AGENT CHAT V2 ROUTES
-# ============================================================================
-if AGENT_CHAT_V2_AVAILABLE and agent_chat_router:
-    app.include_router(agent_chat_router, prefix="/api/v1/agents", tags=["Agent Chat V2"])
-    # Initialize chat database tables
-    try:
-        if init_chat_tables:
-            init_chat_tables()
-        logger.info("✅ Enhanced Agent Chat V2 routes registered: /api/v1/agents/chat/v2")
-    except Exception as e:
-        logger.warning(f"⚠️ Could not initialize chat tables: {e}")
-
-# ============================================================================
-# GROWTH ENGINE 2.0 - AI REPORT GENERATOR ROUTES
-# ============================================================================
-if AI_REPORTS_AVAILABLE and reports_router:
-    app.include_router(reports_router, tags=["AI Reports"])
-    logger.info("✅ AI Report Generator routes registered: /api/v1/reports/*")
 
 # ============================================================================
 # COMPANY INTELLIGENCE ROUTES
@@ -2145,13 +2110,9 @@ class Plan90D(BaseModel):
     one_thing_this_week: Optional[str] = None
     summary: Optional[Dict[str, Any]] = None
 
-try:
-    from Enhanced_90day_plan import generate_enhanced_90day_plan
-    _ENHANCED_90DAY_AVAILABLE = True
-except ImportError:
-    _ENHANCED_90DAY_AVAILABLE = False
-    def generate_enhanced_90day_plan(basic=None, content=None, technical=None, language='en', competitor_gap=None) -> 'Plan90D':
-        return Plan90D(summary={"total_actions": 0, "note": "Enhanced plan generator unavailable"})
+# Module Enhanced_90day_plan permanently deleted — stub used unconditionally
+def generate_enhanced_90day_plan(basic=None, content=None, technical=None, language='en', competitor_gap=None) -> 'Plan90D':
+    return Plan90D(summary={"total_actions": 0, "note": "Enhanced plan generator unavailable"})
 
 class RiskItem(BaseModel):
     risk: str
@@ -9181,8 +9142,7 @@ async def health_check():
             "cache_size": len(analysis_cache),
             "enhanced_features": 10,
             "complete_models": True,
-            "agent_system": AGENT_SYSTEM_AVAILABLE,
-            "agent_chat_v2": AGENT_CHAT_V2_AVAILABLE
+            "agent_system": AGENT_SYSTEM_AVAILABLE
         },
         "scoring": {"weights": SCORING_CONFIG.weights, "configurable": True}
     }
