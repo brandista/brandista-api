@@ -23,6 +23,7 @@ Usage:
 
 import asyncio
 import logging
+import threading
 import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Callable, TYPE_CHECKING
@@ -178,12 +179,18 @@ class RunContext:
     _active_runs: Dict[str, 'RunContext'] = {}
     # Lock is created lazily to avoid asyncio issues at import time
     _registry_lock: Optional[asyncio.Lock] = None
+    # Threading lock guards the lazy init to prevent a race where two coroutines
+    # both see _registry_lock is None and each create a separate asyncio.Lock.
+    _lock_init_guard: threading.Lock = threading.Lock()
 
     @classmethod
     def _get_lock(cls) -> asyncio.Lock:
-        """Get or create the registry lock (lazy init for asyncio safety)."""
+        """Get (or create) the async registry lock. Safe for concurrent callers."""
         if cls._registry_lock is None:
-            cls._registry_lock = asyncio.Lock()
+            with cls._lock_init_guard:
+                # Double-checked locking: check again under threading lock
+                if cls._registry_lock is None:
+                    cls._registry_lock = asyncio.Lock()
         return cls._registry_lock
 
     # Shared RunStore (Redis or InMemory)

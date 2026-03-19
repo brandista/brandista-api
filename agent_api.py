@@ -52,7 +52,7 @@ def serialize_for_json(obj: Any) -> Any:
     # Fallback: try to convert to string
     try:
         return str(obj)
-    except:
+    except Exception:
         return None
 
 # Auth functions - lazy import to avoid circular dependency

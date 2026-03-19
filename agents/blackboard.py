@@ -255,8 +255,30 @@ class Blackboard:
         agent_id: str,
         **kwargs
     ):
-        """Synchronous publish (schedules async)"""
-        asyncio.create_task(self.publish(key, value, agent_id, **kwargs))
+        """
+        Synchronous publish — schedules async publish if event loop is running,
+        otherwise logs a warning. Never silently swallows errors.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            logger.warning(
+                "[Blackboard] publish_sync called outside async context — "
+                "entry will not be published. key=%s agent=%s", key, agent_id
+            )
+            return
+
+        task = loop.create_task(self.publish(key, value, agent_id, **kwargs))
+
+        def _handle_error(t: asyncio.Task):
+            exc = t.exception()
+            if exc:
+                logger.error(
+                    "[Blackboard] publish_sync async task failed: %s", exc,
+                    exc_info=exc
+                )
+
+        task.add_done_callback(_handle_error)
     
     def get(
         self,
@@ -279,7 +301,9 @@ class Blackboard:
         
         # Check expiration
         if entry.is_expired():
-            del self._data[key]
+            # dict.pop() is GIL-atomic in CPython — safe for best-effort expiry cleanup
+            # in a sync method. The async write path holds self._lock for consistency.
+            self._data.pop(key, None)
             return default
         
         # Update stats
@@ -294,7 +318,7 @@ class Blackboard:
         entry = self._data.get(key)
         
         if entry and entry.is_expired():
-            del self._data[key]
+            self._data.pop(key, None)
             return None
         
         return entry
