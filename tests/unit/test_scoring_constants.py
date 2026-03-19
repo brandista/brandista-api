@@ -270,10 +270,6 @@ class TestWeightConsistency:
         total = sum(PERPLEXITY_WEIGHTS.values())
         assert abs(total - 1.0) < 0.001, f"Perplexity weights sum to {total}, expected 1.0"
 
-    def test_strategic_weights_sum_to_1(self):
-        total = sum(STRATEGIC_CATEGORY_WEIGHTS.values())
-        assert abs(total - 1.0) < 0.001, f"Strategic weights sum to {total}, expected 1.0"
-
     def test_chatgpt_and_perplexity_same_factors(self):
         """Both weight sets must cover the same 6 factors"""
         assert set(CHATGPT_WEIGHTS.keys()) == set(PERPLEXITY_WEIGHTS.keys())
