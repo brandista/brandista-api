@@ -64,6 +64,7 @@ class GrowthEngineOrchestrator:
     def __init__(self):
         self.agents: Dict[str, BaseAgent] = {}
         self._register_agents()
+        self._active_runs: set = set()  # Track active run IDs for is_running property
 
         # These are set per-call in run_analysis for backwards compatibility
         # but the actual isolation happens via RunContext
@@ -76,10 +77,27 @@ class GrowthEngineOrchestrator:
         logger.info("[Orchestrator] ✅ TRUE SWARM initialized")
     
     def _register_agents(self):
-        for agent in [ScoutAgent(), AnalystAgent(), GuardianAgent(), 
+        for agent in [ScoutAgent(), AnalystAgent(), GuardianAgent(),
                       ProspectorAgent(), StrategistAgent(), PlannerAgent()]:
             self.agents[agent.id] = agent
             logger.info(f"[Orchestrator] Registered: {agent.name}")
+
+    @property
+    def is_running(self) -> bool:
+        """Returns True if any analysis run is currently active."""
+        return len(self._active_runs) > 0
+
+    def _create_agents_for_run(self) -> Dict[str, BaseAgent]:
+        """
+        Create fresh agent instances for a single analysis run.
+        MUST be called per-run, never shared between concurrent users.
+        Returns dict mapping agent_id -> agent instance.
+        """
+        run_agents: Dict[str, BaseAgent] = {}
+        for agent in [ScoutAgent(), AnalystAgent(), GuardianAgent(),
+                      ProspectorAgent(), StrategistAgent(), PlannerAgent()]:
+            run_agents[agent.id] = agent
+        return run_agents
     
     def set_callbacks(self, on_insight=None, on_progress=None, 
                       on_agent_complete=None, on_agent_start=None, on_swarm_event=None):
@@ -108,6 +126,13 @@ class GrowthEngineOrchestrator:
         """
         # Local state for this run (NOT instance variables!)
         start_time = datetime.now()
+
+        # Per-run fresh agent instances — prevents state leaks between concurrent users
+        run_agents = self._create_agents_for_run()
+
+        # Track this run for is_running property
+        _run_id_key = run_context.run_id if run_context else id(run_agents)
+        self._active_runs.add(_run_id_key)
 
         logger.info("=" * 60)
         logger.info("🚀 TRUE SWARM ANALYSIS STARTING")
@@ -159,9 +184,9 @@ class GrowthEngineOrchestrator:
         errors = []
 
         try:
-            # Set callbacks and RunContext for each agent
+            # Set callbacks and RunContext for each per-run agent
             logger.info(f"[Orchestrator] 🔧 Setting callbacks: on_progress={'SET' if self._on_progress else 'NOT SET'}")
-            for agent in self.agents.values():
+            for agent in run_agents.values():
                 agent.set_callbacks(
                     on_insight=self._on_insight,
                     on_progress=self._on_progress,
@@ -182,12 +207,12 @@ class GrowthEngineOrchestrator:
 
                 logger.info(f"[Orchestrator] === PHASE {phase_idx}: {phase_agents} ===")
 
-                self._check_dependencies(phase_agents, context)
+                self._check_dependencies(phase_agents, context, run_agents)
 
                 if len(phase_agents) > 1:
-                    results = await self._run_parallel(phase_agents, context, run_context)
+                    results = await self._run_parallel(phase_agents, context, run_context, run_agents)
                 else:
-                    results = [await self._run_agent(phase_agents[0], context, run_context)]
+                    results = [await self._run_agent(phase_agents[0], context, run_context, run_agents)]
 
                 for result in results:
                     if result:
@@ -202,6 +227,8 @@ class GrowthEngineOrchestrator:
             errors.append(str(e))
 
         finally:
+            # Untrack this run
+            self._active_runs.discard(_run_id_key)
             # Mark RunContext as complete (async for RunStore persistence)
             if run_context:
                 await run_context.complete(
@@ -210,7 +237,7 @@ class GrowthEngineOrchestrator:
                 )
 
         # Verify learning predictions after all agents complete
-        learning_stats = self._verify_learning_predictions(context, run_context)
+        learning_stats = self._verify_learning_predictions(context, run_context, run_agents)
 
         duration = (datetime.now() - start_time).total_seconds()
 
@@ -231,10 +258,12 @@ class GrowthEngineOrchestrator:
         self,
         agent_id: str,
         context: AnalysisContext,
-        run_context: Optional['RunContext'] = None
+        run_context: Optional['RunContext'] = None,
+        run_agents: Optional[Dict[str, BaseAgent]] = None,
     ) -> Optional[AgentResult]:
         """Run a single agent with proper isolation."""
-        agent = self.agents.get(agent_id)
+        agents_to_use = run_agents if run_agents is not None else self.agents
+        agent = agents_to_use.get(agent_id)
         if not agent:
             return None
 
@@ -282,11 +311,12 @@ class GrowthEngineOrchestrator:
         self,
         agent_ids: List[str],
         context: AnalysisContext,
-        run_context: Optional['RunContext'] = None
+        run_context: Optional['RunContext'] = None,
+        run_agents: Optional[Dict[str, BaseAgent]] = None,
     ) -> List[AgentResult]:
         """Run multiple agents in parallel."""
         logger.info(f"[Orchestrator] ⚡ Parallel: {agent_ids}")
-        tasks = [self._run_agent(aid, context, run_context) for aid in agent_ids]
+        tasks = [self._run_agent(aid, context, run_context, run_agents) for aid in agent_ids]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         processed = []
@@ -300,10 +330,16 @@ class GrowthEngineOrchestrator:
                 processed.append(result)
         return processed
 
-    def _check_dependencies(self, agent_ids: List[str], context: AnalysisContext) -> bool:
+    def _check_dependencies(
+        self,
+        agent_ids: List[str],
+        context: AnalysisContext,
+        run_agents: Optional[Dict[str, BaseAgent]] = None,
+    ) -> bool:
         """Check that all dependencies are met."""
+        agents_to_use = run_agents if run_agents is not None else self.agents
         for agent_id in agent_ids:
-            agent = self.agents.get(agent_id)
+            agent = agents_to_use.get(agent_id)
             if not agent:
                 continue
             for dep_id in agent.dependencies:
@@ -314,7 +350,8 @@ class GrowthEngineOrchestrator:
     def _verify_learning_predictions(
         self,
         context: AnalysisContext,
-        run_context: Optional['RunContext'] = None
+        run_context: Optional['RunContext'] = None,
+        run_agents: Optional[Dict[str, BaseAgent]] = None,
     ) -> Dict[str, Any]:
         """
         Verify guardian predictions against actual analysis results.
@@ -323,7 +360,8 @@ class GrowthEngineOrchestrator:
         stats = {'verified': 0, 'correct': 0, 'skipped': 0}
 
         try:
-            guardian = self.agents.get('guardian')
+            agents_to_use = run_agents if run_agents is not None else self.agents
+            guardian = agents_to_use.get('guardian')
             if not guardian or not hasattr(guardian, '_predictions_made'):
                 return stats
 
