@@ -183,7 +183,7 @@ async def scrape(
 
     t0 = time.monotonic()
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         app = FirecrawlApp(api_key=FIRECRAWL_API_KEY)
 
         result = await loop.run_in_executor(
