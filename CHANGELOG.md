@@ -5,6 +5,35 @@ Muoto: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [3.2.0] - 2026-03-20 — Firecrawl provider integration & content_fetch package
+
+### Lisätty — agents/content_fetch/ -paketti
+- **`agents/content_fetch/orchestrator.py`**: Provider-sekvensointi, fallback-ketju, in-memory cache, Phase 1/2 -logiikka. Phase 1 (FIRECRAWL_ENABLED=false): identtinen toiminta kuin aiempi `get_website_content` main.py:ssä. Phase 2 (FIRECRAWL_ENABLED=true): HTTP preflight → Firecrawl → Playwright-fallback.
+- **`agents/content_fetch/firecrawl_provider.py`**: Firecrawl SDK -integraatio, circuit breaker, Redis-välimuisti, laadunportti (quality gate). Hallinnoi ulkoisen scraping-palvelun käyttöä eristettynä muusta koodista.
+- **`agents/content_fetch/http_provider.py`**: httpx HTTP preflight — tarkistaa sivun saavutettavuuden ennen raskaampia tarjoajia.
+- **`agents/content_fetch/playwright_provider.py`**: Playwright-render eristetty main.py:stä omaan tiedostoonsa.
+- **`agents/content_fetch/__init__.py`**: Re-exporttaa `get_website_content` taaksepäin yhteensopivuuden takaamiseksi (`scout_agent.py` import ei muutu).
+- **22 uutta testiä** (`tests/unit/content_fetch/`): Kattavat testit kaikille providereille ja orchestratorille — circuit breaker, cache, fallback-ketju, quality gate.
+
+### Muutettu
+- **`main.py` `get_website_content`**: 234-rivin monoliitin toteutus korvattu ohuella importilla `agents.content_fetch`:sta. Ulkoinen API säilyy identtisenä — nolla käyttäytymismuutosta.
+
+### Konfiguraatio — uudet ympäristömuuttujat
+| Muuttuja | Oletusarvo | Kuvaus |
+|---|---|---|
+| `FIRECRAWL_API_KEY` | `""` | Firecrawl API-avain — pakollinen kun FIRECRAWL_ENABLED=true |
+| `FIRECRAWL_ENABLED` | `false` | Phase 2 aktivointi — oletuksena pois, nolla riskiä |
+| `FIRECRAWL_TIMEOUT` | `15` | Firecrawl-pyyntöjen aikakatkaisu (sekuntia) |
+| `FIRECRAWL_MULTI_PAGE_ENABLED` | `false` | Multi-page crawl Firecrawlilla (tulevaa käyttöä varten) |
+
+### Miksi
+- **Eristys**: 234-rivin `get_website_content` oli upotettuna 11 500-rivin `main.py`-monoliittiin — testaamaton, vaikea muuttaa turvallisesti.
+- **Testattavuus**: Erillinen paketti mahdollistaa yksikkötestauksen ilman koko API:n käynnistystä.
+- **Firecrawl valmiudessa**: Hallinnoidun scraping-palvelun integraatio käyttöönottoa varten (Phase 2) ilman että se vaikuttaa nykyiseen toimintaan.
+- **Nolla riskiä Phase 1:ssä**: FIRECRAWL_ENABLED=false tarkoittaa täsmälleen sama provider-järjestys kuin ennen.
+
+---
+
 ## [3.1.1] - 2026-03-19 — SECRET_KEY unification & rate limit defaults
 
 ### Korjattu — Tietoturva
