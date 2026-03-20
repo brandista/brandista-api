@@ -35,7 +35,7 @@ _content_cache: Dict[str, Dict[str, Any]] = {}
 def _get_cache_key(url: str, mode: str, force_spa: bool) -> str:
     """Generate a deterministic cache key that captures all fetch-shape parameters."""
     payload = f"{url}|{mode}|{force_spa}"
-    return f"content_{hashlib.md5(payload.encode()).hexdigest()}"
+    return f"content_{hashlib.md5(payload.encode(), usedforsecurity=False).hexdigest()}"
 
 
 def _is_cache_valid(entry: Dict[str, Any]) -> bool:
@@ -109,6 +109,9 @@ async def get_website_content(
 
     Phase 2 (FIRECRAWL_ENABLED=True):
         Firecrawl → Playwright fallback → HTTP last resort
+
+    The timeout parameter applies to fetch_http and render_spa only; firecrawl_scrape
+    uses FIRECRAWL_TIMEOUT from config independently.
     """
     cache_key = _get_cache_key(url, mode=mode, force_spa=force_spa)
     if cache_key in _content_cache and _is_cache_valid(_content_cache[cache_key]):
@@ -120,7 +123,7 @@ async def get_website_content(
     # Phase 2 — Firecrawl enabled
     # ------------------------------------------------------------------
     if FIRECRAWL_ENABLED:
-        http_res = await fetch_http(url)
+        http_res = await fetch_http(url, timeout=timeout)
         baseline_html = (
             http_res.text if (http_res and http_res.status_code == 200 and http_res.text)
             else ""
@@ -139,7 +142,7 @@ async def get_website_content(
 
         # Playwright fallback
         if detect_spa_markers(baseline_html) or force_spa or mode == "aggressive":
-            spa_html = await render_spa(url)
+            spa_html = await render_spa(url, timeout=timeout)
             if spa_html:
                 _content_cache[cache_key] = {
                     "content": spa_html,
@@ -168,11 +171,11 @@ async def get_website_content(
     html: Optional[str] = None
 
     if mode == "aggressive" or force_spa:
-        html = await render_spa(url)
+        html = await render_spa(url, timeout=timeout)
         if html:
             used_spa = True
         else:
-            http_res = await fetch_http(url)
+            http_res = await fetch_http(url, timeout=timeout)
             html = (
                 http_res.text
                 if (http_res and http_res.status_code == 200 and http_res.text)
@@ -180,13 +183,13 @@ async def get_website_content(
             )
             used_spa = False
     else:
-        http_res = await fetch_http(url)
+        http_res = await fetch_http(url, timeout=timeout)
         baseline_html = (
             http_res.text if (http_res and http_res.status_code == 200 and http_res.text)
             else ""
         )
         if detect_spa_markers(baseline_html) or force_spa or is_spa_domain(url):
-            spa_result = await render_spa(url)
+            spa_result = await render_spa(url, timeout=timeout)
             html = spa_result or baseline_html
             used_spa = bool(spa_result)
         else:

@@ -76,8 +76,8 @@ async def test_phase1_aggressive_mode_playwright_first_then_http_fallback():
             url, force_spa=False, mode="aggressive"
         )
 
-    mock_spa.assert_called_once_with(url)
-    mock_http.assert_called_once_with(url)
+    mock_spa.assert_called_once_with(url, timeout=30)
+    mock_http.assert_called_once_with(url, timeout=30)
     assert result_html == baseline
     assert used_spa is False
 
@@ -146,7 +146,7 @@ async def test_phase1_balanced_spa_markers_triggers_playwright():
             url, force_spa=False, mode="balanced"
         )
 
-    mock_spa.assert_called_once_with(url)
+    mock_spa.assert_called_once_with(url, timeout=30)
     assert result_html == rendered
     assert used_spa is True
 
@@ -233,7 +233,7 @@ async def test_phase2_firecrawl_none_falls_back_to_playwright():
 
         result_html, used_spa = await orchestrator.get_website_content(url, mode="balanced")
 
-    mock_spa.assert_called_once_with(url)
+    mock_spa.assert_called_once_with(url, timeout=30)
     assert result_html == spa_html
     assert used_spa is True
 
