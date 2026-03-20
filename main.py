@@ -1901,45 +1901,8 @@ def init_users():
     logger.info(f"   Loaded {len(USERS_DB)} users")
     return USERS_DB
 
-# ✅ KUTSU HETI
-init_users()
-
-# ✅ DATABASE SYNC (sama kuin ennenkin)
-if DATABASE_ENABLED:
-    try:
-        init_database()
-        sync_hardcoded_users_to_db(USERS_DB)
-        logger.info("✅ Database initialized and users synced")
-        
-        db_users = get_all_users_from_db()
-        for db_user in db_users:
-            username = db_user['username']
-            if username not in USERS_DB:
-                hashed_pwd = db_user.get('password_hash') or db_user.get('hashed_password', '')
-                
-                if not hashed_pwd:
-                    logger.warning(f"⚠️ User {username} from DB has no password hash, skipping")
-                    continue
-                
-                USERS_DB[username] = {
-                    'username': username,
-                    'email': db_user.get('email', f"{username}@unknown.com"),
-                    'hashed_password': hashed_pwd,
-                    'role': db_user['role'],
-                    'search_limit': db_user['search_limit']
-                }
-                logger.info(f"🔥 Loaded user from DB: {username}")
-                
-    except Exception as e:
-        logger.error(f"❌ Database initialization failed: {e}")
-        logger.info("⚠️ Continuing with hardcoded users only")
-
-logger.info(f"👥 Total users loaded: {len(USERS_DB)}")
-logger.info(f"📋 Users: {', '.join(USERS_DB.keys())}")
-
-# ✅ LOG FINAL USER COUNT
-logger.info(f"👥 Total users loaded: {len(USERS_DB)}")
-logger.info(f"📋 Users: {', '.join(USERS_DB.keys())}")
+# NOTE: init_users() and init_database() are called once in app/main.py lifespan.
+# Do NOT call them here at module level — would run twice when app.main imports this module.
 
 # ============================================================================
 # TRANSLATION MODULE IMPORT
