@@ -5,6 +5,32 @@ Muoto: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [v3.2.0] - 2026-03-20
+
+### Added
+- Firecrawl provider integration (`agents/content_fetch/firecrawl_provider.py`)
+  - Circuit breaker (3 failures → open, 5min recovery)
+  - Redis cache with versioned key `firecrawl:v1:{md5(url|mode|force_spa)}`
+  - Quality gate: ≥100 words, no error/cookiewall, >10% more content than baseline
+  - Startup validation: ValueError if FIRECRAWL_ENABLED=true without API key
+- Content fetch provider abstraction (`agents/content_fetch/`)
+  - `http_provider.py` — thin httpx wrapper extracted from main.py
+  - `playwright_provider.py` — render_spa() extracted from main.py
+  - `orchestrator.py` — Phase 1/Phase 2 routing, in-memory cache, HTTPException boundary
+- New config vars: `FIRECRAWL_API_KEY`, `FIRECRAWL_ENABLED` (default: false), `FIRECRAWL_TIMEOUT` (default: 15s), `FIRECRAWL_MULTI_PAGE_ENABLED` (default: false)
+- New dependency: `firecrawl-py==1.13.4` (pydantic upgraded to >=2.10.3)
+- 34 new tests (590 total, 30 skipped)
+
+### Changed
+- `pydantic==2.5.3` → `pydantic>=2.10.3,<3.0.0` for firecrawl-py compatibility
+
+### Notes
+- Phase 1 (FIRECRAWL_ENABLED=false): zero behavior change, all existing logic preserved
+- Phase 2 (FIRECRAWL_ENABLED=true): HTTP preflight → Firecrawl → Playwright fallback
+- Set FIRECRAWL_API_KEY + FIRECRAWL_ENABLED=true in Railway env vars to activate
+
+---
+
 ## [3.2.0] - 2026-03-20 — Firecrawl provider integration & content_fetch package
 
 ### Lisätty — agents/content_fetch/ -paketti
