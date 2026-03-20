@@ -101,7 +101,7 @@ async def test_scrape_returns_html_on_success():
 
     with patch("agents.content_fetch.firecrawl_provider.FIRECRAWL_ENABLED", True), \
          patch("agents.content_fetch.firecrawl_provider.FIRECRAWL_API_KEY", "test-key"), \
-         patch("agents.content_fetch.firecrawl_provider.FirecrawlApp", return_value=mock_sdk), \
+         patch("agents.content_fetch.firecrawl_provider._get_firecrawl_app", return_value=mock_sdk), \
          patch("agents.content_fetch.firecrawl_provider._redis_get", return_value=None), \
          patch("agents.content_fetch.firecrawl_provider._redis_set", return_value=None):
         from agents.content_fetch import firecrawl_provider

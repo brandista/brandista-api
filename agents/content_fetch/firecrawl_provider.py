@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import threading
 import time
 from datetime import datetime, timedelta
 from typing import Optional
@@ -30,25 +31,37 @@ def _validate_config():
 _validate_config()
 
 try:
-    from firecrawl import FirecrawlApp
+    from firecrawl import FirecrawlApp as _FirecrawlApp
     _FIRECRAWL_AVAILABLE = True
 except ImportError:
-    FirecrawlApp = None  # type: ignore
+    _FirecrawlApp = None  # type: ignore
     _FIRECRAWL_AVAILABLE = False
     if FIRECRAWL_ENABLED:
         logger.warning("[firecrawl] firecrawl-py not installed but FIRECRAWL_ENABLED=true")
 
+_FIRECRAWL_APP: Optional[object] = None  # module-level singleton, created once
+
+
+def _get_firecrawl_app():
+    global _FIRECRAWL_APP
+    if _FIRECRAWL_APP is None:
+        _FIRECRAWL_APP = _FirecrawlApp(api_key=FIRECRAWL_API_KEY)
+    return _FIRECRAWL_APP
+
 _REDIS_CLIENT = None  # lazy init
+_REDIS_LOCK = threading.Lock()
 
 
 def _get_redis():
     global _REDIS_CLIENT
     if _REDIS_CLIENT is None and REDIS_URL:
-        try:
-            import redis as redis_lib
-            _REDIS_CLIENT = redis_lib.from_url(REDIS_URL, decode_responses=True)
-        except Exception as e:
-            logger.warning("[firecrawl] Redis init failed: %s", e)
+        with _REDIS_LOCK:
+            if _REDIS_CLIENT is None:  # double-checked locking
+                try:
+                    import redis as redis_lib
+                    _REDIS_CLIENT = redis_lib.from_url(REDIS_URL, decode_responses=True)
+                except Exception as e:
+                    logger.warning("[firecrawl] Redis init failed: %s", e)
     return _REDIS_CLIENT
 
 
@@ -101,11 +114,15 @@ def _quality_gate(firecrawl_html: str, baseline_html: Optional[str]) -> bool:
     """Return True if Firecrawl result is good enough to use."""
     if not firecrawl_html:
         return False
+    # Clean text must be > 500 chars (content depth check)
     text = _clean_text(firecrawl_html)
     if len(text) <= 500:
         return False
+    # Firecrawl must not serve an error page or cookie wall
     if _is_error_or_cookiewall(firecrawl_html):
         return False
+    # Firecrawl must deliver at least 10% more raw content than HTTP baseline
+    # (both sides measured as raw HTML; if no baseline, any non-empty result passes)
     baseline_len = len(baseline_html or "")
     if len(firecrawl_html) <= baseline_len * 1.1:
         return False
@@ -184,7 +201,7 @@ async def scrape(
     t0 = time.monotonic()
     try:
         loop = asyncio.get_running_loop()
-        app = FirecrawlApp(api_key=FIRECRAWL_API_KEY)
+        app = _get_firecrawl_app()
 
         result = await loop.run_in_executor(
             None,
