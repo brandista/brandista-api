@@ -437,6 +437,8 @@ logger.info(f"Playwright support: {'enabled' if PLAYWRIGHT_AVAILABLE and PLAYWRI
 logger.info(f"OpenAI support: {'available' if OPENAI_AVAILABLE else 'not available'}")
 logger.info(f"Redis support: {'available' if REDIS_AVAILABLE else 'not available'}")
 logger.info(f"Database support: {'enabled' if DATABASE_ENABLED else 'disabled'}")
+from app.config import FIRECRAWL_ENABLED as _FC_ENABLED, FIRECRAWL_API_KEY as _FC_KEY
+logger.info(f"Firecrawl support: {'enabled' if _FC_ENABLED else 'disabled (set FIRECRAWL_ENABLED=true to activate)'}{' [API key set]' if _FC_KEY else ' [no API key]'}")
 
 # Initialize OpenAI (after logger is ready)
 if OPENAI_AVAILABLE and os.getenv("OPENAI_API_KEY"):
