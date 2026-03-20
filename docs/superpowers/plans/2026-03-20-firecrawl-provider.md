@@ -717,25 +717,27 @@ def _get_redis():
     return _REDIS_CLIENT
 
 
-def _cache_key(url: str) -> str:
-    return f"firecrawl:{hashlib.md5(url.encode()).hexdigest()}"
+def _cache_key(url: str, mode: str = "", force_spa: bool = False) -> str:
+    # Include version + fetch shape so config/quality-gate changes don't serve stale results
+    payload = f"{url}|{mode}|{force_spa}"
+    return f"firecrawl:v1:{hashlib.md5(payload.encode()).hexdigest()}"
 
 
-def _redis_get(url: str) -> Optional[str]:
+def _redis_get(url: str, mode: str = "", force_spa: bool = False) -> Optional[str]:
     try:
         r = _get_redis()
         if r:
-            return r.get(_cache_key(url))
+            return r.get(_cache_key(url, mode, force_spa))
     except Exception as e:
         logger.debug("[firecrawl] Redis GET failed: %s", e)
     return None
 
 
-def _redis_set(url: str, html: str, ttl: int = 3600) -> None:
+def _redis_set(url: str, html: str, mode: str = "", force_spa: bool = False, ttl: int = 3600) -> None:
     try:
         r = _get_redis()
         if r:
-            r.setex(_cache_key(url), ttl, html)
+            r.setex(_cache_key(url, mode, force_spa), ttl, html)
     except Exception as e:
         logger.debug("[firecrawl] Redis SET failed: %s", e)
 
@@ -817,7 +819,12 @@ class CircuitBreaker:
 _circuit_breaker = CircuitBreaker(failure_threshold=3, recovery_timeout=300)
 
 
-async def scrape(url: str, baseline_html: Optional[str] = None) -> Optional[str]:
+async def scrape(
+    url: str,
+    baseline_html: Optional[str] = None,
+    mode: str = "",
+    force_spa: bool = False,
+) -> Optional[str]:
     """
     Fetch URL via Firecrawl SDK. Returns HTML string or None if disabled,
     circuit open, quality gate fails, or any error occurs.
@@ -829,8 +836,8 @@ async def scrape(url: str, baseline_html: Optional[str] = None) -> Optional[str]
         logger.info("[firecrawl] circuit OPEN — skipping %s", url)
         return None
 
-    # Redis cache check
-    cached = _redis_get(url)
+    # Redis cache check (key includes mode + force_spa to avoid stale hits after config changes)
+    cached = _redis_get(url, mode=mode, force_spa=force_spa)
     if cached:
         logger.info("[firecrawl] cache HIT for %s", url)
         return cached
@@ -856,7 +863,7 @@ async def scrape(url: str, baseline_html: Optional[str] = None) -> Optional[str]
             return None
 
         _circuit_breaker.record_success()
-        _redis_set(url, html)
+        _redis_set(url, html, mode=mode, force_spa=force_spa)
         return html
 
     except Exception as e:
@@ -943,17 +950,14 @@ async def test_used_spa_false_when_http_wins():
 
 @pytest.mark.asyncio
 async def test_used_spa_true_when_playwright_wins():
-    sparse_html = "<html><body>Loading...</body></html>"
+    """In aggressive mode (Phase 1), Playwright runs first — used_spa=True on success."""
     playwright_html = "<html><body>" + "word " * 100 + "</body></html>"
-    with patch("agents.content_fetch.orchestrator.fetch_http",
-               AsyncMock(return_value=_make_http_response(sparse_html))), \
-         patch("agents.content_fetch.orchestrator.FIRECRAWL_ENABLED", False), \
-         patch("agents.content_fetch.orchestrator.CONTENT_FETCH_MODE", "aggressive"), \
+    with patch("agents.content_fetch.orchestrator.FIRECRAWL_ENABLED", False), \
          patch("agents.content_fetch.orchestrator.render_spa",
                AsyncMock(return_value=playwright_html)), \
          patch("agents.content_fetch.orchestrator._content_cache", {}):
         from agents.content_fetch.orchestrator import get_website_content
-        _, used_spa = await get_website_content("https://example.com")
+        _, used_spa = await get_website_content("https://example.com", mode="aggressive")
     assert used_spa is True
 
 
@@ -999,10 +1003,12 @@ async def test_firecrawl_result_wins_over_http():
     assert used_spa is False
 
 
-# ── Total failure returns (None, False) ────────────────────────────────────
+# ── Total failure raises HTTPException (preserved from main.py:3657) ────────
 
 @pytest.mark.asyncio
-async def test_returns_none_when_all_providers_fail():
+async def test_raises_http_exception_on_insufficient_content():
+    """Matches current main.py behavior: HTTPException(400) when content < 100 chars."""
+    from fastapi import HTTPException
     with patch("agents.content_fetch.orchestrator.fetch_http",
                AsyncMock(return_value=None)), \
          patch("agents.content_fetch.orchestrator.FIRECRAWL_ENABLED", False), \
@@ -1011,13 +1017,15 @@ async def test_returns_none_when_all_providers_fail():
                AsyncMock(return_value=None)), \
          patch("agents.content_fetch.orchestrator._content_cache", {}):
         from agents.content_fetch.orchestrator import get_website_content
-        result = await get_website_content("https://example.com")
-    assert result == (None, False)
+        with pytest.raises(HTTPException) as exc_info:
+            await get_website_content("https://example.com")
+    assert exc_info.value.status_code == 400
 
 
 @pytest.mark.asyncio
-async def test_does_not_raise_http_exception():
-    """Orchestrator must not raise HTTPException — that is the caller's responsibility."""
+async def test_raises_http_exception_when_all_providers_fail():
+    """Orchestrator must raise HTTPException(400) on total failure — same as main.py:3657."""
+    from fastapi import HTTPException
     with patch("agents.content_fetch.orchestrator.fetch_http",
                AsyncMock(return_value=None)), \
          patch("agents.content_fetch.orchestrator.FIRECRAWL_ENABLED", False), \
@@ -1025,9 +1033,9 @@ async def test_does_not_raise_http_exception():
                AsyncMock(return_value=None)), \
          patch("agents.content_fetch.orchestrator._content_cache", {}):
         from agents.content_fetch.orchestrator import get_website_content
-        # Should not raise
-        result = await get_website_content("https://example.com")
-    assert result[0] is None
+        with pytest.raises(HTTPException) as exc_info:
+            await get_website_content("https://example.com")
+    assert exc_info.value.status_code == 400
 ```
 
 - [ ] **Step 2: Run tests — expect ImportError**
@@ -1114,7 +1122,12 @@ async def get_website_content(
     """
     Unified content fetch. Returns (html, used_spa).
     used_spa=True only when Playwright was used.
-    Returns (None, False) if all providers fail — callers handle HTTPException.
+    Raises HTTPException(400) on insufficient content — same contract as main.py:3657.
+
+    Phase 1 (FIRECRAWL_ENABLED=false): preserves exact current execution order.
+      - aggressive mode: Playwright first → HTTP fallback
+      - balanced/light mode: HTTP first → Playwright if SPA markers
+    Phase 2 (FIRECRAWL_ENABLED=true): HTTP preflight → Firecrawl → Playwright.
     """
     key = _cache_key(url)
     cached = _content_cache.get(key)
@@ -1126,55 +1139,87 @@ async def get_website_content(
     used_spa = False
     html: Optional[str] = None
 
-    # ── 1. HTTP preflight ────────────────────────────────────────────────────
-    http_res = await fetch_http(url, timeout=timeout)
-    baseline_html: str = ""
-    if http_res and http_res.status_code == 200 and http_res.text:
-        baseline_html = http_res.text
-
-    # ── 2. Firecrawl (if enabled) ────────────────────────────────────────────
     if FIRECRAWL_ENABLED:
+        # ── Phase 2: HTTP preflight → Firecrawl → Playwright ────────────────
+        http_res = await fetch_http(url, timeout=timeout)
+        baseline_html: str = ""
+        if http_res and http_res.status_code == 200 and http_res.text:
+            baseline_html = http_res.text
+
         try:
             from agents.content_fetch.firecrawl_provider import scrape
-            result = await scrape(url, baseline_html=baseline_html or None)
-            if result:
+            fc_result = await scrape(url, baseline_html=baseline_html or None,
+                                     mode=mode, force_spa=force_spa)
+            if fc_result:
                 duration = time.monotonic() - start
                 logger.info(
                     "[content_fetch] provider=firecrawl url=%s duration=%.1fs content_len=%d fallback=false",
-                    url, duration, len(result),
+                    url, duration, len(fc_result),
                 )
-                html = result
-                _store_cache(key, html, False)
-                return html, False
+                _store_cache(key, fc_result, False)
+                return fc_result, False
         except Exception as e:
             logger.warning("[content_fetch] Firecrawl error for %s: %s", url, e)
 
-    # ── 3. Playwright fallback ───────────────────────────────────────────────
-    needs_playwright = force_spa or mode == "aggressive" or detect_spa_markers(baseline_html) or is_spa_domain(url)
-    if needs_playwright:
-        pw_result = await render_spa(url)
-        if pw_result:
+        # Playwright fallback
+        if force_spa or mode == "aggressive" or detect_spa_markers(baseline_html) or is_spa_domain(url):
+            pw_result = await render_spa(url)
+            if pw_result:
+                duration = time.monotonic() - start
+                logger.info(
+                    "[content_fetch] provider=playwright url=%s duration=%.1fs content_len=%d fallback=true fallback_reason=firecrawl_failed",
+                    url, duration, len(pw_result),
+                )
+                _store_cache(key, pw_result, True)
+                return pw_result, True
+
+        if baseline_html and len(baseline_html.strip()) >= 100:
+            _store_cache(key, baseline_html, False)
+            return baseline_html, False
+
+    else:
+        # ── Phase 1: preserve exact current main.py behavior ─────────────────
+        if mode == "aggressive" or force_spa:
+            # Playwright first (current aggressive default)
+            pw_result = await render_spa(url)
+            if pw_result:
+                duration = time.monotonic() - start
+                logger.info(
+                    "[content_fetch] provider=playwright url=%s duration=%.1fs content_len=%d fallback=false",
+                    url, duration, len(pw_result),
+                )
+                _store_cache(key, pw_result, True)
+                return pw_result, True
+            # HTTP fallback
+            http_res = await fetch_http(url, timeout=timeout)
+            if http_res and http_res.status_code == 200 and http_res.text:
+                html = http_res.text
+                used_spa = False
+        else:
+            # HTTP first, Playwright if SPA
+            http_res = await fetch_http(url, timeout=timeout)
+            baseline = http_res.text if (http_res and http_res.status_code == 200 and http_res.text) else ""
+            needs_spa = force_spa or detect_spa_markers(baseline) or is_spa_domain(url)
+            if needs_spa:
+                pw_result = await render_spa(url)
+                html = pw_result or baseline
+                used_spa = pw_result is not None and pw_result != baseline
+            else:
+                html = baseline
+                used_spa = False
+
+        if html and len(html.strip()) >= 100:
             duration = time.monotonic() - start
-            fallback_reason = "firecrawl_disabled" if not FIRECRAWL_ENABLED else "firecrawl_failed"
             logger.info(
-                "[content_fetch] provider=playwright url=%s duration=%.1fs content_len=%d fallback=true fallback_reason=%s",
-                url, duration, len(pw_result), fallback_reason,
+                "[content_fetch] provider=%s url=%s duration=%.1fs content_len=%d",
+                "playwright" if used_spa else "http", url, duration, len(html),
             )
-            _store_cache(key, pw_result, True)
-            return pw_result, True
+            _store_cache(key, html, used_spa)
+            return html, used_spa
 
-    # ── 4. Last resort: baseline HTTP ────────────────────────────────────────
-    if baseline_html and len(baseline_html.strip()) >= 100:
-        duration = time.monotonic() - start
-        logger.info(
-            "[content_fetch] provider=http url=%s duration=%.1fs content_len=%d fallback=false",
-            url, duration, len(baseline_html),
-        )
-        _store_cache(key, baseline_html, False)
-        return baseline_html, False
-
-    logger.warning("[content_fetch] all providers failed for %s", url)
-    return None, False
+    # ── Insufficient content — same exception as main.py:3657 ────────────────
+    from fastapi import HTTPException
+    raise HTTPException(status_code=400, detail="Website returned insufficient content")
 
 
 def _store_cache(key: str, html: str, used_spa: bool) -> None:

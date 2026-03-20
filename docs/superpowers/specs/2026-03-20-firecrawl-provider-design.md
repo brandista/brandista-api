@@ -91,9 +91,9 @@ result = app.scrape_url(url, formats=["html", "markdown"], timeout=FIRECRAWL_TIM
 - Note: Railway production runs a single Uvicorn worker (Nixpacks default). The per-process breaker is therefore sufficient and does not need Redis backing. If multi-worker is ever enabled, revisit this.
 
 **Redis cache**:
-- Key: `firecrawl:{md5(url)}`
+- Key: `firecrawl:v1:{md5(url|mode|force_spa)}` — includes provider version and fetch shape so config changes and quality-gate revisions don't silently serve stale results
 - TTL: 3600s (1 hour)
-- Skips SDK call on cache hit, returns cached html + markdown.
+- Skips SDK call on cache hit, returns cached html.
 
 **Quality gate** (result accepted only if all pass):
 ```
@@ -112,39 +112,69 @@ AND len(firecrawl_html) > len(baseline_html or "") * 1.1
 
 ---
 
-## Orchestrator Flow
+## Orchestrator Flow — Phase 1 (FIRECRAWL_ENABLED=false, zero behavior change)
+
+Phase 1 preserves the **exact current execution order** from `main.py:3433–3666`:
+- aggressive mode: Playwright first → HTTP fallback
+- balanced/light mode: HTTP first → Playwright if SPA markers or force_spa
 
 ```
-http_preflight(url)
-    → baseline_html (str | None), headers
-
 check in-memory cache (content_cache)
     → if hit, return cached (html, used_spa)
 
-if FIRECRAWL_ENABLED:
-    check circuit breaker — if open, skip to Playwright
-    check Redis cache — if hit, update in-memory cache, return (html, False)
-    call firecrawl_provider(url, baseline_html)
-    run quality gate
-    if passes → store in Redis + in-memory cache, return (html, False)
+# Preserve current mode logic exactly:
+if mode == "aggressive" OR force_spa:
+    html = playwright_provider(url)          # Playwright first (current behavior)
+    if not html:
+        html = http_provider(url)            # HTTP fallback
+        used_spa = False
+else:
+    http_res = http_provider(url)
+    baseline_html = http_res.text if 200 else ""
+    if detect_spa_markers(baseline_html) OR force_spa OR is_spa_domain(url):
+        html = playwright_provider(url) OR baseline_html
+    else:
+        html = baseline_html
+        used_spa = False
 
-# Playwright fallback (existing SPA logic preserved)
-if detect_spa_markers(baseline_html or "") OR force_spa OR CONTENT_FETCH_MODE == "aggressive":
-    call playwright_provider(url)
-    if result:
-        store in in-memory cache
-        return (result, True)
+if not html or len(html.strip()) < 100:
+    raise HTTPException(400, "Website returned insufficient content")   # PRESERVED
 
-# Last resort: return baseline HTTP html
-if baseline_html and len(baseline_html.strip()) >= 100:
-    store in in-memory cache
-    return (baseline_html, False)
-
-# Callers handle the None case — orchestrator does NOT raise HTTPException
-return (None, False)
+store in in-memory cache
+return (html, used_spa)
 ```
 
-**HTTPException boundary**: the orchestrator returns `(None, False)` instead of raising `HTTPException`. The existing callers already check for insufficient content and raise `HTTPException` themselves — this boundary must remain at the FastAPI layer, not inside a utility module.
+## Orchestrator Flow — Phase 2 (FIRECRAWL_ENABLED=true, new sequencing)
+
+When Firecrawl is enabled, the orchestrator switches to the new provider order:
+
+```
+check in-memory cache (content_cache)
+    → if hit, return cached (html, used_spa)
+
+# New order: HTTP preflight → Firecrawl → Playwright
+http_preflight(url)
+    → baseline_html (str | ""), headers
+
+check circuit breaker — if open, skip Firecrawl
+check Redis cache — if hit, update in-memory cache, return (html, False)
+call firecrawl_provider(url, baseline_html)
+run quality gate
+if passes → store in Redis + in-memory cache, return (html, False)
+
+# Playwright fallback
+if detect_spa_markers(baseline_html) OR force_spa OR mode == "aggressive":
+    html = playwright_provider(url)
+    if html → store, return (html, True)
+
+# Last resort
+if baseline_html and len(baseline_html.strip()) >= 100:
+    store, return (baseline_html, False)
+
+raise HTTPException(400, "Website returned insufficient content")
+```
+
+**HTTPException boundary**: preserved in both phases — the orchestrator raises `HTTPException(400)` on total failure, consistent with `main.py:3657`. This is NOT moved to callers.
 
 **`used_spa=True`** only when Playwright was used — preserves existing semantics.
 
