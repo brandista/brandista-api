@@ -3,6 +3,17 @@ from unittest.mock import MagicMock, patch
 from datetime import datetime, timedelta
 
 
+# ── Startup validation ────────────────────────────────────────────────────────
+
+def test_startup_raises_if_enabled_but_no_api_key(monkeypatch):
+    """_validate_config raises ValueError when enabled without API key."""
+    import agents.content_fetch.firecrawl_provider as fp_module
+    monkeypatch.setattr(fp_module, "FIRECRAWL_ENABLED", True)
+    monkeypatch.setattr(fp_module, "FIRECRAWL_API_KEY", None)
+    with pytest.raises(ValueError, match="FIRECRAWL_API_KEY"):
+        fp_module._validate_config()
+
+
 # ── Quality gate ──────────────────────────────────────────────────────────────
 
 def test_quality_gate_passes_good_content():
@@ -39,7 +50,7 @@ def test_quality_gate_baseline_none_treated_as_empty():
 
 def test_quality_gate_detects_cookie_wall():
     from agents.content_fetch.firecrawl_provider import _quality_gate
-    cookie_wall = "<html><body>" + "Please accept cookies " * 30 + "</body></html>"
+    cookie_wall = "<html><body>" + "Please enable cookies " * 30 + "</body></html>"
     assert _quality_gate(cookie_wall, "") is False
 
 

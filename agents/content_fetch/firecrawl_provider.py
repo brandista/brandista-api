@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -19,11 +20,14 @@ from app.config import (
 logger = logging.getLogger(__name__)
 
 # Startup validation — fail fast if Firecrawl is enabled but key is missing
-if FIRECRAWL_ENABLED and not FIRECRAWL_API_KEY:
-    raise ValueError(
-        "FIRECRAWL_ENABLED=true but FIRECRAWL_API_KEY is not set. "
-        "Set the env var or disable Firecrawl with FIRECRAWL_ENABLED=false."
-    )
+def _validate_config():
+    if FIRECRAWL_ENABLED and not FIRECRAWL_API_KEY:
+        raise ValueError(
+            "FIRECRAWL_ENABLED=true but FIRECRAWL_API_KEY is not set. "
+            "Set FIRECRAWL_API_KEY environment variable or disable FIRECRAWL_ENABLED."
+        )
+
+_validate_config()
 
 try:
     from firecrawl import FirecrawlApp
@@ -98,7 +102,7 @@ def _quality_gate(firecrawl_html: str, baseline_html: Optional[str]) -> bool:
     if not firecrawl_html:
         return False
     text = _clean_text(firecrawl_html)
-    if len(text.split()) < 100:
+    if len(text) <= 500:
         return False
     if _is_error_or_cookiewall(firecrawl_html):
         return False
@@ -174,8 +178,10 @@ async def scrape(
     cached = _redis_get(url, mode=mode, force_spa=force_spa)
     if cached:
         logger.info("[firecrawl] cache HIT for %s", url)
+        logger.info("[content_fetch] provider=firecrawl url=%s duration=0.0s content_len=%d fallback=false cache=hit", url, len(cached))
         return cached
 
+    t0 = time.monotonic()
     try:
         loop = asyncio.get_event_loop()
         app = FirecrawlApp(api_key=FIRECRAWL_API_KEY)
@@ -190,17 +196,22 @@ async def scrape(
         )
 
         html = result.get("html", "") if isinstance(result, dict) else ""
+        duration = time.monotonic() - t0
 
         if not _quality_gate(html, baseline_html):
             logger.info("[firecrawl] quality gate FAILED for %s", url)
+            logger.info("[content_fetch] provider=firecrawl url=%s duration=%.1fs content_len=%d fallback=true fallback_reason=firecrawl_quality_gate cache=miss", url, duration, len(html))
             _circuit_breaker.record_failure()
             return None
 
+        logger.info("[content_fetch] provider=firecrawl url=%s duration=%.1fs content_len=%d fallback=false cache=miss", url, duration, len(html))
         _circuit_breaker.record_success()
         _redis_set(url, html, mode=mode, force_spa=force_spa)
         return html
 
     except Exception as e:
+        duration = time.monotonic() - t0
         logger.warning("[firecrawl] scrape failed for %s: %s", url, e)
+        logger.warning("[content_fetch] provider=firecrawl url=%s duration=%.1fs content_len=0 fallback=true fallback_reason=firecrawl_error cache=miss", url, duration)
         _circuit_breaker.record_failure()
         return None
