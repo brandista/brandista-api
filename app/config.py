@@ -110,6 +110,15 @@ COOKIE_SELECTORS = os.getenv(
     "button[aria-label*='accept'],button:has-text('Accept'),button:has-text('Hyväksy')"
 )
 
+# ============================================================================
+# FIRECRAWL SETTINGS
+# ============================================================================
+
+FIRECRAWL_API_KEY            = os.getenv("FIRECRAWL_API_KEY")
+FIRECRAWL_ENABLED            = os.getenv("FIRECRAWL_ENABLED", "false").lower() == "true"
+FIRECRAWL_TIMEOUT            = int(os.getenv("FIRECRAWL_TIMEOUT", "15"))
+FIRECRAWL_MULTI_PAGE_ENABLED = os.getenv("FIRECRAWL_MULTI_PAGE_ENABLED", "false").lower() == "true"
+
 # SPA Configuration
 SPA_MAX_SCROLL_STEPS = int(os.getenv("SPA_MAX_SCROLL_STEPS", "15"))
 SPA_SCROLL_PAUSE_MS = int(os.getenv("SPA_SCROLL_PAUSE_MS", "1000"))
