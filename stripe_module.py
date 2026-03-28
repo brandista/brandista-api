@@ -19,10 +19,12 @@ from enum import Enum
 
 
 class SubscriptionTier(str, Enum):
-    """Subscription tier definitions"""
+    """Subscription tier definitions — synced with locked pricing table in
+    docs/superpowers/specs/2026-03-28-railway-infra-stripe-acp-design.md"""
     FREE = "free"
-    STARTER = "starter"
-    PRO = "pro"
+    ANALYSIS = "analysis"       # One-time Pro Analysis (149 EUR)
+    PRO = "pro"                 # Pro Monthly (99 EUR/kk)
+    PROFESSIONAL = "professional"  # Professional (199 EUR/kk)
     ENTERPRISE = "enterprise"
 
 
@@ -36,30 +38,36 @@ class StripeConfig:
         
         # Price IDs (set these in your .env)
         self.prices = {
-            SubscriptionTier.STARTER: os.getenv("STRIPE_PRICE_STARTER"),
+            SubscriptionTier.ANALYSIS: os.getenv("STRIPE_PRICE_ANALYSIS"),
             SubscriptionTier.PRO: os.getenv("STRIPE_PRICE_PRO"),
+            SubscriptionTier.PROFESSIONAL: os.getenv("STRIPE_PRICE_PROFESSIONAL"),
             SubscriptionTier.ENTERPRISE: os.getenv("STRIPE_PRICE_ENTERPRISE"),
         }
         
         # Usage limits per tier
         self.limits = {
             SubscriptionTier.FREE: {
-                "discoveries_per_month": 3,
-                "competitors_per_discovery": 10,
-                "exports_per_month": 5,
+                "discoveries_per_month": 1,
+                "competitors_per_discovery": 3,
+                "exports_per_month": 1,
             },
-            SubscriptionTier.STARTER: {
-                "discoveries_per_month": 20,
+            SubscriptionTier.ANALYSIS: {
+                "discoveries_per_month": 1,
+                "competitors_per_discovery": 5,
+                "exports_per_month": 1,
+            },
+            SubscriptionTier.PRO: {
+                "discoveries_per_month": 10,
                 "competitors_per_discovery": 50,
                 "exports_per_month": 50,
             },
-            SubscriptionTier.PRO: {
-                "discoveries_per_month": 100,
+            SubscriptionTier.PROFESSIONAL: {
+                "discoveries_per_month": -1,
                 "competitors_per_discovery": 200,
                 "exports_per_month": 500,
             },
             SubscriptionTier.ENTERPRISE: {
-                "discoveries_per_month": -1,  # unlimited
+                "discoveries_per_month": -1,
                 "competitors_per_discovery": -1,
                 "exports_per_month": -1,
             },
@@ -162,27 +170,22 @@ class StripeManager:
         trial_days: int = 0
     ) -> Optional[str]:
         """
-        Create a Stripe Checkout session for subscription
-        
-        Args:
-            customer_id: Stripe customer ID
-            tier: Subscription tier
-            success_url: URL to redirect on success
-            cancel_url: URL to redirect on cancel
-            trial_days: Number of trial days (0 = no trial)
-            
-        Returns:
-            Checkout session URL or None
+        Create a Stripe Checkout session for subscription or one-time payment.
+
+        For ANALYSIS tier: creates a one-time payment session (mode="payment").
+        For PRO/PROFESSIONAL/ENTERPRISE: creates a subscription session.
         """
         if not self.enabled:
             logger.warning("Stripe not enabled")
             return None
-        
+
         price_id = self.config.prices.get(tier)
         if not price_id:
             logger.error(f"No price ID configured for tier: {tier}")
             return None
-        
+
+        is_one_time = tier == SubscriptionTier.ANALYSIS
+
         try:
             params = {
                 "customer": customer_id,
@@ -191,25 +194,24 @@ class StripeManager:
                     "price": price_id,
                     "quantity": 1,
                 }],
-                "mode": "subscription",
+                "mode": "payment" if is_one_time else "subscription",
                 "success_url": success_url,
                 "cancel_url": cancel_url,
                 "metadata": {
                     "tier": tier.value
                 }
             }
-            
-            # Add trial if specified
-            if trial_days > 0:
+
+            if not is_one_time and trial_days > 0:
                 params["subscription_data"] = {
                     "trial_period_days": trial_days
                 }
-            
+
             session = stripe.checkout.Session.create(**params)
-            
-            logger.info(f"Created checkout session for {customer_id}: {session.id}")
+
+            logger.info(f"Created checkout session for {customer_id}: {session.id} (mode={'payment' if is_one_time else 'subscription'})")
             return session.url
-            
+
         except stripe.error.StripeError as e:
             logger.error(f"Failed to create checkout session: {e}")
             return None
