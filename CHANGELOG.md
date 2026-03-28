@@ -5,6 +5,35 @@ Muoto: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [v3.3.0] - 2026-03-28 — Stripe Checkout (Phase 1)
+
+### Added
+- **Stripe Checkout -integraatio** (`stripe_module.py`)
+  - SubscriptionTier enum: FREE, ANALYSIS, PRO, PROFESSIONAL, ENTERPRISE
+  - Hybrid pricing: one-time payment (ANALYSIS 149€) + subscriptions (PRO 99€/kk, PROFESSIONAL 199€/kk)
+  - `create_checkout_session()` — mode="payment" tai mode="subscription" tierin mukaan
+  - `handle_webhook_event()` — checkout.session.completed käsittely
+  - `create_billing_portal_session()` — Stripe Customer Portal
+- **Checkout endpoint** (`POST /api/subscription/checkout`)
+  - JSON body: `{ tier, frontend_base_url? }`
+  - Palauttaa `{ checkout_url }` → frontend redirectaa Stripeen
+  - Konfiguroitavat success/cancel URLs (`FRONTEND_BASE_URL` env var)
+- **Webhook endpoint** (`POST /api/subscription/webhook`)
+  - `checkout.session.completed`: päivittää käyttäjän tier + analysis_credits
+- **Billing portal** (`GET /api/subscription/manage`)
+  - Palauttaa `{ portal_url }` → Stripe Customer Portal
+- `.env.example` laajennettu kaikilla Stripe-muuttujilla
+
+### Changed
+- SubscriptionTier enum: FREE/STARTER/PRO/ENTERPRISE → FREE/ANALYSIS/PRO/PROFESSIONAL/ENTERPRISE
+- Checkout endpoint: query param → JSON body, kovakoodattu URL → konfiguroitava
+
+### Notes
+- Phase 1 complete. Phase 2 (ACP Protocol) suunniteltu viikoille 7-10 ensimmäisten maksavien asiakkaiden jälkeen.
+- Railway setup tarvitaan: Stripe-tuotteet/hinnat, env varat, webhook endpoint
+
+---
+
 ## [v3.2.0] - 2026-03-20
 
 ### Added
