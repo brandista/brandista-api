@@ -72,7 +72,31 @@ Brandista Growth Engine - AI-pohjainen markkinointianalyysi- ja strategiatyökal
 - `agents/guardian_pulse.py` - Guardian Pulse Monitoring (~290 riviä)
 - `database.py` - Tietokantayhteydet
 - `auth_magic_link.py` - Magic link -kirjautuminen
-- `stripe_module.py` - Maksut
+- `stripe_module.py` - Stripe Checkout -integraatio (Phase 1)
+
+## Stripe Checkout (Phase 1) — AKTIIVINEN
+
+### stripe_module.py
+Standalone Stripe-integraatiomoduuli. Ei riippuvuuksia main.py:hyn — voidaan importata erikseen.
+
+### SubscriptionTier enum
+`FREE`, `ANALYSIS` (149€/kerta), `PRO` (99€/kk), `PROFESSIONAL` (199€/kk), `ENTERPRISE` (custom)
+
+### API-endpointit
+- `POST /api/subscription/checkout` — Luo Stripe Checkout -sessio. JSON body: `{ tier: string, frontend_base_url?: string }`. Palauttaa `{ checkout_url }`.
+- `POST /api/subscription/webhook` — Stripe webhook handler. Käsittelee `checkout.session.completed` -eventin.
+
+### Ympäristömuuttujat (Stripe)
+| Muuttuja | Kuvaus |
+|---|---|
+| `STRIPE_SECRET_KEY` | Stripe secret key |
+| `STRIPE_PUBLISHABLE_KEY` | Stripe publishable key (palautetaan frontendille) |
+| `STRIPE_WEBHOOK_SECRET` | Webhook-allekirjoituksen tarkistus |
+| `STRIPE_PRICE_ANALYSIS` | Stripe Price ID: Analysis (149€) |
+| `STRIPE_PRICE_PRO` | Stripe Price ID: Pro (99€/kk) |
+| `STRIPE_PRICE_PROFESSIONAL` | Stripe Price ID: Professional (199€/kk) |
+| `STRIPE_PRICE_ENTERPRISE` | Stripe Price ID: Enterprise |
+| `FRONTEND_BASE_URL` | Checkout success/cancel redirect URL base |
 
 ## Pisteytysarkkitehtuuri (v2.3.0)
 - **Kaikki vakiot**: `agents/scoring_constants.py` — yksi lähde totuudelle
@@ -148,13 +172,14 @@ INDUSTRY_TRANSLATIONS = {
 3. **Growth Engine: konsultoinnista SaaS:iin (kk 4–12)**: Vaihe A ilmainen myyntityökalu → Vaihe B konsultointipaketti 1.5–2.5K€ → Vaihe C self-service SaaS
 4. **Kansainvälinen valmistautuminen (kk 6–12)**: Koodi/API-dokumentaatio englanniksi, UI monikielinen, Product Hunt vuosi 2
 
-### Growth Engine hinnoittelu
+### Growth Engine hinnoittelu (locked hybrid model)
 | Taso | Hinta | Kohderyhmä |
 |---|---|---|
 | Free Scan | Ilmainen | Liidien generointi |
-| Pro Analysis | 149€/kerta tai 99€/kk | Pk-yritykset |
-| Agency | 499€/kk | Markkinointitoimistot |
-| Enterprise | 1000+€/kk sopimuksella | Suuremmat yritykset |
+| Pro Analysis | 149€/kerta | Pk-yritykset (kertaosto) |
+| Pro | 99€/kk | Pk-yritykset (tilaus) |
+| Professional | 199€/kk | Kasvuyritykset |
+| Enterprise | Custom | Suuremmat yritykset |
 
 ### ELY-hankkeen kaupallistamispolku
 1. **Tutkimus & validointi (kk 1–8)**: Persistentti muisti BemuFix-ympäristössä, konkreettiset hyödyt mitattu
