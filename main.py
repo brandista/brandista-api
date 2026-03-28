@@ -8907,62 +8907,77 @@ async def get_config(user: UserInfo = Depends(require_admin)):
 
 @app.post("/api/subscription/checkout")
 async def create_subscription_checkout(
-    tier: str,
+    request: Request,
     user: UserInfo = Depends(require_user)
 ):
     """
-    Create Stripe Checkout session for subscription
-    
-    Args:
-        tier: Subscription tier (starter, pro, enterprise)
-    
+    Create Stripe Checkout session for subscription or one-time payment.
+
+    Body JSON:
+        tier: Subscription tier (analysis, pro, professional, enterprise)
+        success_url: Optional frontend URL for success redirect
+        cancel_url: Optional frontend URL for cancel redirect
+        frontend_base_url: Optional base URL for default success/cancel URLs
+
     Returns:
         Checkout URL to redirect user to Stripe
     """
     if not STRIPE_AVAILABLE:
         raise HTTPException(503, "Payment system not available")
-    
+
+    # Parse request body
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON body")
+
+    tier_str = body.get("tier", "").lower()
+
     # Validate tier
     try:
-        subscription_tier = SubscriptionTier(tier.lower())
+        subscription_tier = SubscriptionTier(tier_str)
     except ValueError:
-        raise HTTPException(400, f"Invalid tier: {tier}")
-    
+        raise HTTPException(400, f"Invalid tier: {tier_str}. Valid tiers: analysis, pro, professional, enterprise")
+
+    if subscription_tier == SubscriptionTier.FREE:
+        raise HTTPException(400, "Cannot checkout for free tier")
+
     # Get user data
     user_data = USERS_DB.get(user.email)
     if not user_data:
         raise HTTPException(404, "User not found")
-    
+
     # Get or create Stripe customer ID
     stripe_customer_id = user_data.get("stripe_customer_id")
-    
+
     if not stripe_customer_id:
-        # Create new Stripe customer
         stripe_customer_id = await create_customer(user.email, user.username)
         if not stripe_customer_id:
             raise HTTPException(500, "Failed to create customer")
-        
-        # Save to database
         user_data["stripe_customer_id"] = stripe_customer_id
         logger.info(f"Created Stripe customer for {user.email}: {stripe_customer_id}")
-    
+
+    # Use frontend URLs from request body, or fallback to env
+    frontend_base = body.get("frontend_base_url") or os.getenv("FRONTEND_BASE_URL", "https://brandista.eu/growthengine")
+    success_url = body.get("success_url") or f"{frontend_base}/checkout/success?session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url = body.get("cancel_url") or f"{frontend_base}/checkout/cancel"
+
     # Create checkout session
-    base_url = os.getenv("APP_BASE_URL", "http://localhost:8000")
     checkout_url = await create_checkout_session(
         customer_id=stripe_customer_id,
         tier=subscription_tier,
-        success_url=f"{base_url}/subscription/success?session_id={{CHECKOUT_SESSION_ID}}",
-        cancel_url=f"{base_url}/subscription/cancel"
+        success_url=success_url,
+        cancel_url=cancel_url
     )
-    
+
     if not checkout_url:
         raise HTTPException(500, "Failed to create checkout session")
-    
-    logger.info(f"Created checkout for {user.email} - tier: {tier}")
-    
+
+    logger.info(f"Created checkout for {user.email} - tier: {tier_str}")
+
     return {
         "checkout_url": checkout_url,
-        "tier": tier
+        "tier": tier_str
     }
 
 
@@ -9164,9 +9179,20 @@ async def stripe_webhook(request: Request):
         
         elif event_type == "customer.created":
             user_data["stripe_customer_id"] = updates.get("customer_id")
-            
+
             logger.info(f"Stripe customer created: {user_email}")
-        
+
+        elif event_type == "checkout.session.completed":
+            # Handle completed checkout — for one-time payments (Pro Analysis)
+            session_tier = updates.get("tier")
+            session_mode = updates.get("mode")
+            if session_mode == "payment" and session_tier == "analysis":
+                user_data["last_analysis_purchase"] = datetime.now().isoformat()
+                user_data["analysis_credits"] = user_data.get("analysis_credits", 0) + 1
+                logger.info(f"Pro Analysis purchased by {user_email}")
+            else:
+                logger.info(f"Checkout completed for {user_email}: {session_tier}")
+
         # Sync to file if available
         if hasattr(sys.modules[__name__], 'sync_hardcoded_users_to_db'):
             try:

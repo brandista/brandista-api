@@ -568,7 +568,17 @@ class StripeManager:
                     "customer_id": data["id"],
                     "email": data["email"]
                 }
-            
+
+            # Checkout session completed (one-time payments + subscription first checkout)
+            elif event_type == "checkout.session.completed":
+                result["updates"] = {
+                    "customer_id": data.get("customer"),
+                    "tier": data.get("metadata", {}).get("tier", "unknown"),
+                    "mode": data.get("mode"),  # "payment" or "subscription"
+                    "payment_intent": data.get("payment_intent"),
+                    "subscription_id": data.get("subscription"),
+                }
+
             logger.info(f"Webhook handled: {event_type}")
             
         except Exception as e:
