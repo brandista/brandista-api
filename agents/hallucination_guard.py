@@ -182,6 +182,11 @@ KRIITTISET SÄÄNNÖT (rikkomattomat):
 4. Kaikki euromäärät ja prosenttiluvut TÄYTYY vastata annettuja lukuja
 5. ÄLÄ keksi markkinatrendejä, uutisia tai tapahtumia
 6. Jos et voi perustella väitettä yllä olevilla faktoilla, jätä se pois
+
+REHELLISYYSSÄÄNNÖT:
+7. Väärä vastaus on 3x pahempi kuin tyhjä — epävarmoissa tilanteissa jätä tyhjäksi
+8. Merkitse jokainen väite: EXTRACTED (suoraan datasta) tai INFERRED (päätelty). Jos inferred → kerro mistä pääteltiin
+9. ÄLÄ käytä confidence scorea — käytä sen sijaan: "tieto ei saatavilla — [syy]" tyhjille kentille
 """
 
 ANTI_HALLUCINATION_SUFFIX_EN = """
@@ -192,6 +197,11 @@ CRITICAL RULES (unbreakable):
 4. All euro amounts and percentages MUST match the provided numbers
 5. DO NOT invent market trends, news, or events
 6. If you cannot justify a claim with the facts above, leave it out
+
+HONESTY RULES:
+7. A wrong answer is 3x worse than a blank — when in doubt, leave it blank
+8. Tag every claim: EXTRACTED (directly from data) or INFERRED (derived). If inferred → explain from what and why
+9. DO NOT use confidence scores — instead use: "data not available — [reason]" for blank fields
 """
 
 

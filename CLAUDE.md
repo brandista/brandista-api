@@ -34,13 +34,20 @@ Brandista Growth Engine - AI-pohjainen markkinointianalyysi- ja strategiatyökal
 - `hallucination_guard.py` - 4-kerroksinen anti-hallusinaatiojärjestelmä (provenance, guardrails, validation, transparency)
 
 ## Anti-Hallusinaatio (Hallucination Guard) — AKTIIVINEN v3.0.0
-- **4 kerrosta**: Data Provenance → Prompt Guardrails → Post-generation Validation → Transparency Markers
-- **ProvenanceTracker**: Jokainen luku jäljitettävissä lähteeseen (HTML_ANALYSIS, WHOIS, BUSINESS_REGISTRY, SCORE_CALCULATION, ym.)
-- **ConfidenceLevel**: VERIFIED → CALCULATED → ESTIMATED → SPECULATIVE (heikoin lenkki määrää kokonaisluottamuksen)
-- **Prompt Guardrails**: ANTI_HALLUCINATION_SUFFIX (fi/en) lisätään kaikkiin LLM-prompteihin
-- **OutputValidator**: Tarkistaa LLM-outputin tunnettujen faktojen perusteella (yritysnimet, euromäärät, prosentit)
-- **TransparencyEnvelope**: Rahoitusestimaatit wrappautuvat {value, best_case, worst_case, is_estimate, confidence}
+
+### 4 kerrosta + 3 rehellisyyssääntöä
+- **Data Provenance**: ProvenanceTracker jäljittää jokaisen luvun lähteeseen (DataSource enum: HTML_ANALYSIS, WHOIS, BUSINESS_REGISTRY, SCORE_CALCULATION, INFERENCE, LLM_GENERATED ym.)
+- **Prompt Guardrails**: ANTI_HALLUCINATION_SUFFIX (fi/en) + 3 rehellisyyssääntöä (ks. alla)
+- **Post-generation Validation**: OutputValidator tarkistaa LLM-outputin (yritysnimet, euromäärät, prosentit)
+- **Transparency Markers**: TransparencyEnvelope wrappaa estimaatit {value, best_case, worst_case, is_estimate, confidence}
+- **ConfidenceLevel**: VERIFIED → CALCULATED → ESTIMATED → SPECULATIVE (heikoin lenkki määrää)
 - **IntelligenceGuard**: Korkean tason API — käytössä competitive_intelligence.py:ssä + guardian_pulse.py:ssä
+
+### 3 rehellisyyssääntöä (Davis Rules, lisätty v3.3.0)
+Kaikki LLM-promptit noudattavat näitä — sisäänrakennettu ANTI_HALLUCINATION_SUFFIX:iin:
+1. **Tyhjä > arvaus**: Jos tieto puuttuu → `"tieto ei saatavilla"` + selitys miksi. Ei confidence scorea.
+2. **3x-rangaistus**: Väärä vastaus on 3x pahempi kuin tyhjä. Epävarmoissa: jätä tyhjäksi.
+3. **Lähde näkyviin**: Jokainen väite on `extracted` (suoraan datasta) tai `inferred` (päätelty). Jos inferred → evidence miksi ja mistä.
 
 ## Competitive Intelligence (Gustav 2.0) — AKTIIVINEN v3.0.0
 - **Battlecards**: Head-to-head vertailu 8 ulottuvuudessa per kilpailija (content, seo, performance, trust, mobile, company_size, digital_breadth, growth_signals)
