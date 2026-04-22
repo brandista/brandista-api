@@ -8317,7 +8317,10 @@ async def discover_competitors(
                             timeout=ANALYSIS_TIMEOUT_SECONDS,
                         )
 
-                        from agents.battlecard_builder import build_competitive_intelligence
+                        from agents.battlecard_builder import (
+                            build_competitive_intelligence,
+                            enrich_with_ai_insights,
+                        )
                         competitive_intelligence = await build_competitive_intelligence(
                             target_analysis=target_analysis,
                             competitor_analyses=full_competitor_analyses,
@@ -8327,13 +8330,29 @@ async def discover_competitors(
                             annual_revenue=500000,
                         )
 
+                        # AI layer — executive summaries + cross-competitor patterns.
+                        # Graceful: LLM failures are logged; missing fields stay absent.
+                        try:
+                            await update_task_progress(
+                                task_id, "running", 96,
+                                "Generating executive summaries and pattern analysis..."
+                            )
+                            competitive_intelligence = await enrich_with_ai_insights(
+                                competitive_intelligence,
+                                language=request.country_code or 'fi',
+                            )
+                        except Exception as e:
+                            logger.error(f"⚠️ [{task_id}] AI enrichment failed: {e}", exc_info=True)
+
                         task_queue.update_task(task_id, {
                             "competitive_intelligence": competitive_intelligence,
                             "battlecard_count": len(competitive_intelligence.get('battlecards', [])),
+                            "pattern_count": len(competitive_intelligence.get('cross_competitor_insights', [])),
                         })
                         logger.info(
                             f"🏆 [{task_id}] Battlecards: "
-                            f"{len(competitive_intelligence.get('battlecards', []))} generated"
+                            f"{len(competitive_intelligence.get('battlecards', []))} generated, "
+                            f"{len(competitive_intelligence.get('cross_competitor_insights', []))} patterns"
                         )
                     except asyncio.TimeoutError:
                         logger.warning(f"⏰ [{task_id}] Target analysis timeout — skipping battlecards")

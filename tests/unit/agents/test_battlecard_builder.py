@@ -9,7 +9,9 @@ Covers:
 """
 
 import pytest
+import sys
 from typing import Any, Dict, List
+from unittest.mock import AsyncMock, MagicMock
 
 from agents.battlecard_builder import (
     _extract_category_score,
@@ -17,6 +19,9 @@ from agents.battlecard_builder import (
     _build_category_comparison,
     _threat_level_from_gap,
     _build_competitor_assessments,
+    _generate_executive_summary,
+    _detect_cross_competitor_patterns,
+    enrich_with_ai_insights,
     build_competitive_intelligence,
 )
 
@@ -289,3 +294,234 @@ class TestBuildCompetitiveIntelligence:
         required = {'battlecards', 'correlated_intelligence', 'inaction_cost',
                     'data_quality', 'provenance', 'transparency'}
         assert required.issubset(result.keys())
+
+
+# =============================================================================
+# AI INSIGHTS ENRICHMENT (3a executive summaries + 3c cross-patterns)
+# =============================================================================
+
+@pytest.fixture
+def fake_battlecard() -> Dict[str, Any]:
+    """A minimal battlecard dict as produced by CompetitiveIntelligenceEngine."""
+    return {
+        'competitor_name': 'Acme Oy',
+        'competitor_url': 'https://acme.fi',
+        'competitor_score': 70,
+        'your_score': 55,
+        'threat_level': 'high',
+        'monthly_risk': 5000,
+        'annual_risk': 60000,
+        'you_win': [{'dimension': 'performance', 'difference': '+10'}],
+        'they_win': [
+            {'dimension': 'seo', 'difference': '+15'},
+            {'dimension': 'content', 'difference': '+8'},
+        ],
+        'actions': [{'title': 'Improve SEO', 'roi': 8.5}],
+        'inaction_timeline_fi': 'Acme ohittaa 4-6 viikossa',
+        'inaction_timeline_en': 'Acme overtakes in 4-6 weeks',
+    }
+
+
+class TestExecutiveSummary:
+    @pytest.mark.asyncio
+    async def test_returns_llm_text_when_available(self, fake_battlecard):
+        fake_llm = AsyncMock(return_value="  Acme on 15 pistettä edellä. Toimi nyt.  ")
+        result = await _generate_executive_summary(
+            fake_battlecard, your_score=55, language='fi', safe_llm_call=fake_llm
+        )
+        assert result == "Acme on 15 pistettä edellä. Toimi nyt."
+        # Check known_facts was passed for validation
+        called_kwargs = fake_llm.call_args.kwargs
+        assert called_kwargs['known_facts']['competitor_name'] == 'Acme Oy'
+        assert called_kwargs['known_facts']['competitor_score'] == 70
+        assert called_kwargs['known_facts']['your_score'] == 55
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_llm_returns_none(self, fake_battlecard):
+        fake_llm = AsyncMock(return_value=None)
+        result = await _generate_executive_summary(
+            fake_battlecard, your_score=55, language='fi', safe_llm_call=fake_llm
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_english_prompt_used_for_en_language(self, fake_battlecard):
+        fake_llm = AsyncMock(return_value="Acme is 15 points ahead.")
+        await _generate_executive_summary(
+            fake_battlecard, your_score=55, language='en', safe_llm_call=fake_llm
+        )
+        prompt = fake_llm.call_args.args[0]
+        assert 'executive-level competitive analyst' in prompt
+        assert 'COMPETITOR STRENGTHS' in prompt
+
+
+class TestCrossCompetitorPatterns:
+    @pytest.mark.asyncio
+    async def test_returns_empty_for_single_battlecard(self, fake_battlecard):
+        fake_llm = AsyncMock(return_value='{"patterns": []}')
+        result = await _detect_cross_competitor_patterns(
+            [fake_battlecard], your_score=55, language='fi', safe_llm_call=fake_llm
+        )
+        assert result == []
+        # LLM not called when <2 battlecards
+        fake_llm.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_parses_valid_patterns(self, fake_battlecard):
+        bc2 = dict(fake_battlecard, competitor_name='Beta Oy', competitor_score=65)
+        fake_llm = AsyncMock(return_value=(
+            '{"patterns": [{"pattern": "Both beat you in SEO", '
+            '"evidence": "Acme +15, Beta +12", '
+            '"affected_competitors": ["Acme Oy", "Beta Oy"], '
+            '"strategic_implication": "Systemic SEO gap", '
+            '"confidence": "extracted"}]}'
+        ))
+        result = await _detect_cross_competitor_patterns(
+            [fake_battlecard, bc2], your_score=55, language='fi', safe_llm_call=fake_llm
+        )
+        assert len(result) == 1
+        assert result[0]['pattern'] == 'Both beat you in SEO'
+        assert 'Acme Oy' in result[0]['affected_competitors']
+        assert result[0]['confidence'] == 'extracted'
+
+    @pytest.mark.asyncio
+    async def test_skips_malformed_patterns(self, fake_battlecard):
+        bc2 = dict(fake_battlecard, competitor_name='Beta Oy')
+        fake_llm = AsyncMock(return_value=(
+            '{"patterns": ['
+            '{"pattern": "Valid", "evidence": "data"}, '
+            '{"pattern": "", "evidence": "empty pattern skipped"}, '
+            '{"not a dict": "also skipped"}'
+            ']}'
+        ))
+        result = await _detect_cross_competitor_patterns(
+            [fake_battlecard, bc2], your_score=55, language='fi', safe_llm_call=fake_llm
+        )
+        assert len(result) == 1
+        assert result[0]['pattern'] == 'Valid'
+
+    @pytest.mark.asyncio
+    async def test_invalid_json_returns_empty(self, fake_battlecard):
+        bc2 = dict(fake_battlecard, competitor_name='Beta Oy')
+        fake_llm = AsyncMock(return_value='not valid json')
+        result = await _detect_cross_competitor_patterns(
+            [fake_battlecard, bc2], your_score=55, language='fi', safe_llm_call=fake_llm
+        )
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_llm_none_returns_empty(self, fake_battlecard):
+        bc2 = dict(fake_battlecard, competitor_name='Beta Oy')
+        fake_llm = AsyncMock(return_value=None)
+        result = await _detect_cross_competitor_patterns(
+            [fake_battlecard, bc2], your_score=55, language='fi', safe_llm_call=fake_llm
+        )
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_invalid_confidence_defaults_to_inferred(self, fake_battlecard):
+        bc2 = dict(fake_battlecard, competitor_name='Beta Oy')
+        fake_llm = AsyncMock(return_value=(
+            '{"patterns": [{"pattern": "X", "evidence": "Y", "confidence": "high"}]}'
+        ))
+        result = await _detect_cross_competitor_patterns(
+            [fake_battlecard, bc2], your_score=55, language='fi', safe_llm_call=fake_llm
+        )
+        assert result[0]['confidence'] == 'inferred'
+
+    @pytest.mark.asyncio
+    async def test_caps_at_4_patterns(self, fake_battlecard):
+        bc2 = dict(fake_battlecard, competitor_name='Beta')
+        patterns_json = '{"patterns": [' + ','.join(
+            f'{{"pattern": "p{i}", "evidence": "e{i}"}}' for i in range(10)
+        ) + ']}'
+        fake_llm = AsyncMock(return_value=patterns_json)
+        result = await _detect_cross_competitor_patterns(
+            [fake_battlecard, bc2], your_score=55, language='fi', safe_llm_call=fake_llm
+        )
+        assert len(result) == 4
+
+
+class TestEnrichWithAiInsights:
+    @pytest.mark.asyncio
+    async def test_graceful_when_safe_llm_call_unavailable(self, fake_battlecard, monkeypatch):
+        # Simulate main.py missing / no safe_llm_call
+        fake_main = MagicMock(spec=[])  # no safe_llm_call attribute
+        monkeypatch.setitem(sys.modules, 'main', fake_main)
+
+        intelligence = {'battlecards': [fake_battlecard]}
+        result = await enrich_with_ai_insights(intelligence, language='fi')
+        # Without safe_llm_call, intelligence returned unchanged
+        assert 'ai_executive_summary_fi' not in result['battlecards'][0]
+
+    @pytest.mark.asyncio
+    async def test_empty_battlecards_returns_early(self, monkeypatch):
+        fake_main = MagicMock()
+        fake_main.safe_llm_call = AsyncMock(return_value="should not be called")
+        monkeypatch.setitem(sys.modules, 'main', fake_main)
+
+        result = await enrich_with_ai_insights({'battlecards': []}, language='fi')
+        assert result == {'battlecards': []}
+        fake_main.safe_llm_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_adds_summaries_and_patterns(self, fake_battlecard, monkeypatch):
+        bc2 = dict(fake_battlecard, competitor_name='Beta Oy', competitor_score=65)
+
+        # Mock safe_llm_call — different return per label
+        async def fake_llm(prompt, **kwargs):
+            label = kwargs.get('label', '')
+            if 'exec_summary' in label:
+                return f"Summary for {kwargs['known_facts']['competitor_name']}"
+            if label == 'cross_competitor_patterns':
+                return ('{"patterns": [{"pattern": "Shared SEO gap", '
+                        '"evidence": "Acme +15, Beta +12", '
+                        '"confidence": "extracted"}]}')
+            return None
+
+        fake_main = MagicMock()
+        fake_main.safe_llm_call = fake_llm
+        monkeypatch.setitem(sys.modules, 'main', fake_main)
+
+        intelligence = {'battlecards': [fake_battlecard, bc2]}
+        result = await enrich_with_ai_insights(intelligence, language='fi')
+
+        # 3a — per-battlecard summaries
+        assert result['battlecards'][0]['ai_executive_summary_fi'] == 'Summary for Acme Oy'
+        assert result['battlecards'][1]['ai_executive_summary_fi'] == 'Summary for Beta Oy'
+        # 3c — cross-patterns
+        assert len(result['cross_competitor_insights']) == 1
+        assert result['cross_competitor_insights'][0]['pattern'] == 'Shared SEO gap'
+
+    @pytest.mark.asyncio
+    async def test_llm_exceptions_dont_crash(self, fake_battlecard, monkeypatch):
+        async def flaky_llm(prompt, **kwargs):
+            raise RuntimeError("OpenAI down")
+
+        fake_main = MagicMock()
+        fake_main.safe_llm_call = flaky_llm
+        monkeypatch.setitem(sys.modules, 'main', fake_main)
+
+        bc2 = dict(fake_battlecard, competitor_name='Beta')
+        intelligence = {'battlecards': [fake_battlecard, bc2]}
+        result = await enrich_with_ai_insights(intelligence, language='fi')
+
+        # No summaries added, no crash, cross_competitor_insights empty
+        assert 'ai_executive_summary_fi' not in result['battlecards'][0]
+        assert result.get('cross_competitor_insights') == []
+
+    @pytest.mark.asyncio
+    async def test_english_adds_en_field(self, fake_battlecard, monkeypatch):
+        async def fake_llm(prompt, **kwargs):
+            if 'exec_summary' in kwargs.get('label', ''):
+                return "English summary"
+            return '{"patterns": []}'
+
+        fake_main = MagicMock()
+        fake_main.safe_llm_call = fake_llm
+        monkeypatch.setitem(sys.modules, 'main', fake_main)
+
+        bc2 = dict(fake_battlecard, competitor_name='Beta')
+        result = await enrich_with_ai_insights({'battlecards': [fake_battlecard, bc2]}, language='en')
+        assert result['battlecards'][0]['ai_executive_summary_en'] == 'English summary'
+        assert 'ai_executive_summary_fi' not in result['battlecards'][0]
