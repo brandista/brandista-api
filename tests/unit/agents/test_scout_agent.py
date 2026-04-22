@@ -395,6 +395,116 @@ class TestCompetitorScoring:
 
 
 # =============================================================================
+# THREAT-VS-TARGET SCORING TESTS
+# =============================================================================
+
+class TestThreatVsTarget:
+    """Tests for _calculate_threat_vs_target — competitor threat relative to target"""
+
+    def test_no_target_intel_falls_back_to_unknown(self, scout_agent):
+        competitors = [
+            {'url': 'https://a.fi', 'relevance_score': 75, 'company_intel': {'revenue': 1000000}},
+        ]
+        result = scout_agent._calculate_threat_vs_target(competitors, None)
+        assert result[0]['threat_level'] == 'unknown'
+        assert result[0]['threat_score'] == 75  # falls back to relevance_score
+        assert result[0]['threat_factors']['data_available'] is False
+        assert 'tieto ei saatavilla' in result[0]['threat_factors']['reason']
+
+    def test_no_competitor_intel_falls_back_to_unknown(self, scout_agent):
+        competitors = [{'url': 'https://a.fi', 'relevance_score': 60}]
+        target = {'revenue': 500000, 'industry': '62010'}
+        result = scout_agent._calculate_threat_vs_target(competitors, target)
+        assert result[0]['threat_level'] == 'unknown'
+        assert result[0]['threat_factors']['data_available'] is False
+
+    def test_same_league_revenue_boosts_threat(self, scout_agent):
+        target = {'revenue': 1000000, 'industry': '62010', 'founded_year': 2018}
+        competitors = [{
+            'url': 'https://peer.fi',
+            'relevance_score': 40,
+            'company_intel': {'revenue': 900000, 'industry': '62010', 'founded_year': 2019},
+        }]
+        result = scout_agent._calculate_threat_vs_target(competitors, target)
+        # base 30 + size +30 (same league) + TOL exact +25 + age +10 = 95
+        assert result[0]['threat_score'] >= 80
+        assert result[0]['threat_level'] == 'direct'
+        assert 'same league' in result[0]['threat_factors']['size_match']
+        assert 'exact TOL' in result[0]['threat_factors']['industry_match']
+
+    def test_dominant_competitor_when_much_larger(self, scout_agent):
+        target = {'revenue': 100000, 'industry': '62010', 'founded_year': 2020}
+        competitors = [{
+            'url': 'https://big.fi',
+            'relevance_score': 50,
+            'company_intel': {'revenue': 500000, 'industry': '62010', 'founded_year': 2019},
+        }]
+        result = scout_agent._calculate_threat_vs_target(competitors, target)
+        # Competitor revenue is 5x target → dominant (if score >= 50)
+        assert result[0]['threat_level'] == 'dominant'
+
+    def test_minor_threat_for_distant_competitor(self, scout_agent):
+        target = {'revenue': 10000000, 'industry': '62010', 'founded_year': 2000}
+        competitors = [{
+            'url': 'https://micro.fi',
+            'relevance_score': 30,
+            'company_intel': {
+                'revenue': 10000,  # 0.001 ratio → distant
+                'industry': '47',  # different TOL
+                'founded_year': 2024,  # 24y gap
+            },
+        }]
+        result = scout_agent._calculate_threat_vs_target(competitors, target)
+        assert result[0]['threat_level'] == 'minor'
+        assert 'distant' in result[0]['threat_factors']['size_match']
+
+    def test_tol_prefix_match_partial_bonus(self, scout_agent):
+        target = {'revenue': 500000, 'industry': '62010'}
+        competitors = [{
+            'url': 'https://related.fi',
+            'relevance_score': 50,
+            'company_intel': {'revenue': 400000, 'industry': '62020'},  # same prefix 62
+        }]
+        result = scout_agent._calculate_threat_vs_target(competitors, target)
+        assert 'TOL prefix' in result[0]['threat_factors']['industry_match']
+
+    def test_falls_back_to_employees_when_no_revenue(self, scout_agent):
+        target = {'employees': 10, 'industry': '62010'}
+        competitors = [{
+            'url': 'https://peer.fi',
+            'relevance_score': 40,
+            'company_intel': {'employees': 12, 'industry': '62010'},
+        }]
+        result = scout_agent._calculate_threat_vs_target(competitors, target)
+        assert 'employees' in result[0]['threat_factors']['size_match']
+        assert result[0]['threat_score'] > 40  # got the size bonus
+
+    def test_zero_revenue_handled_gracefully(self, scout_agent):
+        target = {'revenue': 1000000, 'industry': '62010'}
+        competitors = [{
+            'url': 'https://new.fi',
+            'relevance_score': 30,
+            'company_intel': {'revenue': 0, 'industry': '62010'},
+        }]
+        result = scout_agent._calculate_threat_vs_target(competitors, target)
+        # No division by zero crash; size_match absent but TOL still adds
+        assert 'threat_score' in result[0]
+        assert result[0]['threat_score'] >= 5
+
+    def test_partial_target_data_still_scores(self, scout_agent):
+        target = {'industry': '62010'}  # only industry, no revenue/employees/age
+        competitors = [{
+            'url': 'https://peer.fi',
+            'relevance_score': 40,
+            'company_intel': {'industry': '62010', 'revenue': 500000},
+        }]
+        result = scout_agent._calculate_threat_vs_target(competitors, target)
+        assert result[0]['threat_factors']['data_available'] is True
+        # base 30 + TOL exact +25 = 55
+        assert result[0]['threat_score'] == 55
+
+
+# =============================================================================
 # COMPANY INTEL ENRICHMENT TESTS
 # =============================================================================
 

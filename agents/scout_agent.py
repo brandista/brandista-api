@@ -256,9 +256,12 @@ class ScoutAgent(BaseAgent):
             # Enrich with company intelligence (YTJ + Kauppalehti)
             self._update_progress(75, self._task("enriching_companies"))
             enriched_competitors = await self._enrich_with_company_intel(validated_competitors)
-            
-            # your_company_intel already fetched above
-            
+
+            # Threat-vs-target scoring — after enrichment, uses YTJ data
+            enriched_competitors = self._calculate_threat_vs_target(
+                enriched_competitors, your_company_intel
+            )
+
             return {
                 'company': company_name,
                 'url': context.url,  # Return the analyzed URL
@@ -355,9 +358,12 @@ class ScoutAgent(BaseAgent):
             # Enrich with company intelligence (YTJ + Kauppalehti)
             self._update_progress(85, self._task("enriching_companies"))
             enriched_competitors = await self._enrich_with_company_intel(competitor_urls)
-            
-            # your_company_intel already fetched above
-            
+
+            # Threat-vs-target scoring — after enrichment, uses YTJ data
+            enriched_competitors = self._calculate_threat_vs_target(
+                enriched_competitors, your_company_intel
+            )
+
             self._update_progress(95, self._task("finalizing"))
             
             # ====================================================================
@@ -875,6 +881,123 @@ class ScoutAgent(BaseAgent):
             logger.warning(f"[Scout] Failed to get own company intel: {e}")
             return None
     
+    def _calculate_threat_vs_target(
+        self,
+        competitors: List[Dict[str, Any]],
+        your_company_intel: Optional[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Compute per-competitor threat score vs target company.
+
+        Uses enriched YTJ/Kauppalehti fields (revenue, employees, industry, founded_year).
+        If target or competitor data is missing, falls back to relevance_score and
+        threat_level='unknown'. Follows 3 honesty rules: empty > guess.
+
+        Adds keys to each competitor:
+        - threat_score (0-100): how directly this competitor threatens the target
+        - threat_level ('direct'|'adjacent'|'dominant'|'minor'|'unknown')
+        - threat_factors (dict): per-dimension detail + data_available flag
+        """
+        your_revenue = (your_company_intel or {}).get('revenue')
+        your_employees = (your_company_intel or {}).get('employees')
+        your_industry = (your_company_intel or {}).get('industry')
+        your_founded = (your_company_intel or {}).get('founded_year')
+
+        target_has_data = any([your_revenue, your_employees, your_industry, your_founded])
+
+        for comp in competitors:
+            factors: Dict[str, Any] = {'data_available': False}
+            relevance = comp.get('relevance_score', 30)
+
+            # No target data OR no competitor intel → can't compare, honest fallback
+            comp_intel = comp.get('company_intel') or {}
+            if not target_has_data or not comp_intel:
+                comp['threat_score'] = relevance
+                comp['threat_level'] = 'unknown'
+                factors['reason'] = 'tieto ei saatavilla' if not target_has_data else 'kilpailijan tiedot puuttuvat'
+                comp['threat_factors'] = factors
+                continue
+
+            factors['data_available'] = True
+            score = 30  # base
+
+            # 1. Size match — revenue (preferred) or employees
+            size_ratio = None
+            size_label = None
+            if your_revenue and comp_intel.get('revenue'):
+                your_r, their_r = float(your_revenue), float(comp_intel['revenue'])
+                if your_r > 0 and their_r > 0:
+                    size_ratio = min(your_r, their_r) / max(your_r, their_r)
+                    size_label = 'revenue'
+            elif your_employees and comp_intel.get('employees'):
+                your_e, their_e = float(your_employees), float(comp_intel['employees'])
+                if your_e > 0 and their_e > 0:
+                    size_ratio = min(your_e, their_e) / max(your_e, their_e)
+                    size_label = 'employees'
+
+            if size_ratio is not None:
+                if size_ratio >= 0.67:
+                    score += 30
+                    factors['size_match'] = f'same league ({size_label}, ratio={size_ratio:.2f})'
+                elif size_ratio >= 0.33:
+                    score += 15
+                    factors['size_match'] = f'nearby ({size_label}, ratio={size_ratio:.2f})'
+                elif size_ratio >= 0.1:
+                    score += 5
+                    factors['size_match'] = f'adjacent ({size_label}, ratio={size_ratio:.2f})'
+                else:
+                    score -= 5
+                    factors['size_match'] = f'distant ({size_label}, ratio={size_ratio:.2f})'
+
+            # 2. Industry (TOL) match — exact 5-digit or 2-digit prefix
+            if your_industry and comp_intel.get('industry'):
+                y_ind, t_ind = str(your_industry), str(comp_intel['industry'])
+                if y_ind == t_ind:
+                    score += 25
+                    factors['industry_match'] = f'exact TOL ({y_ind})'
+                elif len(y_ind) >= 2 and len(t_ind) >= 2 and y_ind[:2] == t_ind[:2]:
+                    score += 10
+                    factors['industry_match'] = f'TOL prefix ({y_ind[:2]})'
+                else:
+                    factors['industry_match'] = f'different TOL ({y_ind} vs {t_ind})'
+
+            # 3. Age match — similar-era companies compete for similar customer segments
+            if your_founded and comp_intel.get('founded_year'):
+                age_gap = abs(int(your_founded) - int(comp_intel['founded_year']))
+                if age_gap <= 10:
+                    score += 10
+                    factors['age_match'] = f'within 10y (gap={age_gap})'
+                elif age_gap <= 20:
+                    score += 5
+                    factors['age_match'] = f'within 20y (gap={age_gap})'
+                else:
+                    factors['age_match'] = f'distant era (gap={age_gap})'
+
+            threat_score = max(5, min(100, score))
+
+            # Threat level — direct/adjacent/dominant/minor
+            if size_ratio is not None and your_revenue and comp_intel.get('revenue'):
+                if float(comp_intel['revenue']) >= float(your_revenue) * 3 and threat_score >= 50:
+                    level = 'dominant'
+                elif threat_score >= 70:
+                    level = 'direct'
+                elif threat_score >= 50:
+                    level = 'adjacent'
+                else:
+                    level = 'minor'
+            elif threat_score >= 70:
+                level = 'direct'
+            elif threat_score >= 50:
+                level = 'adjacent'
+            else:
+                level = 'minor'
+
+            comp['threat_score'] = threat_score
+            comp['threat_level'] = level
+            comp['threat_factors'] = factors
+
+        return competitors
+
     async def _enrich_with_company_intel(
         self,
         competitor_urls: List[str]
