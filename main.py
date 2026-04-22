@@ -430,6 +430,83 @@ history_db = None  # Type hint added in imports if AnalysisHistoryDB available
 # Module-level semaphore — max 5 concurrent LLM calls (mirrors RunContext.limits.llm_concurrency)
 _LLM_SEMAPHORE = asyncio.Semaphore(5)
 
+# Hallucination guard — graceful import (module exists in agents/)
+try:
+    from agents.hallucination_guard import (
+        add_guardrails as _add_guardrails,
+        OutputValidator as _OutputValidator,
+    )
+    HALLUCINATION_GUARD_AVAILABLE = True
+except ImportError:
+    HALLUCINATION_GUARD_AVAILABLE = False
+
+    def _add_guardrails(prompt: str, language: str = 'fi') -> str:
+        return prompt
+
+
+async def safe_llm_call(
+    prompt: str,
+    *,
+    language: str = 'fi',
+    known_facts: Optional[Dict[str, Any]] = None,
+    model: Optional[str] = None,
+    max_tokens: int = 1500,
+    temperature: float = 0.5,
+    response_format: Optional[Dict[str, str]] = None,
+    label: str = 'llm_call',
+) -> Optional[str]:
+    """
+    Wrap an OpenAI chat completion with anti-hallucination guardrails + post-validation.
+
+    Returns the LLM-generated text content, or None if the call fails.
+    Validation issues are logged but do not raise — the caller decides how to handle.
+    """
+    if not openai_client:
+        logger.warning(f"[safe_llm_call:{label}] OpenAI client not available")
+        return None
+
+    # 1. Add anti-hallucination guardrails to prompt
+    grounded_prompt = _add_guardrails(prompt, language)
+
+    kwargs: Dict[str, Any] = {
+        "model": model or OPENAI_MODEL,
+        "messages": [{"role": "user", "content": grounded_prompt}],
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    if response_format:
+        kwargs["response_format"] = response_format
+
+    try:
+        async with _LLM_SEMAPHORE:
+            response = await openai_client.chat.completions.create(**kwargs)
+        text = response.choices[0].message.content if response and response.choices else None
+    except Exception as e:
+        logger.error(f"[safe_llm_call:{label}] LLM call failed: {e}", exc_info=False)
+        return None
+
+    if not text:
+        return None
+
+    # 2. Post-generation validation — flag hallucinated names/numbers
+    if HALLUCINATION_GUARD_AVAILABLE and known_facts:
+        try:
+            validator = _OutputValidator(known_facts)
+            result = validator.validate(text)
+            if not result.is_valid and result.issues:
+                logger.warning(
+                    f"[safe_llm_call:{label}] Validation failed with "
+                    f"{len(result.issues)} issues: {'; '.join(result.issues[:3])}"
+                )
+            elif result.warnings:
+                logger.info(
+                    f"[safe_llm_call:{label}] {len(result.warnings)} warnings"
+                )
+        except Exception as e:
+            logger.debug(f"[safe_llm_call:{label}] Validator error (non-fatal): {e}")
+
+    return text
+
 # Log initial configuration
 logger.info(f"Starting {APP_NAME} v{APP_VERSION}")
 logger.info(f"Scoring weights: {SCORING_CONFIG.weights}")
@@ -10774,16 +10851,30 @@ Respond in JSON (max 3 gaps):
 }}}}
 """
     
-    async with _LLM_SEMAPHORE:
-        response = await openai_client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=1200,
-            temperature=0.6,
-            response_format={"type": "json_object"}
-        )
+    # Build known facts from summaries
+    known_facts: Dict[str, Any] = {'company_count': len(summaries)}
+    for s in summaries[:5]:
+        if s.get('domain'):
+            known_facts[f"company_{s['domain']}"] = s.get('score', 0)
 
-    result = json.loads(response.choices[0].message.content)
+    text = await safe_llm_call(
+        prompt,
+        language=language if language in ('fi', 'en') else 'fi',
+        known_facts=known_facts,
+        max_tokens=1200,
+        temperature=0.6,
+        response_format={"type": "json_object"},
+        label='service_gaps',
+    )
+
+    if not text:
+        return []
+
+    try:
+        result = json.loads(text)
+    except json.JSONDecodeError as e:
+        logger.error(f"[service_gaps] JSON parse failed: {e}")
+        return []
 
     # Muotoile AI:n löydökset yhtenäiseen muotoon
     formatted_gaps = []
@@ -11079,16 +11170,35 @@ Provide 3 strategic recommendations in JSON:
 }}}}
 """
     
-    async with _LLM_SEMAPHORE:
-        response = await openai_client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=1500,
-            temperature=0.5,
-            response_format={"type": "json_object"}
-        )
+    # Use safe_llm_call for hallucination guard + post-validation
+    known_facts: Dict[str, Any] = {
+        'company_name': your_summary.get('company', ''),
+        'your_score': your_summary.get('score', 0),
+        'competitor_count': len(competitor_analyses),
+    }
+    for c in competitor_analyses[:5]:
+        c_basic = c.get('basic_analysis', {})
+        if c_basic.get('domain'):
+            known_facts[f"competitor_{c_basic['domain']}"] = c_basic.get('digital_maturity_score', 0)
 
-    result = json.loads(response.choices[0].message.content)
+    text = await safe_llm_call(
+        prompt,
+        language=prompt_lang,
+        known_facts=known_facts,
+        max_tokens=1500,
+        temperature=0.5,
+        response_format={"type": "json_object"},
+        label='strategic_recommendations',
+    )
+
+    if not text:
+        return []
+
+    try:
+        result = json.loads(text)
+    except json.JSONDecodeError as e:
+        logger.error(f"[strategic_recommendations] JSON parse failed: {e}")
+        return []
 
     # Muotoile AI:n suositukset yhtenäiseen muotoon
     formatted = []
