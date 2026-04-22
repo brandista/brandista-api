@@ -8146,10 +8146,12 @@ async def discover_competitors(
         # === 8. START BACKGROUND PROCESSING ===
         async def process_discovery():
             """Background worker for competitor analyses with timeout protection"""
-            
+
             start_time = datetime.now()
             max_duration = timedelta(minutes=DISCOVERY_MAX_DURATION_MINUTES)
-            
+            # Accumulate full competitor analyses for post-loop battlecard generation
+            full_competitor_analyses: List[Dict[str, Any]] = []
+
             try:
                 await update_task_progress(
                     task_id,
@@ -8157,10 +8159,10 @@ async def discover_competitors(
                     50,
                     "Analysis in progress..."
                 )
-                
+
                 successful_count = 0
                 failed_count = 0
-                
+
                 for idx, competitor in enumerate(competitors_to_analyze, 1):
                     # Check global timeout
                     if datetime.now() - start_time > max_duration:
@@ -8218,7 +8220,14 @@ async def discover_competitors(
                                 "technologies": result["basic_analysis"].get("technologies", {}).get("detected", [])[:5]
                             }
                         })
-                        
+
+                        # Keep full analysis in memory for post-loop battlecard generation
+                        full_competitor_analyses.append({
+                            **result,
+                            "url": competitor_url,
+                            "domain": competitor["domain"],
+                        })
+
                         successful_count += 1
                         logger.info(f"✅ [{task_id}] {idx}/{required_analyses} completed: {competitor_url}")
                         
@@ -8285,18 +8294,64 @@ async def discover_competitors(
                             )
                             logger.info(f"💰 Refunded 1 credit to {user.username} (error)")
                 
+                # === COMPETITIVE INTELLIGENCE (battlecards) ===
+                # Analyze target once + run engine. Graceful: failure doesn't fail discovery.
+                if full_competitor_analyses:
+                    try:
+                        await update_task_progress(
+                            task_id,
+                            "running",
+                            92,
+                            "Generating competitive intelligence..."
+                        )
+
+                        target_analysis = await asyncio.wait_for(
+                            _perform_comprehensive_analysis_internal(
+                                url=clean_url(request.url),
+                                company_name=user_domain,
+                                language=request.country_code,
+                                force_playwright=False,
+                                user=user,
+                                analysis_type="comprehensive",
+                            ),
+                            timeout=ANALYSIS_TIMEOUT_SECONDS,
+                        )
+
+                        from agents.battlecard_builder import build_competitive_intelligence
+                        competitive_intelligence = await build_competitive_intelligence(
+                            target_analysis=target_analysis,
+                            competitor_analyses=full_competitor_analyses,
+                            competitors_enriched=None,  # discovery-path has no YTJ enrichment yet
+                            industry=request.industry or 'general',
+                            language=request.country_code or 'fi',
+                            annual_revenue=500000,
+                        )
+
+                        task_queue.update_task(task_id, {
+                            "competitive_intelligence": competitive_intelligence,
+                            "battlecard_count": len(competitive_intelligence.get('battlecards', [])),
+                        })
+                        logger.info(
+                            f"🏆 [{task_id}] Battlecards: "
+                            f"{len(competitive_intelligence.get('battlecards', []))} generated"
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(f"⏰ [{task_id}] Target analysis timeout — skipping battlecards")
+                    except Exception as e:
+                        logger.error(f"⚠️ [{task_id}] Battlecard generation failed: {e}", exc_info=True)
+
                 # === COMPLETION ===
                 completion_message = (
                     f"Completed: {successful_count} successful, {failed_count} failed"
                 )
-                
+
                 await update_task_progress(
                     task_id,
                     "completed",
                     100,
                     completion_message
                 )
-                
+
                 task_queue.update_task(task_id, {
                     "completed_at": datetime.now().isoformat(),
                     "successful": successful_count,
