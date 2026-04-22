@@ -789,6 +789,19 @@ class GuardianAgent(BaseAgent):
                 f"{corr_count} correlations, data quality: {quality}/100"
             )
 
+            # AI enrichment: executive summaries + cross-competitor patterns.
+            # Graceful — LLM failure leaves fields absent (3 honesty rules).
+            try:
+                from .battlecard_builder import enrich_with_ai_insights
+                competitive_intelligence = await enrich_with_ai_insights(
+                    competitive_intelligence,
+                    language=context.language or 'fi',
+                )
+                pattern_count = len(competitive_intelligence.get('cross_competitor_insights', []))
+                logger.info(f"[Guardian] 🤖 AI insights: {pattern_count} patterns")
+            except Exception as ai_err:
+                logger.error(f"[Guardian] AI enrichment failed: {ai_err}", exc_info=True)
+
             # Emit insight (use direct string since translation key may not exist yet)
             intel_msg = (
                 f"Kilpailutiedustelu valmis: {bc_count} battlecardia, {corr_count} korrelaatiota"
