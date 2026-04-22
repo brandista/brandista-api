@@ -8530,7 +8530,13 @@ async def get_discovery_status(
                 "score": top_competitor.get("score"),
                 "url": top_competitor.get("url")
             } if top_competitor else None
-        }
+        },
+        # Competitive intelligence (battlecards + AI insights) — present only when
+        # the discovery task has completed the post-loop enrichment. Absent in
+        # earlier states is expected (field is optional on the client).
+        "competitive_intelligence": task_status.get("competitive_intelligence"),
+        "battlecard_count": task_status.get("battlecard_count", 0),
+        "pattern_count": task_status.get("pattern_count", 0),
     }
 
 
@@ -8627,7 +8633,13 @@ async def get_discovery_results(
             "country": task_status.get("language"),
             "user_url": task_status.get("user_url"),
             "include_full_analysis": include_full_analysis
-        }
+        },
+        # Competitive intelligence (battlecards + cross-competitor insights +
+        # ai_executive_summary per battlecard) — attached to task metadata during
+        # process_discovery. Clients check via `battlecard_count > 0`.
+        "competitive_intelligence": task_status.get("competitive_intelligence"),
+        "battlecard_count": task_status.get("battlecard_count", 0),
+        "pattern_count": task_status.get("pattern_count", 0),
     }
 
 
