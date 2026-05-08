@@ -133,7 +133,7 @@ Hinnoittelumalli:
 - **Pro Analysis** (€149, kertaraportti): Seitsemän agenttia + Gustav 2.0 rakentavat päätöspaketin (uhka-analyysi, battlecard, 90 päivän suunnitelma).
 - **Pro / Professional** (kuukausitilaus, 99€/kk ja 199€/kk): Guardian Pulse — jatkuva monitorointi, jos markkina liikkuu viikoittain. Kuukausimallit ovat erikseen, ei pakota etusivulta.
 
-Anekdootti: "8 tuntia manuaalista analyysiä muuttuu 12 minuutin päätöspaketiksi."
+Anekdootti: "8 tuntia manuaalista analyysiä muuttuu 90 sekunnin päätöspaketiksi." Mediaani analyysiaika ~1 min 24 s — alle minuutin puolessatoista.
 
 ## KAROLIINA TUOMISTO — COMMERCIAL DIRECTION
 Brandistan kaupallista ja brändillistä suuntaa rakentaa Karoliina Tuomisto:
