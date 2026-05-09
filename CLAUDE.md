@@ -69,14 +69,22 @@ Kaikki LLM-promptit noudattavat näitä — sisäänrakennettu ANTI_HALLUCINATIO
 ## Tärkeät tiedostot
 - `main.py` - Legacy pää-API (11500+ riviä), AI-näkyvyysanalyysi (6 faktoria), hakutermien käännökset. **Tuotannon entrypoint** (Railway Nixpacks auto-detect)
 - `app/main.py` - Refaktoroitu modulaarinen entrypoint (importtaa agentteja `agents/`-kansiosta). Kehitysversio, EI vielä tuotannossa
+- `app/routers/chat.py` - Chat-reititys brandista-home-agentille. `BRANDISTA_HOME_PROMPT` (päivitetty 2026-05-08) synkronoitu frontendin BrandistaHome.tsx (v5-codex AI Studio -layout) kanssa: 5 tuotetta tuotannossa + Tax Optimization Engine pre-MVP, operating method (4 periaatetta), tagline "AI ei ole työkalu. Se on tiimi.", Karoliina Tuomisto Commercial Direction, hinnoittelu Free Scan → Pro Analysis (149€) → Pro/Professional, anekdootti "8h → 90 sekuntia". Chat-tervetuloruutu kysyy "Mistä teillä alkaa päätös?" — promptin tyyli ohjaa AI:n auttamaan tunnistamaan minkä työnkulun kannattaa muuttaa agenttitiimiksi ensin.
+- `app/routers/books.py`, `app/routers/health.py` - Modulaariset reitit
 - `agents/scoring_constants.py` - Yhtenäiset kynnysarvot, painot ja apufunktiot kaikille agenteille
 - `agents/scout_agent.py` - Toimialan tunnistus, kilpailijoiden pisteytys
 - `agents/url_utils.py` - URL-apufunktiot (clean_url, get_domain_from_url) — eristetty main.py:stä
 - `agents/competitive_intelligence.py` - Gustav 2.0 Competitive Intelligence Engine (~1180 riviä)
+- `agents/battlecard_builder.py` - Battlecard-generointi kilpailijoille (Gustav 2.0)
 - `agents/hallucination_guard.py` - Anti-hallusinaatiojärjestelmä (~450 riviä)
 - `agents/threat_history.py` - Threat History & Predictive Analytics (~420 riviä)
 - `agents/intelligence_brief.py` - Executive Intelligence Briefs (~310 riviä)
 - `agents/guardian_pulse.py` - Guardian Pulse Monitoring (~290 riviä)
+- `agents/content_fetch/` - Sisällön haun provider-abstraktio: firecrawl_provider, http_provider, playwright_provider, orchestrator (v3.2.0)
+- `agents/observability/` - Logging, metrics, tracing
+- `agents/persistence/` - hybrid_blackboard, redis_blackboard
+- `agents/resilience/` - circuit_breaker, retry
+- `agents/security/` - sanitization, validation
 - `database.py` - Tietokantayhteydet
 - `auth_magic_link.py` - Magic link -kirjautuminen
 - `stripe_module.py` - Stripe Checkout -integraatio (Phase 1)
@@ -104,6 +112,17 @@ Standalone Stripe-integraatiomoduuli. Ei riippuvuuksia main.py:hyn — voidaan i
 | `STRIPE_PRICE_PROFESSIONAL` | Stripe Price ID: Professional (199€/kk) |
 | `STRIPE_PRICE_ENTERPRISE` | Stripe Price ID: Enterprise |
 | `FRONTEND_BASE_URL` | Checkout success/cancel redirect URL base |
+
+## Firecrawl Content Fetching (v3.2.0)
+
+Sisällön haku voi käyttää Firecrawl-provideria HTTP/Playwrightin sijaan.
+
+| Muuttuja | Kuvaus |
+|---|---|
+| `FIRECRAWL_API_KEY` | Firecrawl API -avain |
+| `FIRECRAWL_ENABLED` | `true`/`false` (default false) |
+| `FIRECRAWL_TIMEOUT` | Sekunteina (default 15) |
+| `FIRECRAWL_MULTI_PAGE_ENABLED` | Multi-page crawl (default false) |
 
 ## Pisteytysarkkitehtuuri (v2.3.0)
 - **Kaikki vakiot**: `agents/scoring_constants.py` — yksi lähde totuudelle
@@ -154,7 +173,7 @@ INDUSTRY_TRANSLATIONS = {
 | `RAILWAY_BACKEND_URL` | Backend-URL CORS-listaan |
 
 ## Versiohistoria
-- **Versio**: 3.1.0 (Quality Overhaul: Security, Reliability & Performance)
+- **Versio**: 6.5.0 (ks. CHANGELOG — v3.2 Firecrawl provider, v3.3 Stripe Checkout, 6.x versiohyppy)
 - **Changelog**: `CHANGELOG.md`
 
 ## Kehityskäytännöt
@@ -202,3 +221,76 @@ INDUSTRY_TRANSLATIONS = {
 ## Käyttäjäpreferenssit
 - Kieli: Suomi
 - Omistaja: Tuukka
+
+## Railway Deployment
+
+Tuotantoympäristö Railwaylla. Auto-deploy `main`-haarasta GitHubin kautta.
+
+### Multi-service-konfiguraatio (kun projektissa on useampi kuin yksi palvelu)
+
+**KRIITTINEN:** Jos projektissa on useita palveluita (esim. web + cron, tai api + worker), `railway.json`:n `startCommand` voittaa per-service Custom Start Commandin. Tämä aiheuttaa että cron-palvelu ajaa pääsovellusta sen sijaan että ajaisi cron-skriptiä.
+
+**Oikein:**
+- `railway.json`:ssa **ei ole** `startCommand`-riviä — vain `healthcheckPath`, `restartPolicy` jne.
+- Kullekin palvelulle asetetaan **Custom Start Command** Railway-dashboardista: Service → Settings → Deploy → Custom Start Command
+- **Custom Start Command tallentuu vain Enter-painalluksella** — pelkkä input-kentän muutos ei riitä, refreshaa ja varmista että arvo pysyy
+
+### Ympäristömuuttujat usean palvelun projektissa
+
+Cron- ja worker-palvelut tarvitsevat **kaikki samat env-muuttujat** kuin pääsovellus jos config-tiedosto on monoliittinen (yhteinen `config.ts`/`config.py`). Muuten boot kaatuu `Missing required env: XXX` -virheeseen.
+
+Helpoin tapa: Pääsovellus → Variables → **Raw Editor** → kopioi sisältö → uusi palvelu → Variables → Raw Editor → liitä → tallenna.
+
+### Yleiset deploy-virheet ja ratkaisut
+
+**ESM imports ilman `.js`-päätettä** (TypeScript-projekteissa)
+- TypeScript kääntyy puhtaasti, mutta Node ESM-runtime kaatuu `Cannot find module`-virheeseen
+- Korjaus: `import { x } from './foo'` → `import { x } from './foo.js'` (tarvitaan `.js`-pääte importeissa, vaikka tiedosto on `.ts`)
+
+**`package-lock.json`/`package.json` ristiriita Linuxissa**
+- macOS:lla committattu lockfile voi rikkoa Railway-buildin native-binäärien mismatchien takia
+- Korjaus: jos epäilet, poista `node_modules` + `package-lock.json` paikallisesti, aja `npm install`/`pnpm install`, committaa puhtaalta
+
+**Migraatioketju rikki** (alembic, drizzle-kit, prisma)
+- Verifioi revision-ketjun ehjyys ennen pushia (`alembic history` / vastaava)
+- Sarakkeiden leveys: `alembic_version` tarvitsee usein `VARCHAR(255)` — oletus 32 voi olla liian kapea jos käytät pitkiä revisio-ID:itä
+- Muista `stamp` jos tuotannossa on jo sama tila
+
+**Healthcheck failaa boot-vaiheessa**
+- Tarkista että `healthcheckPath` (`/health` yleensä) palauttaa 200 ENNEN kuin Express/FastAPI on listening
+- Jos boot kestää (esim. migraatiot), `healthcheckTimeout` saattaa olla liian lyhyt (oletus 30s)
+
+### SMTP — älä käytä Gmail SMTP:tä production-mailiin
+
+**Tunnettu ongelma (todennettu 25.4.2026 agentti-portaalissa):** Gmail SMTP port 587 hangaa hiljaisesti Railway egressistä TCP-tasolla, kun lähetetään bulk-mailia tai testidata-osoitteisiin. Oire: `Connection timeout` ilman virhettä, status jää `sending`-tilaan.
+
+- Käytä **Resend** (3 000 mailia/kk ilmaiseksi), Postmark tai SES — kaikki rakennettu transactional-mailia varten
+- Jos pakko Gmail: port 465 + SSL on parempi kuin 587 + STARTTLS
+- **Älä koskaan** lähetä testi-osoitteisiin (`@test.local`, `@example.com`, `@t.l`) production-SMTP:n kautta — Gmail blokkaa IP:n ja recovery on 24-48 h
+
+### Diagnoosi ja debug
+
+```bash
+# Railway-status, kirjautuminen
+railway login
+railway status
+
+# Logit
+railway logs
+
+# Ympäristömuuttujat
+railway variables
+
+# Pakota redeploy ilman muutosta
+railway up --detach
+```
+
+### Pre-flight checklist ennen pushia
+
+Käy nämä läpi ennen `git push`:
+1. ✅ TS- tai Python-typecheck menee paikallisesti
+2. ✅ Jos useampi service: `railway.json` ei sisällä `startCommand`-riviä; kunkin palvelun Custom Start Command on asetettu
+3. ✅ Uudet env-muuttujat lisätty Railway:hin (kaikkiin palveluihin jos monoliittinen config)
+4. ✅ Migraatio (jos schema muuttui) ehjä lokaalisti — `alembic upgrade head` / vastaava menee läpi
+5. ✅ ESM-importeissa `.js`-päätteet (TS-projekteissa)
+6. ✅ `package-lock.json` ei sisällä macOS-only-binäärejä
