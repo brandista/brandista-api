@@ -7194,6 +7194,117 @@ async def google_callback(request: Request, background_tasks: BackgroundTasks):
         # Redirect to frontend with error
         frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173').rstrip('/')
         return RedirectResponse(url=f"{frontend_url}/login?error=google_auth_failed")
+
+
+class GoogleNativeRequest(BaseModel):
+    """Body for POST /auth/google/native — a Google id_token from a mobile app."""
+    credential: str
+
+
+@app.post("/auth/google/native", response_model=TokenResponse)
+async def google_native_login(request: GoogleNativeRequest):
+    """Native Google sign-in for mobile clients (iOS, Android).
+
+    Unlike /auth/google/login + /auth/google/callback (the server-side OAuth
+    redirect dance used by the web app), this accepts a Google id_token
+    POSTed directly from a mobile app that completed Google sign-in natively
+    (via expo-auth-session, Google Sign-In SDK, etc.). The token is verified
+    server-side against `GOOGLE_CLIENT_ID`, a user role is looked up from
+    DB / USERS_DB / user_store (defaulting to 'user' for first-time signers),
+    and a standard brandista-api JWT is returned in TokenResponse format —
+    same shape as POST /auth/login so consumers can swap which auth endpoint
+    they call without changing the JWT-handling code path.
+
+    Why this exists
+    ---------------
+    The Continuity mobile app (continuity.brandista.eu) uses brandista-api as
+    its identity provider — that's the SSO contract across the Brandista
+    product family. The web OAuth callback flow can't run on a phone because
+    there's no server-side session to redirect through; the device has to
+    hand the id_token straight to brandista-api and get a JWT back. Once
+    brandista-api JWTs flow to other products (Veyra etc.) the same endpoint
+    serves them too.
+
+    Security notes
+    --------------
+    `verify_oauth2_token` checks signature, expiry, issuer (accounts.google.com)
+    and audience (must equal `GOOGLE_CLIENT_ID`). We additionally require
+    `email_verified=True` from the token, refusing unverified Google identities
+    so an attacker can't claim arbitrary emails through a self-issued account.
+    """
+    credential = (request.credential or "").strip()
+    if not credential:
+        raise HTTPException(status_code=400, detail="missing 'credential' (Google id_token)")
+
+    google_client_id = os.getenv("GOOGLE_CLIENT_ID", "")
+    if not google_client_id:
+        raise HTTPException(status_code=500, detail="GOOGLE_CLIENT_ID not configured")
+
+    try:
+        from google.oauth2 import id_token as google_id_token
+        from google.auth.transport import requests as google_requests
+        idinfo = google_id_token.verify_oauth2_token(
+            credential,
+            google_requests.Request(),
+            google_client_id,
+        )
+    except ValueError as e:
+        logger.warning(f"google_native: id_token verification failed: {e}")
+        raise HTTPException(status_code=401, detail=f"invalid Google token: {e}")
+    except Exception as e:  # noqa: BLE001 — Google libs raise broad exception types on transport errors
+        logger.error(f"google_native: unexpected verification error: {e}")
+        raise HTTPException(status_code=500, detail="Google token verification failed")
+
+    email = (idinfo.get("email") or "").lower().strip()
+    if not email or not idinfo.get("email_verified", False):
+        raise HTTPException(status_code=400, detail="Google email not verified")
+
+    name = idinfo.get("name", "")
+    google_id = idinfo.get("sub", "")
+    username = email.split("@")[0]
+
+    # Resolve role from existing stores. Default 'user' for first-time signers
+    # — the native flow does NOT create a password-protected user in USERS_DB
+    # (the consumer side, e.g. continuity-api, handles its own user provisioning
+    # keyed on the email claim).
+    role = "user"
+    try:
+        from database import get_user_from_db, DATABASE_ENABLED
+        if DATABASE_ENABLED:
+            db_user = get_user_from_db(username)
+            if db_user:
+                role = db_user.get("role", "user")
+                logger.info(f"google_native: DB user found: {username} role={role}")
+    except ImportError:
+        pass
+    except Exception as e:  # noqa: BLE001 — DB transient errors must not break login
+        logger.warning(f"google_native: DB lookup error: {e}")
+
+    if role == "user":
+        for _, udata in USERS_DB.items():
+            if udata.get("email") == email:
+                role = udata.get("role", "user")
+                logger.info(f"google_native: USERS_DB hit for {email} role={role}")
+                break
+
+    # Refresh user_store so /auth/me + downstream code paths see consistent
+    # metadata for this email. Overwriting previous session is intentional —
+    # the Google token is fresh evidence of identity.
+    user_store[email] = {
+        "username": username,
+        "email": email,
+        "password_hash": "",  # Google-authenticated; no password set
+        "role": role,
+        "google_id": google_id,
+        "name": name,
+        "verified": True,
+    }
+
+    access_token = create_access_token(data={"sub": email, "role": role})
+    logger.info(f"✅ google_native login success: {email} role={role}")
+    return TokenResponse(access_token=access_token, role=role)
+
+
 # ============================================================================
 # REVENUE INPUT ENDPOINTS
 # ============================================================================

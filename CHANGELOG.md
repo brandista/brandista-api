@@ -5,6 +5,36 @@ Muoto: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [unreleased] - 2026-05-12 — Native Google sign-in for mobile SSO
+
+### Added
+- **`POST /auth/google/native`** — accepts a Google `id_token` posted directly
+  from a mobile app (iOS, Android), verifies it server-side against
+  `GOOGLE_CLIENT_ID`, and returns a standard brandista-api `TokenResponse`
+  (same shape as `POST /auth/login`).
+  - Unlocks SSO from Continuity-mobile (continuity.brandista.eu) — the web
+    `/auth/google/login` + `/auth/google/callback` redirect dance can't run
+    on a phone, so the device hands an `id_token` to brandista-api in
+    exchange for a JWT that continuity-api validates via the shared
+    `BRANDISTA_CORE_SECRET_KEY`.
+  - Verification enforces `email_verified=true`; unverified Google
+    identities are refused so an attacker can't claim arbitrary emails.
+  - Role resolved from existing storage (DB → USERS_DB) when present,
+    defaulting to `user` for first-time signers. Session metadata written
+    to `user_store` for downstream `/auth/me` consistency.
+  - Logged at INFO on success, WARNING on bad token, ERROR on transport
+    failure — same diagnostic posture as existing auth endpoints.
+- `GoogleNativeRequest` Pydantic body model (single field: `credential`).
+
+### Notes
+- No new env vars — reuses existing `GOOGLE_CLIENT_ID` already configured
+  for the web OAuth flow.
+- `google-auth==2.25.2` already in `requirements.txt`; nothing to install.
+- Next products to consume this endpoint: Continuity (live), Veyra (planned
+  SSO-7 migration off better-auth).
+
+---
+
 ## [v3.3.0] - 2026-03-28 — Stripe Checkout (Phase 1)
 
 ### Added
