@@ -353,6 +353,16 @@ if hasattr(legacy_main, 'google_login'):
     app.get("/auth/google/login")(legacy_main.google_login)
 if hasattr(legacy_main, 'google_callback'):
     app.get("/auth/google/callback")(legacy_main.google_callback)
+# Mobile-native Google sign-in — POST an id_token (from expo-auth-session /
+# Google Sign-In SDK), get back a brandista-api JWT. The handler lives on
+# legacy main.py; we have to surface it here too because production runs
+# `app/main.py` (modular), which only inherits legacy routes that are
+# re-decorated in this file. Without this line `POST /auth/google/native`
+# 405s with `allow: OPTIONS` — the route is unknown to the running app.
+if hasattr(legacy_main, 'google_native_login'):
+    app.post("/auth/google/native", response_model=legacy_main.TokenResponse)(
+        legacy_main.google_native_login
+    )
 
 # Analysis endpoints
 if hasattr(legacy_main, 'calculate_revenue_impact'):
