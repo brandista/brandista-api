@@ -1792,6 +1792,11 @@ app.add_middleware(
         "https://brandista.eu",
         "https://www.brandista.eu",
         "https://api.brandista.eu",
+        # Continuity-mobile + Continuity-api need to call brandista-api for
+        # SSO (/auth/login, /auth/google/native). React Native's iOS fetch
+        # *can* send an `Origin` header for cross-origin POSTs which would
+        # otherwise hit the CORS preflight 400 and fail silently.
+        "https://continuity.brandista.eu",
         "https://fastapi-production-51f9.up.railway.app",
         *([os.getenv("RAILWAY_BACKEND_URL")] if os.getenv("RAILWAY_BACKEND_URL") else []),
     ],
