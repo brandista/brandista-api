@@ -7245,14 +7245,27 @@ async def google_native_login(request: GoogleNativeRequest):
     if not google_client_id:
         raise HTTPException(status_code=500, detail="GOOGLE_CLIENT_ID not configured")
 
+    # iOS-native flow: when the mobile client signs in directly with its
+    # iOS-app OAuth client, the issued id_token's `aud` is the iOS client id
+    # — NOT the web one. Accept both so a single endpoint serves both web
+    # and mobile callers. Comma-separated list supported.
+    extra_audiences = [
+        a.strip() for a in os.getenv("GOOGLE_ADDITIONAL_CLIENT_IDS", "").split(",") if a.strip()
+    ]
+    audiences: list[str] = [google_client_id, *extra_audiences]
+
     try:
         from google.oauth2 import id_token as google_id_token
         from google.auth.transport import requests as google_requests
         idinfo = google_id_token.verify_oauth2_token(
             credential,
             google_requests.Request(),
-            google_client_id,
+            audiences if len(audiences) > 1 else audiences[0],
         )
+        # Defensive log of the token's `aud` so future audience mismatches
+        # are obvious in the logs — we expect to see the iOS client id here
+        # for mobile sign-ins and the web client id for web ones.
+        logger.info(f"google_native: token aud={idinfo.get('aud')!r}")
     except ValueError as e:
         logger.warning(f"google_native: id_token verification failed: {e}")
         raise HTTPException(status_code=401, detail=f"invalid Google token: {e}")
