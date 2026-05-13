@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: brandista-api-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: brandista
+      POSTGRES_PASSWORD: dev
+      POSTGRES_DB: brandista
+    ports:
+      - "5433:5432"  # 5433 to avoid clash with continuity-postgres on 5432
+    volumes:
+      - brandista_api_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U brandista -d brandista"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  brandista_api_pg_data:
