@@ -184,10 +184,6 @@ async def provision_canonical_user(*, email: str, source: str) -> User:
                     org_id=org.id,
                     is_active=True,
                     role="user",
-                    # Legacy NOT NULL column — passwordless users (Google
-                    # OAuth, magic link) get an empty sentinel. Real bcrypt
-                    # hashes never collide with "".
-                    hashed_password="",
                 )
                 session.add(user)
                 await session.flush()
