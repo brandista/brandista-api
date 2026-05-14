@@ -528,3 +528,98 @@ async def test_provision_idempotent_on_repeat(db_session, monkeypatch):
     )).scalar_one()
     assert user_count == 1
     assert org_count == 1
+
+# ---------- Task 8: /google/native endpoint ----------
+
+
+@pytest.mark.asyncio
+async def test_google_native_creates_user_and_issues_token(db_session, monkeypatch):
+    """Happy path: new email through Google native → user provisioned,
+    v2 token returned, all expected claims present."""
+    from app.auth import canonical
+    from app.auth.canonical import decode_canonical_token
+
+    monkeypatch.setattr(canonical, "_session_maker_for_provision",
+                        lambda: _OneShotSessionMaker(db_session))
+
+    # Stub google id_token verification
+    def fake_verify(credential, request_, audience):
+        return {
+            "email": "google-new@example.com",
+            "email_verified": True,
+            "aud": "test-client-id",
+            "sub": "google-sub-123",
+            "name": "Test User",
+        }
+
+    monkeypatch.setattr(
+        "google.oauth2.id_token.verify_oauth2_token", fake_verify
+    )
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
+
+    app = _build_router_test_app()
+
+    # httpx.AsyncClient + ASGITransport runs the handler in this test's
+    # event loop, so the shared db_session (bound to the same loop) works
+    # across the test ↔ handler boundary. TestClient would spawn a new
+    # loop via anyio.from_thread.start_blocking_portal and asyncpg would
+    # blow up with "Future attached to a different loop".
+    from httpx import ASGITransport, AsyncClient
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        r = await client.post(
+            "/api/auth/v2/google/native",
+            json={"credential": "any-non-empty-string"},
+        )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["token_type"] == "bearer"
+
+    user = decode_canonical_token(body["access_token"])
+    assert user.email == "google-new@example.com"
+    assert user.role == "user"
+    # And the response carries the canonical user too
+    assert body["user"]["email"] == "google-new@example.com"
+
+
+def test_google_native_rejects_missing_credential():
+    app = _build_router_test_app()
+    client = TestClient(app)
+    r = client.post("/api/auth/v2/google/native", json={"credential": ""})
+    assert r.status_code == 400
+
+
+def test_google_native_rejects_unverified_email(monkeypatch):
+    def fake_verify(credential, request_, audience):
+        return {"email": "noverify@example.com", "email_verified": False}
+
+    monkeypatch.setattr(
+        "google.oauth2.id_token.verify_oauth2_token", fake_verify
+    )
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
+
+    app = _build_router_test_app()
+    client = TestClient(app)
+    r = client.post(
+        "/api/auth/v2/google/native", json={"credential": "any-non-empty-string"}
+    )
+    assert r.status_code == 400
+
+
+def test_google_native_rejects_invalid_google_token(monkeypatch):
+    def fake_verify(credential, request_, audience):
+        raise ValueError("bad signature")
+
+    monkeypatch.setattr(
+        "google.oauth2.id_token.verify_oauth2_token", fake_verify
+    )
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
+
+    app = _build_router_test_app()
+    client = TestClient(app)
+    r = client.post(
+        "/api/auth/v2/google/native", json={"credential": "any-non-empty-string"}
+    )
+    assert r.status_code == 401
