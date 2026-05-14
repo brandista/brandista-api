@@ -329,4 +329,4 @@ Step 3 is done when:
 5. Existing test suite (`python3 -m pytest tests/ -x -q`) still passes.
 6. CHANGELOG.md has an entry describing the new endpoints and the auto-provisioning behavior.
 7. The production Google native flow (`/auth/google/native`, legacy) is verified untouched — a smoke test against the legacy endpoint succeeds.
-8. No production deploy until Step 3.5 (Apple) decisions are made — Step 3 can sit on a feature branch waiting for cutover coordination with frontend.
+8. Deploy to production as soon as Step 3 is green (tests pass, code review done). Do **not** wait for Step 3.5 (Apple Sign In) — Apple is a follow-up that lands once Google v2 is already serving traffic in production. Rationale: v2 endpoints are additive (legacy `/auth/*` stays untouched), so shipping them carries no risk to existing flows. Holding step 3 back to bundle with Apple only stretches the window where two designs are partially-implemented at once.
