@@ -697,3 +697,52 @@ def test_magic_link_request_returns_sent_even_if_magic_link_auth_unavailable(mon
     )
     assert r.status_code == 200
     assert r.json() == {"status": "sent"}
+
+
+def test_magic_link_request_reraises_httpexception(monkeypatch):
+    """Rate-limit (and other HTTPException) from the legacy subsystem
+    must propagate to the client — that's how 429s reach the frontend.
+    The endpoint's anti-enumeration policy intentionally does NOT swallow
+    HTTPException."""
+    import app.routers.auth_v2 as auth_v2_mod
+
+    class _RateLimitedMagicLinkAuth:
+        async def send_magic_link(self, email, request, background_tasks, redirect_url=None):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=429, detail="rate limited")
+
+    monkeypatch.setattr(auth_v2_mod, "_get_magic_link_auth",
+                        lambda: _RateLimitedMagicLinkAuth())
+
+    app = _build_router_test_app()
+    client = TestClient(app)
+    r = client.post(
+        "/api/auth/v2/magic-link/request",
+        json={"email": "ratelimited@example.com"},
+    )
+    assert r.status_code == 429
+    assert r.json() == {"detail": "rate limited"}
+
+
+def test_magic_link_request_swallows_generic_exception(monkeypatch):
+    """An unexpected error from the legacy subsystem must NOT leak to the
+    caller as a 500 — that would reveal which emails trigger downstream
+    failures. The endpoint logs and still returns 'sent' to preserve the
+    anti-enumeration guarantee."""
+    import app.routers.auth_v2 as auth_v2_mod
+
+    class _BrokenMagicLinkAuth:
+        async def send_magic_link(self, email, request, background_tasks, redirect_url=None):
+            raise RuntimeError("redis is down")
+
+    monkeypatch.setattr(auth_v2_mod, "_get_magic_link_auth",
+                        lambda: _BrokenMagicLinkAuth())
+
+    app = _build_router_test_app()
+    client = TestClient(app)
+    r = client.post(
+        "/api/auth/v2/magic-link/request",
+        json={"email": "broken@example.com"},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"status": "sent"}
