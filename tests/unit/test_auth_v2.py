@@ -326,3 +326,44 @@ def test_dependency_rejects_malformed_bearer_with_401():
 
     r = client.get("/__probe", headers={"Authorization": "Bearer not-a-token"})
     assert r.status_code == 401
+
+
+# ---------- Task 6: /me endpoint ----------
+
+
+def _build_router_test_app():
+    """Minimal FastAPI app that mounts the v2 router. Used to test
+    endpoints in isolation without booting main.py."""
+    from app.routers.auth_v2 import router as auth_v2_router
+
+    app = FastAPI()
+    app.include_router(auth_v2_router, prefix="/api/auth/v2", tags=["auth-v2"])
+    return app
+
+
+def test_me_returns_canonical_user():
+    from app.auth.canonical import create_canonical_token
+
+    app = _build_router_test_app()
+    client = TestClient(app)
+
+    user_id = uuid.uuid4()
+    org_id = uuid.uuid4()
+    token = create_canonical_token(
+        user_id=user_id, org_id=org_id, email="me@example.com", role="user"
+    )
+
+    r = client.get("/api/auth/v2/me", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["user_id"] == str(user_id)
+    assert body["org_id"] == str(org_id)
+    assert body["email"] == "me@example.com"
+    assert body["role"] == "user"
+
+
+def test_me_rejects_unauthenticated_request():
+    app = _build_router_test_app()
+    client = TestClient(app)
+    r = client.get("/api/auth/v2/me")
+    assert r.status_code in (401, 403)
