@@ -17,6 +17,7 @@ Token shape (per spec §4):
 """
 from __future__ import annotations
 
+import logging
 import uuid as _uuid
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
@@ -24,8 +25,14 @@ from uuid import UUID
 import jwt
 from pydantic import BaseModel, EmailStr
 from pydantic import ValidationError as _PydanticValidationError
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from agents.config import ACCESS_TOKEN_EXPIRE_MINUTES, ALGORITHM, SECRET_KEY
+from app.db.models import Credits, Entitlement, Organization, User
+from app.db.session import get_session_maker
+
+logger = logging.getLogger(__name__)
 
 
 class CanonicalTokenError(Exception):
@@ -130,17 +137,6 @@ def decode_canonical_token(token: str) -> CanonicalUser:
         # Surfacing the field name is fine; the value would leak token contents.
         fields = ", ".join(err["loc"][0] for err in e.errors())
         raise CanonicalTokenError(f"invalid claim shape: {fields}") from e
-
-
-import logging
-
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
-
-from app.db.models import Credits, Entitlement, Organization, User
-from app.db.session import get_session_maker
-
-logger = logging.getLogger(__name__)
 
 
 def _session_maker_for_provision():
