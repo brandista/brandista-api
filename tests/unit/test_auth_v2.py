@@ -623,3 +623,26 @@ def test_google_native_rejects_invalid_google_token(monkeypatch):
         "/api/auth/v2/google/native", json={"credential": "any-non-empty-string"}
     )
     assert r.status_code == 401
+
+
+def test_google_native_401_detail_does_not_leak_token_details(monkeypatch):
+    """Spec §8: error messages never include token contents. Google's
+    ValueError messages can include internal claim values (aud, iss).
+    Our 401 detail must be a constant string."""
+    def fake_verify(credential, request_, audience):
+        raise ValueError("Wrong audience: aud=secret-internal-value")
+
+    monkeypatch.setattr(
+        "google.oauth2.id_token.verify_oauth2_token", fake_verify
+    )
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
+
+    app = _build_router_test_app()
+    client = TestClient(app)
+    r = client.post(
+        "/api/auth/v2/google/native", json={"credential": "any-non-empty-string"}
+    )
+    assert r.status_code == 401
+    assert r.json()["detail"] == "invalid Google token"
+    # Verify the leaked content is NOT in the response body
+    assert "secret-internal-value" not in r.text

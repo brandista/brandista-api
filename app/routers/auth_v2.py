@@ -97,7 +97,7 @@ def _verify_google_id_token(credential: str) -> dict:
         )
     except ValueError as e:
         logger.warning(f"auth-v2 google/native: id_token verification failed: {e}")
-        raise HTTPException(status_code=401, detail=f"invalid Google token: {e}")
+        raise HTTPException(status_code=401, detail="invalid Google token")
     except Exception as e:  # noqa: BLE001 — Google libs raise broad types on transport errors
         logger.error(f"auth-v2 google/native: unexpected verification error: {e}")
         raise HTTPException(status_code=500, detail="Google token verification failed")
