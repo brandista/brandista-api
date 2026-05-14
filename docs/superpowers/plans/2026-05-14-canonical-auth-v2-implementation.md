@@ -44,7 +44,7 @@ Expected: `postgres` container in state `Up`. Port 5433 mapped to 5432.
 - [ ] **Step 2: Confirm canonical schema is migrated**
 
 ```bash
-DATABASE_URL="postgresql://postgres:postgres@localhost:5433/brandista_test" \
+DATABASE_URL="postgresql://brandista:dev@localhost:5433/brandista" \
   alembic current
 ```
 
@@ -53,7 +53,7 @@ Expected: `0002_canonical_id (head)`. If empty, run `alembic upgrade head` again
 - [ ] **Step 3: Set the test env var for the rest of this plan**
 
 ```bash
-export TEST_DATABASE_URL="postgresql://postgres:postgres@localhost:5433/brandista_test"
+export TEST_DATABASE_URL="postgresql://brandista:dev@localhost:5433/brandista"
 ```
 
 Every task's pytest invocation in this plan assumes this is exported. If you start a new shell, re-export.
@@ -632,7 +632,7 @@ async def db_engine():
     """
     raw = os.environ.get(
         "TEST_DATABASE_URL",
-        "postgresql://postgres:postgres@localhost:5433/brandista_test",
+        "postgresql://brandista:dev@localhost:5433/brandista",
     )
     dsn = raw.replace("postgresql://", "postgresql+asyncpg://", 1) if "+asyncpg" not in raw else raw
     engine = create_async_engine(dsn, pool_pre_ping=True)
