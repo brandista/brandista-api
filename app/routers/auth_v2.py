@@ -9,7 +9,9 @@ from __future__ import annotations
 import logging
 import os
 import time
+from urllib.parse import quote
 
+from authlib.integrations.base_client.errors import MismatchingStateError, OAuthError
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel, EmailStr
@@ -325,9 +327,12 @@ async def google_callback(request: Request) -> RedirectResponse:
 
     try:
         token = await oauth.google.authorize_access_token(request)
-    except Exception as e:  # noqa: BLE001 — authlib raises many types
-        logger.warning(f"auth-v2 google/callback: token exchange failed: {e}")
+    except (OAuthError, MismatchingStateError) as e:
+        logger.warning(f"auth-v2 google/callback: client-side auth error: {e}")
         raise HTTPException(status_code=400, detail="Google authorization failed")
+    except Exception as e:  # noqa: BLE001 — transport/server errors from Google
+        logger.error(f"auth-v2 google/callback: token exchange transport error: {e}")
+        raise HTTPException(status_code=502, detail="Google authorization failed")
 
     user_info = token.get("userinfo") or {}
     email = (user_info.get("email") or "").lower().strip()
@@ -349,10 +354,10 @@ async def google_callback(request: Request) -> RedirectResponse:
     timestamp = int(time.time())
     redirect_url = (
         f"{frontend_url}/dashboard?t={timestamp}"
-        f"#token={jwt_token}"
-        f"&email={email}"
-        f"&username={username}"
-        f"&role={user_row.role}"
+        f"#token={quote(jwt_token, safe='')}"
+        f"&email={quote(email, safe='')}"
+        f"&username={quote(username, safe='')}"
+        f"&role={quote(user_row.role, safe='')}"
     )
     logger.info(f"auth-v2 google/callback: issued v2 token for {email}, redirecting to frontend")
     return RedirectResponse(url=redirect_url, status_code=302)

@@ -978,3 +978,62 @@ async def test_google_callback_400_if_email_not_verified(db_session, monkeypatch
             follow_redirects=False,
         )
     assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_google_callback_400_if_userinfo_missing(db_session, monkeypatch):
+    """If authlib returns a token dict with no userinfo (drift between
+    versions, or Google response oddity), refuse cleanly — same as if
+    email_verified is False. No crash, no leak."""
+    import app.routers.auth_v2 as auth_v2_mod
+    from app.auth import canonical
+
+    monkeypatch.setattr(canonical, "_session_maker_for_provision",
+                        lambda: _OneShotSessionMaker(db_session))
+
+    class _FakeGoogle:
+        async def authorize_access_token(self, request):
+            return {}  # no 'userinfo' key
+
+    class _FakeOauth:
+        google = _FakeGoogle()
+
+    monkeypatch.setattr(auth_v2_mod, "_get_oauth", lambda: _FakeOauth())
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
+
+    import httpx
+    from httpx import ASGITransport
+    app = _build_router_test_app()
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        r = await client.get(
+            "/api/auth/v2/google/callback?code=x&state=y",
+            follow_redirects=False,
+        )
+    assert r.status_code == 400
+
+
+def test_google_callback_502_on_transport_error(monkeypatch):
+    """Network/transport errors from Google's token endpoint must surface
+    as 5xx (so monitoring alerts fire), NOT as 400 which would look like
+    a client problem."""
+    import app.routers.auth_v2 as auth_v2_mod
+
+    class _FakeGoogle:
+        async def authorize_access_token(self, request):
+            raise RuntimeError("connection reset by peer")
+
+    class _FakeOauth:
+        google = _FakeGoogle()
+
+    monkeypatch.setattr(auth_v2_mod, "_get_oauth", lambda: _FakeOauth())
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
+
+    app = _build_router_test_app()
+    client = TestClient(app)
+    r = client.get(
+        "/api/auth/v2/google/callback?code=x&state=y",
+        follow_redirects=False,
+    )
+    assert r.status_code == 502
+    assert r.json() == {"detail": "Google authorization failed"}
