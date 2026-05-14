@@ -103,7 +103,7 @@ def decode_canonical_token(token: str) -> CanonicalUser:
     except jwt.ExpiredSignatureError as e:
         raise CanonicalTokenError("token expired") from e
     except jwt.InvalidTokenError as e:
-        raise CanonicalTokenError(f"invalid token: {e}") from e
+        raise CanonicalTokenError("invalid token") from e
 
     missing = [c for c in _REQUIRED_CLAIMS if c not in claims]
     if missing:

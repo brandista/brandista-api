@@ -249,3 +249,15 @@ def test_decode_rejects_bad_signature():
     tampered = ".".join([parts[0], parts[1], "AAAA" + parts[2][4:]])
     with pytest.raises(CanonicalTokenError):
         decode_canonical_token(tampered)
+
+
+def test_decode_invalid_token_message_does_not_leak_token():
+    """Spec §8: error messages never include token contents. PyJWT's
+    InvalidTokenError messages are content-free today, but we don't
+    depend on that — our wrapper uses a constant string."""
+    from app.auth.canonical import decode_canonical_token, CanonicalTokenError
+
+    # A garbage 'JWT' that fails JWT format parsing.
+    with pytest.raises(CanonicalTokenError) as excinfo:
+        decode_canonical_token("not.a.real.jwt")
+    assert str(excinfo.value) == "invalid token"
