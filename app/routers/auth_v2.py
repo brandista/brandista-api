@@ -103,6 +103,30 @@ def _verify_google_id_token(credential: str) -> dict:
         raise HTTPException(status_code=500, detail="Google token verification failed")
 
 
+def _issue_v2_token_for(user_row, *, source: str) -> V2TokenResponse:
+    """Build the v2 token response for a freshly-provisioned (or
+    resolved) canonical user. Centralized so /google/native and
+    /magic-link/verify can't drift on claim ordering, log format,
+    or response shape.
+
+    source: short label appearing in the issuance log line.
+    """
+    token = create_canonical_token(
+        user_id=user_row.id,
+        org_id=user_row.org_id,
+        email=user_row.email,
+        role=user_row.role,
+    )
+    canonical_user = CanonicalUser(
+        user_id=user_row.id,
+        org_id=user_row.org_id,
+        email=user_row.email,
+        role=user_row.role,
+    )
+    logger.info(f"auth-v2 {source}: issued v2 token for {user_row.email}")
+    return V2TokenResponse(access_token=token, user=canonical_user)
+
+
 @router.post(
     "/google/native",
     response_model=V2TokenResponse,
@@ -126,21 +150,7 @@ async def google_native(req: GoogleNativeRequest) -> V2TokenResponse:
         raise HTTPException(status_code=400, detail="Google email not verified")
 
     user_row = await provision_canonical_user(email=email, source="google")
-
-    token = create_canonical_token(
-        user_id=user_row.id,
-        org_id=user_row.org_id,
-        email=user_row.email,
-        role=user_row.role,
-    )
-    canonical_user = CanonicalUser(
-        user_id=user_row.id,
-        org_id=user_row.org_id,
-        email=user_row.email,
-        role=user_row.role,
-    )
-    logger.info(f"auth-v2 google/native: issued v2 token for {email}")
-    return V2TokenResponse(access_token=token, user=canonical_user)
+    return _issue_v2_token_for(user_row, source="google/native")
 
 
 class MagicLinkRequestBody(BaseModel):
@@ -238,18 +248,4 @@ async def magic_link_verify(
     email = email.lower().strip()
 
     user_row = await provision_canonical_user(email=email, source="magic_link")
-
-    token = create_canonical_token(
-        user_id=user_row.id,
-        org_id=user_row.org_id,
-        email=user_row.email,
-        role=user_row.role,
-    )
-    canonical_user = CanonicalUser(
-        user_id=user_row.id,
-        org_id=user_row.org_id,
-        email=user_row.email,
-        role=user_row.role,
-    )
-    logger.info(f"auth-v2 magic-link/verify: issued v2 token for {email}")
-    return V2TokenResponse(access_token=token, user=canonical_user)
+    return _issue_v2_token_for(user_row, source="magic-link/verify")
