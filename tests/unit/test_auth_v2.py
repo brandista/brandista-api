@@ -529,6 +529,25 @@ async def test_provision_idempotent_on_repeat(db_session, monkeypatch):
     assert user_count == 1
     assert org_count == 1
 
+
+@pytest.mark.asyncio
+async def test_provision_leaves_hashed_password_null(db_session, monkeypatch):
+    """After migration 0003, provisioned passwordless users have
+    hashed_password = NULL, not the legacy '' sentinel."""
+    from app.auth import canonical
+    from app.db.models import User
+    from sqlalchemy import select
+
+    monkeypatch.setattr(canonical, "_session_maker_for_provision",
+                        lambda: _OneShotSessionMaker(db_session))
+
+    await canonical.provision_canonical_user(email="nullpwd@example.com", source="google")
+
+    row = (await db_session.execute(
+        select(User).where(User.email == "nullpwd@example.com")
+    )).scalar_one()
+    assert row.hashed_password is None
+
 # ---------- Task 8: /google/native endpoint ----------
 
 
