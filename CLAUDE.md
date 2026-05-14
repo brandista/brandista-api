@@ -67,8 +67,15 @@ Kaikki LLM-promptit noudattavat näitä — sisäänrakennettu ANTI_HALLUCINATIO
 - **Tilastot**: `swarm_summary.learning` sisältää verified/correct/accuracy per analyysi
 
 ## Tärkeät tiedostot
-- `main.py` - Legacy pää-API (11500+ riviä), AI-näkyvyysanalyysi (6 faktoria), hakutermien käännökset. **Tuotannon entrypoint** (Railway Nixpacks auto-detect)
-- `app/main.py` - Refaktoroitu modulaarinen entrypoint (importtaa agentteja `agents/`-kansiosta). Kehitysversio, EI vielä tuotannossa
+- `start.py` - **Tuotannon Railway-entrypoint**. Ajaa `app.main:app` Uvicornilla. EI `main.py` suoraan.
+- `app/main.py` - **Tuotannon FastAPI-app** (modulaarinen). Importtaa `main as legacy_main` ja re-rekisteröi legacy-reitit omalle app-objektilleen. Mountaa modulaariset reitit (`app/routers/*`).
+- `main.py` - Legacy monoliitti (11500+ riviä), AI-näkyvyysanalyysi, hakutermien käännökset. EI itse ajoa — luetaan `app/main.py`:stä `legacy_main`-aliaksena, funktiot re-decorataan. **Huom:** uusi `app.include_router(...)` MOLEMPIIN: sekä `main.py`:n omaan `app`-instanssiin (testien import-checks) ETTÄ `app/main.py`:n production-appiin.
+- `app/auth/` - **Canonical Platform Identity v2** (2026-05-14): `CanonicalUser`, `CanonicalTokenError`, `create_canonical_token`, `decode_canonical_token`, `provision_canonical_user`, `get_current_canonical_user`. Token shape `{sub=<uuid>, email, org_id, role, jti, iat, exp}` HS256. Coexistuu legacyn kanssa, jakaa SECRET_KEY:n.
+- `app/db/` - Async SQLAlchemy: `Base`, `Organization`, `User`, `Credits`, `Entitlement`. `app/db/session.py`:n `get_session_maker()` antaa async-sessioita. EI jaa connection-pooliin `database.py`:n psycopg2:n kanssa.
+- `app/routers/auth_v2.py` - 7 endpointtia: `/me`, `/logout`, `/google/native`, `/google/login` + `/callback` (OAuth-redirect web-frontendille), `/magic-link/request`, `/magic-link/verify`. `_get_oauth()` ja `_get_magic_link_auth()` -indirectionit testattavuuden + circular-import-vältyksen takia.
+- `migrations/` - Alembic. Revisioketju: `0001_baseline` (legacy-tilan stampaus) → `0002_canonical_id` (uudet taulut + users in-place) → `0003_pwd_nullable` (drop NOT NULL hashed_password:lta). Pre-flight prod-deployhin: `alembic stamp 0001_baseline` kerran (poistaa vanhan tunnistamattoman `'003'`-rivin alembic_version-taulusta), sitten `alembic upgrade head`.
+- `infra/docker-compose.yml` - Paikallinen Postgres testeille portissa 5433 (välttää clash continuity-postgresin 5432:n kanssa). Credentials `brandista/dev/brandista`.
+- `app/routers/chat.py` - Chat-reititys brandista-home-agentille. `BRANDISTA_HOME_PROMPT` (päivitetty 2026-05-08) synkronoitu frontendin BrandistaHome.tsx (v5-codex AI Studio -layout) kanssa: 5 tuotetta tuotannossa + Tax Optimization Engine pre-MVP, operating method (4 periaatetta), tagline "AI ei ole työkalu. Se on tiimi.", Karoliina Tuomisto Commercial Direction, hinnoittelu Free Scan → Pro Analysis (149€) → Pro/Professional, anekdootti "8h → 90 sekuntia". Chat-tervetuloruutu kysyy "Mistä teillä alkaa päätös?" — promptin tyyli ohjaa AI:n auttamaan tunnistamaan minkä työnkulun kannattaa muuttaa agenttitiimiksi ensin.
 - `app/routers/chat.py` - Chat-reititys brandista-home-agentille. `BRANDISTA_HOME_PROMPT` (päivitetty 2026-05-08) synkronoitu frontendin BrandistaHome.tsx (v5-codex AI Studio -layout) kanssa: 5 tuotetta tuotannossa + Tax Optimization Engine pre-MVP, operating method (4 periaatetta), tagline "AI ei ole työkalu. Se on tiimi.", Karoliina Tuomisto Commercial Direction, hinnoittelu Free Scan → Pro Analysis (149€) → Pro/Professional, anekdootti "8h → 90 sekuntia". Chat-tervetuloruutu kysyy "Mistä teillä alkaa päätös?" — promptin tyyli ohjaa AI:n auttamaan tunnistamaan minkä työnkulun kannattaa muuttaa agenttitiimiksi ensin.
 - `app/routers/books.py`, `app/routers/health.py` - Modulaariset reitit
 - `agents/scoring_constants.py` - Yhtenäiset kynnysarvot, painot ja apufunktiot kaikille agenteille
@@ -142,6 +149,8 @@ INDUSTRY_TRANSLATIONS = {
 
 ## Testaus
 - **Aja testit**: `python3 -m pytest tests/ -x -q` (tarkista aina tuore tulos, älä luota dokumentoituun lukuun)
+- **Auth v2 -testit vaativat docker-postgresin**: `cd infra && docker compose up -d postgres`, sitten `export TEST_DATABASE_URL="postgresql://brandista:dev@localhost:5433/brandista"` ennen pytest-ajoa. Tarvitaan tehtäville jotka kutsuvat `provision_canonical_user`ia (DB-touching tests `test_auth_v2.py`:ssä).
+- **Async happy-path-testit FastAPI:lla**: Käytä `httpx.AsyncClient + ASGITransport`, EI sync `TestClient`:iä, koska viimeksimainittu spawn:aa uuden event loopin ja luo konfliktin async `db_session`-fixturen kanssa (asyncpg-connection sidottu testin outer-loopiin).
 - **Gustav 2.0 testisuitet**:
   - `test_hallucination_guard.py`, `test_competitive_intelligence.py`, `test_threat_history.py`, `test_intelligence_brief.py`, `test_guardian_pulse.py`
 - **Manuaalinen**: https://brandista.eu/growthengine/dashboard → aloita analyysi → tarkista Railway logit
@@ -174,7 +183,8 @@ INDUSTRY_TRANSLATIONS = {
 
 ## Versiohistoria
 - **Versio**: 6.5.0 (ks. CHANGELOG — v3.2 Firecrawl provider, v3.3 Stripe Checkout, 6.x versiohyppy)
-- **Changelog**: `CHANGELOG.md`
+- **2026-05-14**: Phase 4.1 Canonical Platform Identity shipattu prodiin. Step 1 = schema-migraatio (`0001_baseline` + `0002_canonical_id`: organizations, users canonical UUID-shape, credits, entitlements). Step 2 = `app/auth/v2/*` endpointit ja `BrandistaCoreIdentityProvider`-päivitys Continuityyn. Step 3.5 (Apple Sign In) ja step 4+ (refresh tokens, RS256/JWKS, entitlement-claim, Redis blocklist) deferred.
+- **Changelog**: `CHANGELOG.md` — tarkka diff-historiataso
 
 ## Kehityskäytännöt
 - **AINA aja testit** ennen committia: `python3 -m pytest tests/ -x -q`
