@@ -9,9 +9,9 @@ from __future__ import annotations
 import logging
 import os
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 
 from app.auth.canonical import (
     CanonicalUser,
@@ -141,3 +141,66 @@ async def google_native(req: GoogleNativeRequest) -> V2TokenResponse:
     )
     logger.info(f"auth-v2 google/native: issued v2 token for {email}")
     return V2TokenResponse(access_token=token, user=canonical_user)
+
+
+class MagicLinkRequestBody(BaseModel):
+    email: EmailStr
+
+
+class MagicLinkRequestResponse(BaseModel):
+    status: str  # always "sent"
+
+
+def _get_magic_link_auth():
+    """Pull the already-initialized magic_link_auth singleton from main.py.
+
+    Indirection so tests can swap it out. main.py initializes
+    magic_link_auth at startup (main.py:1671); we use whatever it
+    holds today. May be None if Redis/SMTP are not configured —
+    in which case the endpoint silently no-ops and returns 'sent'.
+    """
+    try:
+        import main  # type: ignore[import-not-found]
+
+        return getattr(main, "magic_link_auth", None)
+    except Exception:  # noqa: BLE001 — main may not be importable in some test setups
+        return None
+
+
+@router.post(
+    "/magic-link/request",
+    response_model=MagicLinkRequestResponse,
+    summary="Request a magic link email",
+)
+async def magic_link_request(
+    body: MagicLinkRequestBody,
+    request: Request,
+    background_tasks: BackgroundTasks,
+) -> MagicLinkRequestResponse:
+    """Send a magic-link email to the given address.
+
+    Delegates to the existing magic_link_auth subsystem (auth_magic_link.py)
+    which handles rate-limiting, token storage, and email send. The
+    response is always `{"status": "sent"}` regardless of whether the
+    email exists — same anti-enumeration behavior as the legacy endpoint.
+    """
+    email = body.email.lower().strip()
+    mla = _get_magic_link_auth()
+    if mla is None:
+        logger.warning("auth-v2 magic-link/request: magic_link_auth not configured")
+        return MagicLinkRequestResponse(status="sent")
+
+    try:
+        await mla.send_magic_link(
+            email=email,
+            request=request,
+            background_tasks=background_tasks,
+        )
+    except HTTPException:
+        # Rate-limit hits (429) etc. — let them propagate to the client
+        # because the legacy endpoint does the same.
+        raise
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"auth-v2 magic-link/request: send failed for {email}: {e}")
+        # Still return 'sent' so we don't reveal whether the email is registered
+    return MagicLinkRequestResponse(status="sent")

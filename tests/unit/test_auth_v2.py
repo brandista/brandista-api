@@ -646,3 +646,54 @@ def test_google_native_401_detail_does_not_leak_token_details(monkeypatch):
     assert r.json()["detail"] == "invalid Google token"
     # Verify the leaked content is NOT in the response body
     assert "secret-internal-value" not in r.text
+
+
+# ---------- Task 9: /magic-link/request endpoint ----------
+
+
+class _FakeMagicLinkAuth:
+    """Captures send_magic_link calls without actually emailing."""
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    async def send_magic_link(self, email, request, background_tasks, redirect_url=None):
+        self.calls.append({"email": email, "redirect_url": redirect_url})
+        return {"success": True, "message": "sent", "expires_in_minutes": 15}
+
+
+def test_magic_link_request_calls_into_magic_link_auth(monkeypatch):
+    import app.routers.auth_v2 as auth_v2_mod
+
+    fake = _FakeMagicLinkAuth()
+    monkeypatch.setattr(auth_v2_mod, "_get_magic_link_auth", lambda: fake)
+
+    app = _build_router_test_app()
+    client = TestClient(app)
+    r = client.post(
+        "/api/auth/v2/magic-link/request",
+        json={"email": "Magic@Example.com"},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"status": "sent"}
+    assert len(fake.calls) == 1
+    # Email normalized to lowercase before being passed in
+    assert fake.calls[0]["email"] == "magic@example.com"
+
+
+def test_magic_link_request_returns_sent_even_if_magic_link_auth_unavailable(monkeypatch):
+    """If the underlying magic-link subsystem is not configured (e.g. no
+    Redis/SMTP), we still return 200 'sent' to the caller — the legacy
+    endpoint behaves the same way to avoid leaking which emails exist."""
+    import app.routers.auth_v2 as auth_v2_mod
+
+    monkeypatch.setattr(auth_v2_mod, "_get_magic_link_auth", lambda: None)
+
+    app = _build_router_test_app()
+    client = TestClient(app)
+    r = client.post(
+        "/api/auth/v2/magic-link/request",
+        json={"email": "anything@example.com"},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"status": "sent"}
