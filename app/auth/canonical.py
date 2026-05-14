@@ -23,6 +23,7 @@ from uuid import UUID
 
 import jwt
 from pydantic import BaseModel, EmailStr
+from pydantic import ValidationError as _PydanticValidationError
 
 from agents.config import ACCESS_TOKEN_EXPIRE_MINUTES, ALGORITHM, SECRET_KEY
 
@@ -81,3 +82,51 @@ def create_canonical_token(
         "exp": int((now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)).timestamp()),
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+_REQUIRED_CLAIMS = ("sub", "email", "org_id", "role", "jti", "iat", "exp")
+
+
+def decode_canonical_token(token: str) -> CanonicalUser:
+    """Validate a v2 platform JWT and return the decoded CanonicalUser.
+
+    Rejects (CanonicalTokenError):
+      - Bad signature, expired, or otherwise malformed JWT.
+      - Any missing required claim from _REQUIRED_CLAIMS.
+      - Non-UUID 'sub' or 'org_id'.
+      - 'email' that does not pass EmailStr validation.
+
+    Does not touch the database — the token is self-contained.
+    """
+    try:
+        claims = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except jwt.ExpiredSignatureError as e:
+        raise CanonicalTokenError("token expired") from e
+    except jwt.InvalidTokenError as e:
+        raise CanonicalTokenError(f"invalid token: {e}") from e
+
+    missing = [c for c in _REQUIRED_CLAIMS if c not in claims]
+    if missing:
+        raise CanonicalTokenError(f"missing required claim(s): {', '.join(missing)}")
+
+    try:
+        user_id = UUID(claims["sub"])
+    except (ValueError, TypeError) as e:
+        raise CanonicalTokenError("'sub' is not a valid UUID") from e
+
+    try:
+        org_id = UUID(claims["org_id"])
+    except (ValueError, TypeError) as e:
+        raise CanonicalTokenError("'org_id' is not a valid UUID") from e
+
+    try:
+        return CanonicalUser(
+            user_id=user_id,
+            org_id=org_id,
+            email=claims["email"],
+            role=claims["role"],
+        )
+    except _PydanticValidationError as e:
+        # Surfacing the field name is fine; the value would leak token contents.
+        fields = ", ".join(err["loc"][0] for err in e.errors())
+        raise CanonicalTokenError(f"invalid claim shape: {fields}") from e

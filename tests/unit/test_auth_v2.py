@@ -100,3 +100,152 @@ def test_create_canonical_token_each_call_has_unique_jti():
     a = pyjwt.decode(create_canonical_token(**args), SECRET_KEY, algorithms=[ALGORITHM])
     b = pyjwt.decode(create_canonical_token(**args), SECRET_KEY, algorithms=[ALGORITHM])
     assert a["jti"] != b["jti"]
+
+
+# ---------- Task 3: decode_canonical_token ----------
+
+
+def _make_legacy_token(sub: str = "user@example.com", role: str = "user") -> str:
+    """Build a legacy-shaped token (sub=email, no org_id, no jti) for
+    rejection tests. Matches main.py:create_access_token format."""
+    from agents.config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
+
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": sub,
+        "role": role,
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)).timestamp()),
+    }
+    return pyjwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def test_decode_canonical_token_roundtrip():
+    from app.auth.canonical import create_canonical_token, decode_canonical_token
+
+    user_id = uuid.uuid4()
+    org_id = uuid.uuid4()
+    token = create_canonical_token(
+        user_id=user_id, org_id=org_id, email="x@y.com", role="admin"
+    )
+
+    user = decode_canonical_token(token)
+    assert user.user_id == user_id
+    assert user.org_id == org_id
+    assert user.email == "x@y.com"
+    assert user.role == "admin"
+
+
+def test_decode_rejects_legacy_token():
+    from app.auth.canonical import decode_canonical_token, CanonicalTokenError
+
+    legacy = _make_legacy_token()
+    with pytest.raises(CanonicalTokenError):
+        decode_canonical_token(legacy)
+
+
+def test_decode_rejects_non_uuid_sub():
+    from app.auth.canonical import decode_canonical_token, CanonicalTokenError
+    from agents.config import SECRET_KEY, ALGORITHM
+
+    now = datetime.now(timezone.utc)
+    bad = pyjwt.encode(
+        {
+            "sub": "not-a-uuid",
+            "email": "x@y.com",
+            "org_id": str(uuid.uuid4()),
+            "role": "user",
+            "jti": str(uuid.uuid4()),
+            "iat": int(now.timestamp()),
+            "exp": int((now + timedelta(hours=1)).timestamp()),
+        },
+        SECRET_KEY,
+        algorithm=ALGORITHM,
+    )
+    with pytest.raises(CanonicalTokenError):
+        decode_canonical_token(bad)
+
+
+def test_decode_rejects_non_uuid_org_id():
+    from app.auth.canonical import decode_canonical_token, CanonicalTokenError
+    from agents.config import SECRET_KEY, ALGORITHM
+
+    now = datetime.now(timezone.utc)
+    bad = pyjwt.encode(
+        {
+            "sub": str(uuid.uuid4()),
+            "email": "x@y.com",
+            "org_id": "not-a-uuid",
+            "role": "user",
+            "jti": str(uuid.uuid4()),
+            "iat": int(now.timestamp()),
+            "exp": int((now + timedelta(hours=1)).timestamp()),
+        },
+        SECRET_KEY,
+        algorithm=ALGORITHM,
+    )
+    with pytest.raises(CanonicalTokenError):
+        decode_canonical_token(bad)
+
+
+def test_decode_rejects_missing_email():
+    from app.auth.canonical import decode_canonical_token, CanonicalTokenError
+    from agents.config import SECRET_KEY, ALGORITHM
+
+    now = datetime.now(timezone.utc)
+    bad = pyjwt.encode(
+        {
+            "sub": str(uuid.uuid4()),
+            "org_id": str(uuid.uuid4()),
+            "role": "user",
+            "jti": str(uuid.uuid4()),
+            "iat": int(now.timestamp()),
+            "exp": int((now + timedelta(hours=1)).timestamp()),
+        },
+        SECRET_KEY,
+        algorithm=ALGORITHM,
+    )
+    with pytest.raises(CanonicalTokenError):
+        decode_canonical_token(bad)
+
+
+def test_decode_rejects_expired_token():
+    from app.auth.canonical import decode_canonical_token, CanonicalTokenError
+    from agents.config import SECRET_KEY, ALGORITHM
+
+    now = datetime.now(timezone.utc)
+    expired = pyjwt.encode(
+        {
+            "sub": str(uuid.uuid4()),
+            "email": "x@y.com",
+            "org_id": str(uuid.uuid4()),
+            "role": "user",
+            "jti": str(uuid.uuid4()),
+            "iat": int((now - timedelta(hours=2)).timestamp()),
+            "exp": int((now - timedelta(hours=1)).timestamp()),
+        },
+        SECRET_KEY,
+        algorithm=ALGORITHM,
+    )
+    with pytest.raises(CanonicalTokenError):
+        decode_canonical_token(expired)
+
+
+def test_decode_rejects_bad_signature():
+    from app.auth.canonical import (
+        create_canonical_token,
+        decode_canonical_token,
+        CanonicalTokenError,
+    )
+
+    token = create_canonical_token(
+        user_id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        email="x@y.com",
+        role="user",
+    )
+    # Tamper with the last segment (signature)
+    parts = token.split(".")
+    tampered = ".".join([parts[0], parts[1], "AAAA" + parts[2][4:]])
+    with pytest.raises(CanonicalTokenError):
+        decode_canonical_token(tampered)
