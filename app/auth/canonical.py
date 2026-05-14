@@ -130,3 +130,80 @@ def decode_canonical_token(token: str) -> CanonicalUser:
         # Surfacing the field name is fine; the value would leak token contents.
         fields = ", ".join(err["loc"][0] for err in e.errors())
         raise CanonicalTokenError(f"invalid claim shape: {fields}") from e
+
+
+import logging
+
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+
+from app.db.models import Credits, Entitlement, Organization, User
+from app.db.session import get_session_maker
+
+logger = logging.getLogger(__name__)
+
+
+def _session_maker_for_provision():
+    """Indirection point so tests can swap in their own session maker
+    without monkey-patching get_session_maker globally."""
+    return get_session_maker()
+
+
+async def provision_canonical_user(*, email: str, source: str) -> User:
+    """Create canonical user + org + credits + growth_engine entitlement
+    for a verified email. Single transaction.
+
+    Idempotent under race: if another request creates the user between
+    our SELECT and INSERT, the unique(email) constraint fires and we
+    re-query to return whoever won.
+
+    source: 'google' | 'magic_link' — used only in the log line emitted
+            on successful provisioning. Not stored on any row today.
+    """
+    email = email.lower().strip()
+    maker = _session_maker_for_provision()
+    async with maker() as session:
+        # Pick the right transaction primitive based on whether we own
+        # the session (production: fresh, no autobegun txn → begin())
+        # or share it with a caller (tests: outer txn already open →
+        # begin_nested() = SAVEPOINT, so we still get atomicity without
+        # double-begin).
+        def _txn():
+            return session.begin_nested() if session.in_transaction() else session.begin()
+
+        existing = (
+            await session.execute(select(User).where(User.email == email))
+        ).scalar_one_or_none()
+        if existing is not None:
+            return existing
+
+        try:
+            async with _txn():
+                org = Organization(name=email)
+                session.add(org)
+                await session.flush()
+
+                user = User(
+                    email=email,
+                    org_id=org.id,
+                    is_active=True,
+                    role="user",
+                    # Legacy NOT NULL column — passwordless users (Google
+                    # OAuth, magic link) get an empty sentinel. Real bcrypt
+                    # hashes never collide with "".
+                    hashed_password="",
+                )
+                session.add(user)
+                await session.flush()
+
+                session.add(Credits(org_id=org.id, balance=0, plan_monthly_limit=0))
+                session.add(Entitlement(org_id=org.id, module="growth_engine"))
+            await session.refresh(user)
+            logger.info(f"auth-v2: provisioned canonical user {email} (source={source})")
+            return user
+        except IntegrityError:
+            # Race: someone else won the INSERT. Re-query and return theirs.
+            await session.rollback()
+            return (
+                await session.execute(select(User).where(User.email == email))
+            ).scalar_one()

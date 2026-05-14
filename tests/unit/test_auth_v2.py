@@ -399,3 +399,132 @@ def test_logout_returns_204_with_garbage_token():
     client = TestClient(app)
     r = client.post("/api/auth/v2/logout", headers={"Authorization": "Bearer garbage"})
     assert r.status_code == 204
+
+
+# ---------- Task 4: provision_canonical_user ----------
+
+import asyncio
+import pytest_asyncio
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+
+@pytest_asyncio.fixture
+async def db_engine():
+    """Async engine pointed at the docker-compose test Postgres.
+
+    Requires TEST_DATABASE_URL exported. Migration 0002 must already
+    have run against this DB (see plan task 0).
+    """
+    raw = os.environ.get(
+        "TEST_DATABASE_URL",
+        "postgresql://brandista:dev@localhost:5433/brandista",
+    )
+    dsn = raw.replace("postgresql://", "postgresql+asyncpg://", 1) if "+asyncpg" not in raw else raw
+    engine = create_async_engine(dsn, pool_pre_ping=True)
+    yield engine
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def db_session(db_engine):
+    """Fresh AsyncSession per test. Truncates canonical tables before
+    each test so order does not matter. Uses TRUNCATE ... CASCADE so
+    that FK constraints don't block cleanup."""
+    maker = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+    async with maker() as session:
+        # Wipe canonical-identity rows. Order doesn't matter due to CASCADE.
+        await session.execute(text(
+            "TRUNCATE TABLE entitlements, credits, users, organizations "
+            "RESTART IDENTITY CASCADE"
+        ))
+        await session.commit()
+        yield session
+
+
+@pytest.mark.asyncio
+async def test_provision_creates_full_set(db_session, monkeypatch):
+    """A new email gets a user + org + credits row + growth_engine
+    entitlement, all in a single transaction."""
+    from app.auth import canonical
+    from app.db.models import Credits, Entitlement, Organization, User
+    from sqlalchemy import select
+
+    # Make provision_canonical_user use the test session maker.
+    monkeypatch.setattr(canonical, "_session_maker_for_provision",
+                        lambda: _OneShotSessionMaker(db_session))
+
+    user = await canonical.provision_canonical_user(
+        email="new@example.com", source="google"
+    )
+
+    assert user.email == "new@example.com"
+    assert user.org_id is not None
+    assert user.is_active is True
+    assert user.role == "user"
+
+    # Org exists
+    org = (await db_session.execute(
+        select(Organization).where(Organization.id == user.org_id)
+    )).scalar_one()
+    assert org.name == "new@example.com"
+
+    # Credits seeded with balance=0
+    credits = (await db_session.execute(
+        select(Credits).where(Credits.org_id == user.org_id)
+    )).scalar_one()
+    assert credits.balance == 0
+    assert credits.plan_monthly_limit == 0
+
+    # growth_engine entitlement seeded
+    ent = (await db_session.execute(
+        select(Entitlement).where(
+            Entitlement.org_id == user.org_id,
+            Entitlement.module == "growth_engine",
+        )
+    )).scalar_one()
+    assert ent.is_active is True
+
+
+class _OneShotSessionMaker:
+    """Test helper: a 'session maker' that returns the same already-open
+    session via async context manager. Lets provision_canonical_user
+    reuse the test's session so TRUNCATE-on-fixture-entry works."""
+
+    def __init__(self, session):
+        self._session = session
+
+    def __call__(self):
+        return self
+
+    async def __aenter__(self):
+        return self._session
+
+    async def __aexit__(self, *exc):
+        # Don't close — the fixture owns the lifecycle.
+        return False
+
+
+@pytest.mark.asyncio
+async def test_provision_idempotent_on_repeat(db_session, monkeypatch):
+    """Calling provision_canonical_user twice for the same email returns
+    the same user, does not create duplicates."""
+    from app.auth import canonical
+    from app.db.models import Organization, User
+    from sqlalchemy import func, select
+
+    monkeypatch.setattr(canonical, "_session_maker_for_provision",
+                        lambda: _OneShotSessionMaker(db_session))
+
+    a = await canonical.provision_canonical_user(email="dup@example.com", source="google")
+    b = await canonical.provision_canonical_user(email="dup@example.com", source="google")
+    assert a.id == b.id
+
+    user_count = (await db_session.execute(
+        select(func.count(User.id)).where(User.email == "dup@example.com")
+    )).scalar_one()
+    org_count = (await db_session.execute(
+        select(func.count(Organization.id)).where(Organization.name == "dup@example.com")
+    )).scalar_one()
+    assert user_count == 1
+    assert org_count == 1
