@@ -204,3 +204,52 @@ async def magic_link_request(
         logger.error(f"auth-v2 magic-link/request: send failed for {email}: {e}")
         # Still return 'sent' so we don't reveal whether the email is registered
     return MagicLinkRequestResponse(status="sent")
+
+
+class MagicLinkVerifyBody(BaseModel):
+    token: str
+
+
+@router.post(
+    "/magic-link/verify",
+    response_model=V2TokenResponse,
+    summary="Verify magic link → canonical v2 token",
+)
+async def magic_link_verify(
+    body: MagicLinkVerifyBody, request: Request
+) -> V2TokenResponse:
+    """Verify a magic-link single-use token and issue a v2 JWT.
+
+    Ports legacy GET /auth/magic-link/verify (main.py:6874) — but as POST
+    with a JSON body because the call is server-to-server XHR from the
+    frontend page that the email link redirects to.
+    """
+    mla = _get_magic_link_auth()
+    if mla is None:
+        raise HTTPException(status_code=503, detail="Magic link authentication not available")
+
+    result = await mla.verify_magic_link(token=body.token, request=request)
+    if not result or not result.get("valid"):
+        raise HTTPException(status_code=400, detail="Invalid or expired magic link")
+
+    email = (result.get("user") or {}).get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="Invalid magic link response")
+    email = email.lower().strip()
+
+    user_row = await provision_canonical_user(email=email, source="magic_link")
+
+    token = create_canonical_token(
+        user_id=user_row.id,
+        org_id=user_row.org_id,
+        email=user_row.email,
+        role=user_row.role,
+    )
+    canonical_user = CanonicalUser(
+        user_id=user_row.id,
+        org_id=user_row.org_id,
+        email=user_row.email,
+        role=user_row.role,
+    )
+    logger.info(f"auth-v2 magic-link/verify: issued v2 token for {email}")
+    return V2TokenResponse(access_token=token, user=canonical_user)

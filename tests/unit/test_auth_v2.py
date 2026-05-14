@@ -746,3 +746,75 @@ def test_magic_link_request_swallows_generic_exception(monkeypatch):
     )
     assert r.status_code == 200
     assert r.json() == {"status": "sent"}
+
+
+# ---------- Task 10: /magic-link/verify endpoint ----------
+
+
+class _FakeMagicLinkAuthVerify:
+    """Stub for verify path. Returns a fixed result keyed on token."""
+
+    def __init__(self, valid_tokens: dict[str, str]):
+        # token → email
+        self._valid = valid_tokens
+
+    async def verify_magic_link(self, token, request):
+        email = self._valid.get(token)
+        if not email:
+            from fastapi import HTTPException
+            raise HTTPException(400, "Invalid or expired magic link")
+        return {"valid": True, "success": True, "user": {"email": email}}
+
+
+@pytest.mark.asyncio
+async def test_magic_link_verify_issues_v2_token(db_session, monkeypatch):
+    import app.routers.auth_v2 as auth_v2_mod
+    from app.auth import canonical
+    from app.auth.canonical import decode_canonical_token
+
+    monkeypatch.setattr(canonical, "_session_maker_for_provision",
+                        lambda: _OneShotSessionMaker(db_session))
+    monkeypatch.setattr(
+        auth_v2_mod, "_get_magic_link_auth",
+        lambda: _FakeMagicLinkAuthVerify({"good-token": "magic-new@example.com"}),
+    )
+
+    # Use httpx.AsyncClient + ASGITransport to avoid event-loop conflict
+    # with the async db_session fixture (same pattern as Task 8 happy path).
+    import httpx
+    from httpx import ASGITransport
+
+    app = _build_router_test_app()
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        r = await client.post("/api/auth/v2/magic-link/verify", json={"token": "good-token"})
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    user = decode_canonical_token(body["access_token"])
+    assert user.email == "magic-new@example.com"
+    assert user.role == "user"
+
+
+def test_magic_link_verify_rejects_bad_token(monkeypatch):
+    import app.routers.auth_v2 as auth_v2_mod
+
+    monkeypatch.setattr(
+        auth_v2_mod, "_get_magic_link_auth",
+        lambda: _FakeMagicLinkAuthVerify({}),
+    )
+
+    app = _build_router_test_app()
+    client = TestClient(app)
+    r = client.post("/api/auth/v2/magic-link/verify", json={"token": "bad-token"})
+    assert r.status_code == 400
+
+
+def test_magic_link_verify_503_if_subsystem_unavailable(monkeypatch):
+    import app.routers.auth_v2 as auth_v2_mod
+
+    monkeypatch.setattr(auth_v2_mod, "_get_magic_link_auth", lambda: None)
+    app = _build_router_test_app()
+    client = TestClient(app)
+    r = client.post("/api/auth/v2/magic-link/verify", json={"token": "x"})
+    assert r.status_code == 503
