@@ -1901,6 +1901,15 @@ try:
 except ImportError as e:
     logger.warning(f"⚠️ Chat WebSocket not available: {e}")
 
+# Canonical platform identity (v2) — Phase 4.1 step 2.
+# Coexists with legacy /auth/* endpoints in this file.
+try:
+    from app.routers.auth_v2 import router as auth_v2_router
+    app.include_router(auth_v2_router, prefix="/api/auth/v2", tags=["auth-v2"])
+    logger.info("✅ Mounted canonical auth v2 router at /api/auth/v2")
+except Exception as e:  # noqa: BLE001 — never crash boot over a failed mount
+    logger.error(f"❌ Failed to mount auth_v2 router: {e}")
+
 @app.options("/{full_path:path}")
 async def options_handler():
     return {}

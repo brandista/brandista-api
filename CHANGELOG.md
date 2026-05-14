@@ -5,6 +5,162 @@ Muoto: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [unreleased] - 2026-05-14 — Canonical auth v2 (Phase 4.1 step 2)
+
+### Added
+- **`app/auth/` package** — canonical platform JWT primitives:
+  `CanonicalUser` model, `CanonicalTokenError`, `create_canonical_token`,
+  `decode_canonical_token`, `provision_canonical_user`. Token shape:
+  `{sub=<user_uuid>, email, org_id=<org_uuid>, role, jti, iat, exp}`,
+  HS256 with shared `SECRET_KEY`. Matches the contract documented in
+  Continuity's `apps/continuity-api/src/continuity_api/auth/brandista_core.py`.
+- **`app/auth/dependencies.py:get_current_canonical_user`** — FastAPI
+  dependency that validates v2 JWTs and rejects legacy-shaped tokens
+  with 401. Independent of legacy `get_current_user` in `main.py` and
+  `app/dependencies.py`.
+- **`app/routers/auth_v2.py`** — five new endpoints mounted at
+  `/api/auth/v2/*`:
+  - `POST /google/native` — ports legacy `/auth/google/native` onto
+    canonical schema + v2 token shape. Audience policy mirrors legacy
+    (GOOGLE_CLIENT_ID + comma-separated GOOGLE_ADDITIONAL_CLIENT_IDS
+    for iOS). 401 detail is content-free (no Google internal claims
+    leak to client).
+  - `POST /magic-link/request` — wraps existing `magic_link_auth.send_magic_link`.
+    Always returns `{"status":"sent"}` for anti-enumeration. HTTPException
+    (429 rate-limit) propagates; other exceptions are caught + logged but
+    still return "sent".
+  - `POST /magic-link/verify` — verifies single-use token, auto-provisions
+    canonical user, issues v2 JWT.
+  - `GET /me` — returns the canonical user from the validated token.
+  - `POST /logout` — no-op (204). Frontend deletes token client-side.
+    Future Redis blocklist (deferred to step 4+) hooks in here without
+    changing the URL.
+- **Auto-provisioning** — when an unknown email signs in via Google or
+  magic-link verify, `provision_canonical_user` creates user + org +
+  credits + `growth_engine` entitlement in a single transaction.
+  Idempotent under race (UNIQUE(email) constraint → re-query on
+  IntegrityError). New users get `hashed_password=""` because the
+  legacy column is NOT NULL; the empty-string sentinel matches what
+  legacy `/auth/google/native` writes for passwordless users.
+
+### Unchanged (deliberate)
+- Legacy `/auth/*` endpoints in `main.py` — `/auth/login`, `/auth/google/native`,
+  `/auth/magic-link/request`, `/auth/magic-link/verify`. All keep working
+  against the legacy token shape (`sub=email`). No code touched.
+- Legacy `get_current_user` in `main.py:2334` and `app/dependencies.py:29`.
+- `agents/config.py` — same `SECRET_KEY` and `ALGORITHM` for both shapes.
+
+### Tests
+- `tests/unit/test_auth_v2.py` — 37 tests covering model validation,
+  token roundtrip, legacy/expired/malformed-token rejection, dependency
+  401/403 paths, endpoint happy paths, auto-provisioning + idempotency,
+  anti-enumeration branches (HTTPException propagation, generic-exception
+  swallow), production mount verification.
+- DB-touching tests use the docker-compose Postgres on port 5433 (see
+  `infra/docker-compose.yml`). Export `TEST_DATABASE_URL=postgresql://brandista:dev@localhost:5433/brandista`.
+
+### Sprint context
+- Phase 4.1 step 2 — first endpoints that actually issue and accept
+  canonical platform JWTs. The schema (step 1, 2026-05-13) is now in
+  use, not just sitting in the DB. Sprint application §02
+  "multiple domain agents reasoning over a single shared
+  organisational memory" — this is the auth/identity layer that
+  carries `(user_id, org_id)` across products.
+
+### Deferred to follow-ups
+- **Step 3.5:** Apple Sign In — needs `users.apple_id` migration,
+  Apple Developer Service ID config, JWKS verification, private-relay
+  email handling. Lands once Google v2 is already in production.
+- **Step 4:** Refresh tokens, RS256/JWKS migration, `entitlements`
+  claim in token, real revocation via Redis blocklist (the `jti` claim
+  is already populated — only the blocklist lookup is missing).
+- **Step 5+:** Legacy `/auth/*` endpoint deprecation, frontend cutover.
+
+### Deploy notes
+- No schema migration in this step (step 1 already shipped the schema).
+- Requires no new env vars — uses existing `SECRET_KEY`, `GOOGLE_CLIENT_ID`,
+  `GOOGLE_ADDITIONAL_CLIENT_IDS`, magic-link / SMTP env (already set
+  in production).
+- Additive only — legacy paths untouched, so no production rollback
+  drill needed beyond the standard "revert the commit and redeploy".
+
+---
+
+## [unreleased] - 2026-05-13 — Canonical platform identity (Phase 4.1 step 1)
+
+### Added
+- **Alembic migrations** (`migrations/`) — first time the schema is under
+  proper migration control. Replaces the boot-time `CREATE TABLE IF NOT
+  EXISTS` + `ALTER TABLE` pattern in `database.py` for the canonical
+  identity tables. Legacy Growth Engine tables (`analyses`,
+  `competitor_*`, `user_analysis_usage`) remain managed by the existing
+  boot-time code until a later migration moves them too.
+- **`app/db/` package** — SQLAlchemy declarative base, canonical models
+  (`Organization`, `User`, `Credits`, `Entitlement`), and an async
+  session factory. Coexists with the legacy psycopg2 pool in
+  `database.py`; the two never share connections or transactions.
+- **`infra/docker-compose.yml`** — local Postgres for migration testing
+  (port 5433 to avoid clashing with continuity-postgres on 5432).
+
+### Migrated (in place)
+- **`users` table → canonical shape.** `username PRIMARY KEY` demoted to
+  a nullable UNIQUE column; new `id UUID PRIMARY KEY` with
+  `gen_random_uuid()` default; new columns `org_id` (FK to
+  `organizations.id` ON DELETE CASCADE), `google_id` (UNIQUE), `full_name`,
+  `is_active`, `last_login`; `email` tightened to NOT NULL + UNIQUE +
+  indexed; `created_at`/`updated_at` upgraded to `TIMESTAMPTZ`. Legacy
+  columns `username`, `search_limit`, `searches_used`, `role` are kept so
+  existing helpers in `database.py` and `main.py` keep working — they will
+  be retired in a later cleanup once all callers move to canonical
+  identity.
+- **Backfill** (migration `0002_canonical_id`):
+  - Generates UUIDs for existing rows.
+  - Backfills `email` from `username` when the username contains `@` and
+    `email` is NULL — refuses to proceed if any row still has no email.
+  - Creates one organization per user (named after the email).
+  - Wires each user's `org_id` to that organization.
+  - Seeds `credits` (balance=0, plan_monthly_limit=0) per organization.
+  - Seeds `entitlements.module='growth_engine'` per organization so the
+    existing Growth Engine flows keep working unchanged.
+- **Why in-place over parallel `platform_*` tables:** dependency audit
+  showed no other table FK-references `users`. Risk of in-place migration
+  is bounded to 5 code paths in `database.py` / `main.py` /
+  `scheduled_analysis.py` that read `users` by `username`; they all keep
+  working because `username` is preserved as a nullable UNIQUE column.
+  The `scheduled_analysis.py:738` query that referenced `users.id` (a
+  column that did not previously exist) is fixed as a side effect.
+
+### Reversibility
+- `alembic downgrade 0001_baseline` validated end-to-end against a
+  legacy-seeded test database: canonical tables dropped, `users` table
+  returned to pre-migration shape, `email` returned to nullable. Refuses
+  to downgrade if any user has no `username` (would otherwise lose rows).
+- Full upgrade → downgrade → re-upgrade cycle verified idempotent
+  (final state: 3 users, 3 orgs, 3 credits, 3 entitlements with the same
+  email-derived backfill).
+
+### Sprint context
+- Phase 4.1 (Identity unification) — WP A schema foundation per
+  `docs/value/sprint-hakemus-luonnos.md`. The canonical `(user_id,
+  org_id, ...)` key space across products is the structural prerequisite
+  for "multiple domain agents reasoning over a single shared
+  organisational memory" (Sprint §02).
+- Not yet wired into any API endpoint — that comes in the next step
+  (canonical JWT issuance + `/api/auth/v2/*` endpoints).
+
+### Notes for deploy
+- **First production deploy must run `alembic stamp 0001_baseline`
+  manually before `alembic upgrade head`.** The `users` table already
+  exists in production; `stamp` records that we're at the 0001 baseline
+  without re-creating it.
+- After stamp, `alembic upgrade head` will apply 0002 to migrate in
+  place. The migration is wrapped in a single transaction; either the
+  whole upgrade lands or nothing does.
+- Requires `pgcrypto` extension. Migration creates it with `CREATE
+  EXTENSION IF NOT EXISTS pgcrypto` (Railway Postgres supports it).
+
+---
+
 ## [unreleased] - 2026-05-12 — Native Google sign-in for mobile SSO
 
 ### Added
