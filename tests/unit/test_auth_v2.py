@@ -818,3 +818,18 @@ def test_magic_link_verify_503_if_subsystem_unavailable(monkeypatch):
     client = TestClient(app)
     r = client.post("/api/auth/v2/magic-link/verify", json={"token": "x"})
     assert r.status_code == 503
+
+
+# ---------- Task 11: production app mounts the router ----------
+
+
+def test_main_app_mounts_v2_router():
+    """Importing main.py registers the v2 router. We don't run any
+    request — just assert at least one /api/auth/v2/* route exists on
+    the actual FastAPI app object. Catches the case where someone
+    forgets the include_router line."""
+    import main  # imports the production app
+
+    paths = {getattr(r, "path", "") for r in main.app.routes}
+    v2_paths = {p for p in paths if p.startswith("/api/auth/v2")}
+    assert v2_paths, f"no /api/auth/v2/* routes found on main.app; have: {sorted(paths)[:20]}"
