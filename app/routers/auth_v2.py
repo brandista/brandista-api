@@ -25,3 +25,24 @@ async def me(user: CanonicalUser = Depends(get_current_canonical_user)) -> Canon
     rather than per-request lookups.
     """
     return user
+
+
+@router.post(
+    "/logout",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Sign out (no-op server-side)",
+)
+async def logout() -> Response:
+    """No-op logout — returns 204.
+
+    Frontend is responsible for deleting the token from its own storage.
+    The token remains technically valid against the canonical dependency
+    until `exp`, but with the frontend no longer sending it, that
+    technically-valid window has no effect.
+
+    Forward compatibility: when step 4 adds the Redis blocklist, this
+    endpoint will extract the request token's `jti` and insert it into
+    the blocklist with TTL = remaining exp. No URL change.
+    """
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

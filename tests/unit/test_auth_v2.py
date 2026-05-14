@@ -367,3 +367,35 @@ def test_me_rejects_unauthenticated_request():
     client = TestClient(app)
     r = client.get("/api/auth/v2/me")
     assert r.status_code in (401, 403)
+
+
+# ---------- Task 7: /logout endpoint ----------
+
+
+def test_logout_returns_204_with_no_auth_header():
+    app = _build_router_test_app()
+    client = TestClient(app)
+    r = client.post("/api/auth/v2/logout")
+    assert r.status_code == 204
+    assert r.content == b""
+
+
+def test_logout_returns_204_with_valid_token():
+    from app.auth.canonical import create_canonical_token
+
+    app = _build_router_test_app()
+    client = TestClient(app)
+    token = create_canonical_token(
+        user_id=uuid.uuid4(), org_id=uuid.uuid4(), email="x@y.com", role="user"
+    )
+    r = client.post("/api/auth/v2/logout", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 204
+
+
+def test_logout_returns_204_with_garbage_token():
+    """Logout is a no-op — it doesn't validate the token. Frontend
+    just wants to call 'logout' as a fire-and-forget signal."""
+    app = _build_router_test_app()
+    client = TestClient(app)
+    r = client.post("/api/auth/v2/logout", headers={"Authorization": "Bearer garbage"})
+    assert r.status_code == 204
