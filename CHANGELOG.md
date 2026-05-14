@@ -51,7 +51,7 @@ Muoto: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - `agents/config.py` — same `SECRET_KEY` and `ALGORITHM` for both shapes.
 
 ### Tests
-- `tests/unit/test_auth_v2.py` — 38 tests covering model validation,
+- `tests/unit/test_auth_v2.py` — 37 tests covering model validation,
   token roundtrip, legacy/expired/malformed-token rejection, dependency
   401/403 paths, endpoint happy paths, auto-provisioning + idempotency,
   anti-enumeration branches (HTTPException propagation, generic-exception
