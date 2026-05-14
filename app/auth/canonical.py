@@ -17,9 +17,14 @@ Token shape (per spec §4):
 """
 from __future__ import annotations
 
+import uuid as _uuid
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
+import jwt
 from pydantic import BaseModel, EmailStr
+
+from agents.config import ACCESS_TOKEN_EXPIRE_MINUTES, ALGORITHM, SECRET_KEY
 
 
 class CanonicalTokenError(Exception):
@@ -44,3 +49,35 @@ class CanonicalUser(BaseModel):
     org_id: UUID
     email: EmailStr
     role: str
+
+
+def create_canonical_token(
+    *,
+    user_id: UUID,
+    org_id: UUID,
+    email: str,
+    role: str,
+) -> str:
+    """Encode a v2 platform JWT for the given user.
+
+    Pure function — does not touch the database. Caller is responsible
+    for having already verified the user exists and resolved their org.
+
+    Expiry is ACCESS_TOKEN_EXPIRE_MINUTES from issuance, identical to
+    legacy tokens (currently 24h). HS256, signed with shared SECRET_KEY.
+
+    Every token gets a fresh `jti` (UUID) so that a future Redis blocklist
+    can revoke individual tokens without re-issuing. The blocklist itself
+    is out of scope for step 3.
+    """
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": str(user_id),
+        "email": email,
+        "org_id": str(org_id),
+        "role": role,
+        "jti": str(_uuid.uuid4()),
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)).timestamp()),
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
