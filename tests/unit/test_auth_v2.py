@@ -261,3 +261,68 @@ def test_decode_invalid_token_message_does_not_leak_token():
     with pytest.raises(CanonicalTokenError) as excinfo:
         decode_canonical_token("not.a.real.jwt")
     assert str(excinfo.value) == "invalid token"
+
+
+# ---------- Task 5: get_current_canonical_user dependency ----------
+
+from fastapi import FastAPI, Depends
+from fastapi.testclient import TestClient
+
+
+def _build_dep_test_app():
+    """Minimal FastAPI app that exposes one route guarded by
+    get_current_canonical_user. Used to test the dependency end-to-end
+    via the test client."""
+    from app.auth.dependencies import get_current_canonical_user
+    from app.auth.canonical import CanonicalUser
+
+    app = FastAPI()
+
+    @app.get("/__probe")
+    async def probe(user: CanonicalUser = Depends(get_current_canonical_user)):
+        return {"email": user.email}
+
+    return app
+
+
+def test_dependency_accepts_valid_v2_token():
+    from app.auth.canonical import create_canonical_token
+
+    app = _build_dep_test_app()
+    client = TestClient(app)
+
+    token = create_canonical_token(
+        user_id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        email="ok@example.com",
+        role="user",
+    )
+    r = client.get("/__probe", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    assert r.json() == {"email": "ok@example.com"}
+
+
+def test_dependency_rejects_legacy_token_with_401():
+    app = _build_dep_test_app()
+    client = TestClient(app)
+
+    legacy = _make_legacy_token()
+    r = client.get("/__probe", headers={"Authorization": f"Bearer {legacy}"})
+    assert r.status_code == 401
+
+
+def test_dependency_rejects_missing_header_with_401_or_403():
+    app = _build_dep_test_app()
+    client = TestClient(app)
+
+    r = client.get("/__probe")
+    # HTTPBearer returns 403 by default for missing creds; either is acceptable.
+    assert r.status_code in (401, 403)
+
+
+def test_dependency_rejects_malformed_bearer_with_401():
+    app = _build_dep_test_app()
+    client = TestClient(app)
+
+    r = client.get("/__probe", headers={"Authorization": "Bearer not-a-token"})
+    assert r.status_code == 401
