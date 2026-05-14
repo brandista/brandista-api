@@ -252,6 +252,17 @@ try:
 except Exception as e:
     logger.warning(f"⚠️ Books router not available: {e}")
 
+# Canonical platform identity (v2) — Phase 4.1 step 2.
+# Mounted here because production runs app/main.py (modular), not main.py.
+# The mount in main.py (legacy entrypoint) is for local dev / tests that
+# import legacy main directly. Coexists with legacy /auth/* endpoints.
+try:
+    from app.routers.auth_v2 import router as auth_v2_router
+    app.include_router(auth_v2_router, prefix="/api/auth/v2", tags=["auth-v2"])
+    logger.info("✅ Mounted canonical auth v2 router at /api/auth/v2")
+except Exception as e:  # noqa: BLE001 — never crash boot over a failed mount
+    logger.error(f"❌ Failed to mount auth_v2 router: {e}")
+
 # Import legacy routers from main.py
 # These will be gradually migrated to app/routers/
 

@@ -828,8 +828,24 @@ def test_main_app_mounts_v2_router():
     request — just assert at least one /api/auth/v2/* route exists on
     the actual FastAPI app object. Catches the case where someone
     forgets the include_router line."""
-    import main  # imports the production app
+    import main  # imports the legacy entrypoint
 
     paths = {getattr(r, "path", "") for r in main.app.routes}
     v2_paths = {p for p in paths if p.startswith("/api/auth/v2")}
     assert v2_paths, f"no /api/auth/v2/* routes found on main.app; have: {sorted(paths)[:20]}"
+
+
+def test_modular_app_mounts_v2_router():
+    """Production runs app/main.py (per start.py + railway.json), not
+    legacy main.py. The modular entrypoint re-registers most legacy
+    routes onto its own FastAPI instance — and it also needs to mount
+    the v2 router. Without this, v2 endpoints would only exist on the
+    legacy app and would 405 in prod (the catch-all OPTIONS handler
+    swallows unknown paths)."""
+    import app.main as modular_main
+
+    paths = {getattr(r, "path", "") for r in modular_main.app.routes}
+    v2_paths = {p for p in paths if p.startswith("/api/auth/v2")}
+    assert v2_paths, (
+        f"no /api/auth/v2/* routes found on app.main:app; have: {sorted(paths)[:20]}"
+    )
