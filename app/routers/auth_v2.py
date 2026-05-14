@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import logging
 import os
+import time
+from urllib.parse import quote
 
+from authlib.integrations.base_client.errors import MismatchingStateError, OAuthError
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
-from fastapi.responses import Response
+from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel, EmailStr
 
 from app.auth.canonical import (
@@ -249,3 +252,112 @@ async def magic_link_verify(
 
     user_row = await provision_canonical_user(email=email, source="magic_link")
     return _issue_v2_token_for(user_row, source="magic-link/verify")
+
+
+def _get_oauth():
+    """Pull the authlib oauth object initialized in app/main.py lifespan.
+
+    Lazy import + getattr keeps this independent of import order and lets
+    tests inject a fake via monkeypatch. main.oauth is set to either an
+    authlib OAuth instance or None depending on whether GOOGLE_CLIENT_ID /
+    GOOGLE_CLIENT_SECRET were set at boot.
+    """
+    try:
+        import main  # type: ignore[import-not-found]
+
+        return getattr(main, "oauth", None)
+    except Exception:  # noqa: BLE001 — main may not be importable in some test setups
+        return None
+
+
+@router.get(
+    "/google/login",
+    summary="Begin Google OAuth flow → redirect to Google",
+)
+async def google_login(request: Request) -> RedirectResponse:
+    """Initiate the server-side Google OAuth login flow.
+
+    Web frontend redirects browser here (window.location.href = ...).
+    We redirect to Google's consent screen; Google redirects back to
+    /api/auth/v2/google/callback with an authorization code.
+
+    Mirrors legacy /auth/google/login (main.py:6993). Differences:
+      - Redirect URI is the v2 callback path.
+      - Caller is expected to be a web client that handles the redirect
+        chain. Native mobile clients should use /api/auth/v2/google/native
+        (POST id_token) instead.
+    """
+    oauth = _get_oauth()
+    if oauth is None:
+        raise HTTPException(status_code=503, detail="Google OAuth not configured")
+    if not os.getenv("GOOGLE_CLIENT_ID"):
+        raise HTTPException(status_code=503, detail="GOOGLE_CLIENT_ID not set")
+
+    # The redirect URI Google sends the user back to. Must be whitelisted in
+    # Google Cloud Console for the OAuth client. Env override allows separate
+    # dev/staging targets.
+    redirect_uri = os.getenv(
+        "GOOGLE_V2_REDIRECT_URI",
+        "https://api.brandista.eu/api/auth/v2/google/callback",
+    )
+
+    logger.info(f"auth-v2 google/login: redirecting to Google with redirect_uri={redirect_uri}")
+    return await oauth.google.authorize_redirect(request, redirect_uri)
+
+
+@router.get(
+    "/google/callback",
+    summary="Handle Google OAuth callback → issue v2 token + redirect to frontend",
+)
+async def google_callback(request: Request) -> RedirectResponse:
+    """Handle the Google OAuth redirect: exchange the authorization code
+    for user info, auto-provision the canonical user, issue a v2 JWT,
+    and redirect the browser to the frontend dashboard with the token
+    in the URL hash fragment.
+
+    URL fragment shape (must stay identical to legacy /auth/google/callback
+    for frontend compatibility):
+        #token=<jwt>&email=<email>&username=<email-local-part>&role=<role>
+
+    Ports legacy main.py:7027 onto canonical schema + v2 token shape.
+    """
+    oauth = _get_oauth()
+    if oauth is None:
+        raise HTTPException(status_code=503, detail="Google OAuth not configured")
+
+    try:
+        token = await oauth.google.authorize_access_token(request)
+    except (OAuthError, MismatchingStateError) as e:
+        logger.warning(f"auth-v2 google/callback: client-side auth error: {e}")
+        raise HTTPException(status_code=400, detail="Google authorization failed")
+    except Exception as e:  # noqa: BLE001 — transport/server errors from Google
+        logger.error(f"auth-v2 google/callback: token exchange transport error: {e}")
+        raise HTTPException(status_code=502, detail="Google authorization failed")
+
+    user_info = token.get("userinfo") or {}
+    email = (user_info.get("email") or "").lower().strip()
+    if not email or not user_info.get("email_verified", False):
+        raise HTTPException(status_code=400, detail="Google email not verified")
+
+    user_row = await provision_canonical_user(email=email, source="google_callback")
+    jwt_token = create_canonical_token(
+        user_id=user_row.id,
+        org_id=user_row.org_id,
+        email=user_row.email,
+        role=user_row.role,
+    )
+
+    # Build the frontend redirect — fragment shape matches legacy so the
+    # frontend's hash handler keeps working unchanged.
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+    username = email.split("@")[0]
+    timestamp = int(time.time())
+    redirect_url = (
+        f"{frontend_url}/dashboard?t={timestamp}"
+        f"#token={quote(jwt_token, safe='')}"
+        f"&email={quote(email, safe='')}"
+        f"&username={quote(username, safe='')}"
+        f"&role={quote(user_row.role, safe='')}"
+    )
+    logger.info(f"auth-v2 google/callback: issued v2 token for {email}, redirecting to frontend")
+    return RedirectResponse(url=redirect_url, status_code=302)

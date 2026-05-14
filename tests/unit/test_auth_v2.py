@@ -849,3 +849,191 @@ def test_modular_app_mounts_v2_router():
     assert v2_paths, (
         f"no /api/auth/v2/* routes found on app.main:app; have: {sorted(paths)[:20]}"
     )
+
+
+# ---------- Task 2A: /google/login + /google/callback endpoints ----------
+
+
+def test_google_login_503_if_oauth_not_configured(monkeypatch):
+    """If the authlib oauth object is None (e.g. env vars missing on boot),
+    /login returns 503 rather than 500. Same anti-leak rationale as
+    /magic-link/verify."""
+    import app.routers.auth_v2 as auth_v2_mod
+    monkeypatch.setattr(auth_v2_mod, "_get_oauth", lambda: None)
+    app = _build_router_test_app()
+    client = TestClient(app)
+    r = client.get("/api/auth/v2/google/login", follow_redirects=False)
+    assert r.status_code == 503
+
+
+def test_google_login_503_if_client_id_missing(monkeypatch):
+    """Even if oauth object exists, refuse to redirect when GOOGLE_CLIENT_ID
+    is unset — protects against issuing a useless redirect."""
+    import app.routers.auth_v2 as auth_v2_mod
+
+    class _FakeOauth:
+        google = object()  # truthy
+
+    monkeypatch.setattr(auth_v2_mod, "_get_oauth", lambda: _FakeOauth())
+    monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
+    app = _build_router_test_app()
+    client = TestClient(app)
+    r = client.get("/api/auth/v2/google/login", follow_redirects=False)
+    assert r.status_code == 503
+
+
+def test_google_callback_503_if_oauth_not_configured(monkeypatch):
+    import app.routers.auth_v2 as auth_v2_mod
+    monkeypatch.setattr(auth_v2_mod, "_get_oauth", lambda: None)
+    app = _build_router_test_app()
+    client = TestClient(app)
+    r = client.get("/api/auth/v2/google/callback?code=x&state=y", follow_redirects=False)
+    assert r.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_google_callback_happy_path_redirects_with_v2_token(db_session, monkeypatch):
+    """Happy path: callback exchanges code, gets verified email, provisions
+    canonical user, issues v2 token, redirects to frontend with token in
+    URL hash fragment matching the legacy contract."""
+    import app.routers.auth_v2 as auth_v2_mod
+    from app.auth import canonical
+    from app.auth.canonical import decode_canonical_token
+
+    monkeypatch.setattr(canonical, "_session_maker_for_provision",
+                        lambda: _OneShotSessionMaker(db_session))
+
+    class _FakeGoogle:
+        async def authorize_access_token(self, request):
+            return {
+                "userinfo": {
+                    "email": "callback-new@example.com",
+                    "email_verified": True,
+                    "sub": "google-sub-xyz",
+                    "name": "Test User",
+                }
+            }
+
+    class _FakeOauth:
+        google = _FakeGoogle()
+
+    monkeypatch.setattr(auth_v2_mod, "_get_oauth", lambda: _FakeOauth())
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("FRONTEND_URL", "https://brandista.eu/growthengine")
+
+    import httpx
+    from httpx import ASGITransport
+    app = _build_router_test_app()
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        r = await client.get(
+            "/api/auth/v2/google/callback?code=x&state=y",
+            follow_redirects=False,
+        )
+
+    assert r.status_code in (302, 307), r.text
+    location = r.headers["location"]
+    assert location.startswith("https://brandista.eu/growthengine/dashboard")
+    # URL fragment shape must match legacy: #token=...&email=...&username=...&role=...
+    assert "#token=" in location
+    assert "&email=callback-new%40example.com" in location or "&email=callback-new@example.com" in location
+    assert "&username=callback-new" in location
+    assert "&role=user" in location
+
+    # Pull the token out of the fragment and decode it
+    fragment = location.split("#", 1)[1]
+    token = dict(p.split("=", 1) for p in fragment.split("&"))["token"]
+    user = decode_canonical_token(token)
+    assert user.email == "callback-new@example.com"
+    assert user.role == "user"
+
+
+@pytest.mark.asyncio
+async def test_google_callback_400_if_email_not_verified(db_session, monkeypatch):
+    """An unverified Google email must not become a canonical user — same
+    policy as /google/native."""
+    import app.routers.auth_v2 as auth_v2_mod
+    from app.auth import canonical
+
+    monkeypatch.setattr(canonical, "_session_maker_for_provision",
+                        lambda: _OneShotSessionMaker(db_session))
+
+    class _FakeGoogle:
+        async def authorize_access_token(self, request):
+            return {"userinfo": {"email": "x@y.com", "email_verified": False}}
+
+    class _FakeOauth:
+        google = _FakeGoogle()
+
+    monkeypatch.setattr(auth_v2_mod, "_get_oauth", lambda: _FakeOauth())
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
+
+    import httpx
+    from httpx import ASGITransport
+    app = _build_router_test_app()
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        r = await client.get(
+            "/api/auth/v2/google/callback?code=x&state=y",
+            follow_redirects=False,
+        )
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_google_callback_400_if_userinfo_missing(db_session, monkeypatch):
+    """If authlib returns a token dict with no userinfo (drift between
+    versions, or Google response oddity), refuse cleanly — same as if
+    email_verified is False. No crash, no leak."""
+    import app.routers.auth_v2 as auth_v2_mod
+    from app.auth import canonical
+
+    monkeypatch.setattr(canonical, "_session_maker_for_provision",
+                        lambda: _OneShotSessionMaker(db_session))
+
+    class _FakeGoogle:
+        async def authorize_access_token(self, request):
+            return {}  # no 'userinfo' key
+
+    class _FakeOauth:
+        google = _FakeGoogle()
+
+    monkeypatch.setattr(auth_v2_mod, "_get_oauth", lambda: _FakeOauth())
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
+
+    import httpx
+    from httpx import ASGITransport
+    app = _build_router_test_app()
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        r = await client.get(
+            "/api/auth/v2/google/callback?code=x&state=y",
+            follow_redirects=False,
+        )
+    assert r.status_code == 400
+
+
+def test_google_callback_502_on_transport_error(monkeypatch):
+    """Network/transport errors from Google's token endpoint must surface
+    as 5xx (so monitoring alerts fire), NOT as 400 which would look like
+    a client problem."""
+    import app.routers.auth_v2 as auth_v2_mod
+
+    class _FakeGoogle:
+        async def authorize_access_token(self, request):
+            raise RuntimeError("connection reset by peer")
+
+    class _FakeOauth:
+        google = _FakeGoogle()
+
+    monkeypatch.setattr(auth_v2_mod, "_get_oauth", lambda: _FakeOauth())
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
+
+    app = _build_router_test_app()
+    client = TestClient(app)
+    r = client.get(
+        "/api/auth/v2/google/callback?code=x&state=y",
+        follow_redirects=False,
+    )
+    assert r.status_code == 502
+    assert r.json() == {"detail": "Google authorization failed"}
