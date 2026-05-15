@@ -45,18 +45,57 @@ class CanonicalTokenError(Exception):
     """
 
 
+#: Products allowed to be encoded into the canonical JWT `product`
+#: claim. The claim is server-derived from the `X-Brandista-Product`
+#: header at issuance time — products cannot inject it themselves on
+#: token use. Anything outside this set falls back to `unknown`, which
+#: facts API write endpoints reject (see Phase 4.2 spec §6).
+ALLOWED_PRODUCTS: frozenset[str] = frozenset(
+    {
+        "veyra",
+        "continuity",
+        "growth_engine",
+        "kirjanpito",
+        "jobscout",
+        "bemufix",
+    }
+)
+
+#: Sentinel for tokens issued without a recognized product header.
+#: Allowed for read-only flows; write flows on the facts API check
+#: against this explicitly.
+PRODUCT_UNKNOWN = "unknown"
+
+
+def normalize_product(raw: str | None) -> str:
+    """Map a candidate `X-Brandista-Product` header value to the canonical
+    product tag stored in the JWT. Unknown values, empty, or None all
+    collapse to `PRODUCT_UNKNOWN`. Case- and whitespace-insensitive."""
+    if not raw:
+        return PRODUCT_UNKNOWN
+    candidate = raw.strip().lower()
+    return candidate if candidate in ALLOWED_PRODUCTS else PRODUCT_UNKNOWN
+
+
 class CanonicalUser(BaseModel):
     """Validated decoded form of a v2 JWT.
 
     Used both as the return type of decode_canonical_token and as the
     response model for GET /api/auth/v2/me. EmailStr enforces RFC 5321
     shape on the email claim.
+
+    `product` identifies which Brandista product issued this token —
+    set at issuance time from the `X-Brandista-Product` header against
+    `ALLOWED_PRODUCTS`. Used by the Phase 4.2 facts API to anti-spoof
+    `source_product` writes. Tokens issued before this claim was added
+    decode with `product=unknown` for backward compatibility.
     """
 
     user_id: UUID
     org_id: UUID
     email: EmailStr
     role: str
+    product: str = PRODUCT_UNKNOWN
 
 
 def create_canonical_token(
@@ -65,6 +104,7 @@ def create_canonical_token(
     org_id: UUID,
     email: str,
     role: str,
+    product: str = PRODUCT_UNKNOWN,
 ) -> str:
     """Encode a v2 platform JWT for the given user.
 
@@ -77,6 +117,11 @@ def create_canonical_token(
     Every token gets a fresh `jti` (UUID) so that a future Redis blocklist
     can revoke individual tokens without re-issuing. The blocklist itself
     is out of scope for step 3.
+
+    `product` is the canonical product tag from `normalize_product()`.
+    Defaults to `PRODUCT_UNKNOWN` so callers that don't (yet) thread the
+    header through get a backward-compatible token; facts API write
+    endpoints will refuse those.
     """
     now = datetime.now(timezone.utc)
     payload = {
@@ -84,6 +129,7 @@ def create_canonical_token(
         "email": email,
         "org_id": str(org_id),
         "role": role,
+        "product": product,
         "jti": str(_uuid.uuid4()),
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)).timestamp()),
@@ -126,12 +172,20 @@ def decode_canonical_token(token: str) -> CanonicalUser:
     except (ValueError, TypeError) as e:
         raise CanonicalTokenError("'org_id' is not a valid UUID") from e
 
+    # `product` is intentionally NOT in _REQUIRED_CLAIMS — tokens issued
+    # before this retrofit lack it and must still validate. Fall back to
+    # PRODUCT_UNKNOWN, which behaves as read-only for the facts API.
+    product = claims.get("product")
+    if not isinstance(product, str) or product not in ALLOWED_PRODUCTS:
+        product = PRODUCT_UNKNOWN
+
     try:
         return CanonicalUser(
             user_id=user_id,
             org_id=org_id,
             email=claims["email"],
             role=claims["role"],
+            product=product,
         )
     except _PydanticValidationError as e:
         # Surfacing the field name is fine; the value would leak token contents.

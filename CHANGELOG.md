@@ -5,6 +5,72 @@ Muoto: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [unreleased] - 2026-05-15 — `product` JWT claim retrofit (Phase 4.2 step 1)
+
+Prerequisite for the Phase 4.2 facts API (see
+`docs/superpowers/specs/2026-05-15-phase-4-2-facts-api-design.md` §6).
+
+### Added
+- **`product` claim on canonical JWTs.** Server-derived at issuance
+  time from the `X-Brandista-Product` request header, validated against
+  a closed allowlist (`veyra`, `continuity`, `growth_engine`,
+  `kirjanpito`, `jobscout`, `bemufix`). Unknown / missing / forged
+  values collapse to the sentinel `unknown`. Goes into the JWT so the
+  Phase 4.2 facts API can anti-spoof `source_product` writes (a Veyra
+  token can only post facts tagged source_product=veyra).
+- **`ALLOWED_PRODUCTS` frozenset + `PRODUCT_UNKNOWN` sentinel** in
+  `app/auth/canonical.py`. Single source of truth for the allowlist;
+  facts API will import the same constant.
+- **`normalize_product()` helper** — case- and whitespace-insensitive
+  mapping from header value to canonical product tag. Strips injection
+  attempts (anything not in the frozenset collapses to `unknown`).
+- **`CanonicalUser.product` field** — surfaces the tag to anyone
+  who already imports the decoded model (e.g. future facts-router
+  dependency).
+
+### Changed
+- **All v2 issuance routes thread the header through.** `_resolve_product(request)`
+  reads `X-Brandista-Product`, normalizes, and the result is passed to
+  the centralized `_issue_v2_token_for(...)` helper. Endpoints touched:
+  `POST /api/auth/v2/google/native`, `POST /api/auth/v2/apple/native`,
+  `POST /api/auth/v2/magic-link/verify`.
+- **`GET /api/auth/v2/google/callback` (web OAuth) hardcodes
+  `product="growth_engine"`** — browsers can't reliably send custom
+  headers on the inbound redirect, and this callback always lands the
+  user on the brandista.eu Growth Engine dashboard.
+
+### Backward compatibility
+- **Old tokens (issued before this retrofit) keep working.** The
+  `product` claim is NOT added to `_REQUIRED_CLAIMS`; missing or
+  malformed values decode to `PRODUCT_UNKNOWN`. The user can read but
+  not write facts API source-tagged rows until they next refresh their
+  token through a normal auth flow.
+- **Existing callers that don't pass product= to `create_canonical_token`**
+  also get `PRODUCT_UNKNOWN` — same read-only semantics. No code paths
+  break.
+
+### Tests
+- `tests/unit/test_auth_v2.py` grows by 7:
+  - `create_canonical_token` includes product claim
+  - Default value when omitted is `PRODUCT_UNKNOWN`
+  - `normalize_product` accepts allowlisted values
+  - Case + whitespace insensitive
+  - Unknown / injection / empty / None all collapse to `PRODUCT_UNKNOWN`
+  - `decode_canonical_token` reads product claim
+  - Backward compat: token without `product` claim decodes to `PRODUCT_UNKNOWN`
+  - Token with non-allowlist `product` value (e.g. forgery) decodes to `PRODUCT_UNKNOWN` — never trust wire value verbatim
+
+### Deploy notes
+- Zero schema or env-var changes. Pure code retrofit on the issuance side.
+- Veyran web proxy needs to send `X-Brandista-Product: veyra` on each
+  forwarded auth-flow request — separate PR in `treeniohjelma` shipping
+  alongside this one.
+- After this lands, the first Apple/Google sign-in from Veyra carries
+  `product=veyra` in its JWT; verify via `decode_canonical_token`
+  returning a CanonicalUser with `product='veyra'`.
+
+---
+
 ## [unreleased] - 2026-05-15 — Apple Sign In review fixes
 
 Addresses cubic-dev-ai review feedback on PR #3 (Apple Sign In).

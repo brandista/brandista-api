@@ -106,27 +106,46 @@ def _verify_google_id_token(credential: str) -> dict:
         raise HTTPException(status_code=500, detail="Google token verification failed")
 
 
-def _issue_v2_token_for(user_row, *, source: str) -> V2TokenResponse:
+def _resolve_product(request: Request) -> str:
+    """Read and normalize the `X-Brandista-Product` request header.
+
+    Centralized so every issuance route handles the header identically.
+    Unknown/missing values normalize to `PRODUCT_UNKNOWN`, which still
+    yields a valid token — the request just won't be allowed to write
+    `source_product`-bound rows on the facts API.
+    """
+    from app.auth.canonical import normalize_product
+    return normalize_product(request.headers.get("x-brandista-product"))
+
+
+def _issue_v2_token_for(
+    user_row, *, source: str, product: str
+) -> V2TokenResponse:
     """Build the v2 token response for a freshly-provisioned (or
-    resolved) canonical user. Centralized so /google/native and
-    /magic-link/verify can't drift on claim ordering, log format,
-    or response shape.
+    resolved) canonical user. Centralized so every issuance route
+    can't drift on claim ordering, log format, or response shape.
 
     source: short label appearing in the issuance log line.
+    product: canonical product tag (from `_resolve_product`) baked into
+             the JWT.
     """
     token = create_canonical_token(
         user_id=user_row.id,
         org_id=user_row.org_id,
         email=user_row.email,
         role=user_row.role,
+        product=product,
     )
     canonical_user = CanonicalUser(
         user_id=user_row.id,
         org_id=user_row.org_id,
         email=user_row.email,
         role=user_row.role,
+        product=product,
     )
-    logger.info(f"auth-v2 {source}: issued v2 token for {user_row.email}")
+    logger.info(
+        f"auth-v2 {source}: issued v2 token for {user_row.email} (product={product})"
+    )
     return V2TokenResponse(access_token=token, user=canonical_user)
 
 
@@ -135,13 +154,14 @@ def _issue_v2_token_for(user_row, *, source: str) -> V2TokenResponse:
     response_model=V2TokenResponse,
     summary="Native Google sign-in → canonical v2 token",
 )
-async def google_native(req: GoogleNativeRequest) -> V2TokenResponse:
+async def google_native(req: GoogleNativeRequest, request: Request) -> V2TokenResponse:
     """Verify a Google id_token, look up or auto-provision the canonical
     user, return a v2 JWT.
 
     Ports legacy /auth/google/native (main.py:7209) onto the canonical
     schema and token shape.
     """
+    product = _resolve_product(request)
     credential = (req.credential or "").strip()
     if not credential:
         raise HTTPException(status_code=400, detail="missing 'credential' (Google id_token)")
@@ -158,7 +178,7 @@ async def google_native(req: GoogleNativeRequest) -> V2TokenResponse:
         source="google",
         google_id=google_sub if isinstance(google_sub, str) and google_sub else None,
     )
-    return _issue_v2_token_for(user_row, source="google/native")
+    return _issue_v2_token_for(user_row, source="google/native", product=product)
 
 
 class AppleNativeRequest(BaseModel):
@@ -202,7 +222,7 @@ def _apple_audiences() -> list[str]:
     response_model=V2TokenResponse,
     summary="Native Apple sign-in → canonical v2 token",
 )
-async def apple_native(req: AppleNativeRequest) -> V2TokenResponse:
+async def apple_native(req: AppleNativeRequest, request: Request) -> V2TokenResponse:
     """Verify an Apple identity token via Apple JWKS, resolve or
     auto-provision the canonical user (keyed by `apple_id`-sub for
     return sign-ins, by token-verified email for first sign-ins),
@@ -226,6 +246,7 @@ async def apple_native(req: AppleNativeRequest) -> V2TokenResponse:
         verify_apple_identity_token,
     )
 
+    product = _resolve_product(request)
     token = (req.identity_token or "").strip()
     if not token:
         raise HTTPException(
@@ -276,7 +297,9 @@ async def apple_native(req: AppleNativeRequest) -> V2TokenResponse:
                     "have Apple include the email claim."
                 ),
             )
-        return _issue_v2_token_for(existing_by_sub, source="apple/native")
+        return _issue_v2_token_for(
+            existing_by_sub, source="apple/native", product=product
+        )
 
     # token_email is present and verified — safe to use for provisioning
     # and for backfilling apple_id onto an existing email-matched row.
@@ -285,7 +308,7 @@ async def apple_native(req: AppleNativeRequest) -> V2TokenResponse:
         source="apple",
         apple_id=apple_sub,
     )
-    return _issue_v2_token_for(user_row, source="apple/native")
+    return _issue_v2_token_for(user_row, source="apple/native", product=product)
 
 
 async def _lookup_user_by_apple_sub(apple_sub: str):
@@ -397,8 +420,9 @@ async def magic_link_verify(
         raise HTTPException(status_code=400, detail="Invalid magic link response")
     email = email.lower().strip()
 
+    product = _resolve_product(request)
     user_row = await provision_canonical_user(email=email, source="magic_link")
-    return _issue_v2_token_for(user_row, source="magic-link/verify")
+    return _issue_v2_token_for(user_row, source="magic-link/verify", product=product)
 
 
 def _get_oauth():
@@ -487,11 +511,15 @@ async def google_callback(request: Request) -> RedirectResponse:
         raise HTTPException(status_code=400, detail="Google email not verified")
 
     user_row = await provision_canonical_user(email=email, source="google_callback")
+    # Web OAuth callback always lands on the Growth Engine dashboard at
+    # brandista.eu. The browser can't reliably send custom headers on
+    # the inbound redirect, so we hardcode the product tag here.
     jwt_token = create_canonical_token(
         user_id=user_row.id,
         org_id=user_row.org_id,
         email=user_row.email,
         role=user_row.role,
+        product="growth_engine",
     )
 
     # Build the frontend redirect — fragment shape matches legacy so the
