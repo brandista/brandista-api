@@ -163,3 +163,75 @@ def test_accepts_safety_finding_with_derived_key():
             "blocked_actions": ["impact_cardio", "plyometrics"],
         },
     )
+
+
+# ---------- diagnosis-term scan in `value` ----------
+
+def test_rejects_diagnosis_term_in_value_user_note_english():
+    """Derived label as `key`, but `value` text reveals the diagnosis.
+    The key-only denylist isn't enough — value must be scanned too."""
+    with pytest.raises(FactGdprRejection) as exc:
+        scan_for_gdpr_violations(
+            scope="general",
+            key="carbohydrate_restriction",
+            value={
+                "label": "Low carb diet",
+                "user_note": "diagnosed with type 2 diabetes 2024",
+            },
+        )
+    assert "diagnosis_term_in_value" in str(exc.value)
+
+
+def test_rejects_diagnosis_term_in_value_user_note_finnish():
+    with pytest.raises(FactGdprRejection):
+        scan_for_gdpr_violations(
+            scope="general",
+            key="carbohydrate_restriction",
+            value={"user_note": "Tyypin 2 diabetes diagnoosi 2024"},
+        )
+
+
+def test_rejects_diagnosis_term_in_nested_array():
+    with pytest.raises(FactGdprRejection):
+        scan_for_gdpr_violations(
+            scope="general",
+            key="medication_constraints",
+            value={
+                "notes": [
+                    {"text": "ottaa lääkkeen depression takia"},
+                ]
+            },
+        )
+
+
+def test_rejects_cancer_mention_in_value():
+    with pytest.raises(FactGdprRejection):
+        scan_for_gdpr_violations(
+            scope="general",
+            key="recovery_notes",
+            value={"user_note": "after cancer treatment in 2023"},
+        )
+
+
+def test_accepts_value_with_no_diagnosis_terms_just_derived_labels():
+    """The whole point of derived labeling — describe the constraint,
+    not the disease."""
+    scan_for_gdpr_violations(
+        scope="nutrition",
+        key="carbohydrate_restriction",
+        value={
+            "label": "Pieni hiilihydraattipitoisuus",
+            "target_g_per_day": 50,
+            "user_note": "syö vähän hiilihydraatteja terveydellisistä syistä",
+        },
+    )
+
+
+def test_diagnosis_term_match_is_word_bounded():
+    """The literal substring 'hiv' inside a longer word should not
+    match — pattern is \\b-anchored."""
+    scan_for_gdpr_violations(
+        scope="general",
+        key="travel_note",
+        value={"text": "Visited Shivpuri last year"},
+    )

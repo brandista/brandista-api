@@ -62,10 +62,40 @@ _FORBIDDEN_DIAGNOSIS_KEYS: frozenset[str] = frozenset(
     }
 )
 
+# Word-bounded substring patterns of the same diagnoses for the
+# `value` text scan. Built once from `_FORBIDDEN_DIAGNOSIS_KEYS` plus
+# Finnish/English natural-language variants that callers may
+# inadvertently embed in a `user_note` or similar field. The pattern
+# is intentionally crude — it favors false positives (refuse the
+# write) over false negatives (silently store Art-9 data). Callers
+# should derive-label instead, see scan_for_gdpr_violations docstring.
+_DIAGNOSIS_TERMS_PATTERN = re.compile(
+    r"(?i)\b("
+    r"diabetes|diabetic|tyypi[nt]\s+\d+\s+diabetes|"
+    r"cancer|syöp[äa]|carcinoma|tumour|tumor|"
+    r"depression|masennus|"
+    r"anxiety\s+disorder|ahdistuneisuush[äa]iri[öo]|"
+    r"bipolar|kaksisuuntainen\s+mielialah[äa]iri[öo]|"
+    r"schizophrenia|skitsofrenia|"
+    r"\bhiv\b|aids|"
+    r"hepatitis|hepatiitti|"
+    r"addiction|riippuvuus|"
+    r"alcoholism|alkoholismi|"
+    r"anorexia|anoreksia|"
+    r"bulimia|bulimia"
+    r")\b"
+)
+
 
 def scan_for_gdpr_violations(*, scope: str, key: str, value: Any) -> None:
     """Raise FactGdprRejection if the (scope, key, value) tuple carries
     GDPR-Art-9 material that the facts API refuses to store.
+
+    Three layers, in order:
+      1. Raw-diagnosis key denylist (key=="diabetes" etc).
+      2. Diagnosis terms anywhere in the value text (a derived-label
+         `key` doesn't help if value.user_note says "tyypin 2 diabetes").
+      3. Dose patterns anywhere in the value text.
 
     Pure function — no I/O, no logging. The router handles HTTP
     translation and audit logging.
@@ -75,9 +105,24 @@ def scan_for_gdpr_violations(*, scope: str, key: str, value: Any) -> None:
     if key_lc in _FORBIDDEN_DIAGNOSIS_KEYS:
         raise FactGdprRejection("raw_diagnosis_key_not_allowed")
 
-    # 2. Dose patterns in any string anywhere in the JSON value.
+    # 2. Diagnosis terms in any string anywhere in the value.
+    if _contains_diagnosis_term(value):
+        raise FactGdprRejection("diagnosis_term_in_value_not_allowed")
+
+    # 3. Dose patterns in any string anywhere in the value.
     if _contains_dose(value):
         raise FactGdprRejection("dose_data_not_allowed")
+
+
+def _contains_diagnosis_term(node: Any) -> bool:
+    """Walk a JSON-ish structure looking for diagnosis-term-shaped strings."""
+    if isinstance(node, str):
+        return _DIAGNOSIS_TERMS_PATTERN.search(node) is not None
+    if isinstance(node, dict):
+        return any(_contains_diagnosis_term(v) for v in node.values())
+    if isinstance(node, list):
+        return any(_contains_diagnosis_term(item) for item in node)
+    return False
 
 
 def _contains_dose(node: Any) -> bool:
