@@ -176,3 +176,92 @@ def test_coerce_apple_bool_handles_strings_and_booleans():
     assert apple_mod.coerce_apple_bool("false") is False
     assert apple_mod.coerce_apple_bool(None) is False
     assert apple_mod.coerce_apple_bool("yes") is False  # only the literal string 'true'
+
+
+def test_stale_jwks_served_when_fetch_fails(rsa_keys, monkeypatch):
+    """If Apple's keys endpoint is transiently down, a previously
+    cached JWKS should keep serving rather than blocking every sign-in.
+    Apple rotates keys on a months-long cadence, so the prior set is
+    almost certainly still valid.
+    """
+    import httpx
+    from jose import jwk as jose_jwk
+
+    # Prime the cache with the test JWK as if a real fetch had succeeded.
+    _, public_pem = rsa_keys
+    public_jwk = jose_jwk.construct(public_pem, algorithm="RS256").to_dict()
+    public_jwk["kid"] = _KID
+    public_jwk["alg"] = "RS256"
+    public_jwk["use"] = "sig"
+    apple_mod._cache["keys"] = [public_jwk]
+    apple_mod._cache["fetched_at"] = 0.0  # Expired — would normally re-fetch.
+
+    # Restore the real _fetch_jwks for this one test (autouse fixture
+    # stubs it). Then break httpx.get so the fetch path fails.
+    monkeypatch.setattr(apple_mod, "_fetch_jwks", apple_mod._fetch_jwks.__wrapped__ if hasattr(apple_mod._fetch_jwks, "__wrapped__") else apple_mod.__dict__["_fetch_jwks"])
+    # Use module dict directly: the autouse fixture monkeypatch sets the
+    # attribute, so we restore the original.
+    import importlib
+    importlib.reload(apple_mod)
+    # Now re-prime cache on the reloaded module.
+    apple_mod._cache["keys"] = [public_jwk]
+    apple_mod._cache["fetched_at"] = 0.0
+
+    def boom(*args, **kwargs):
+        raise httpx.ConnectError("simulated apple outage")
+
+    monkeypatch.setattr(httpx, "get", boom)
+
+    # Mint a real token signed by our test key. Verification should
+    # succeed using the stale cached JWKS.
+    private_pem, _ = rsa_keys
+    now = int(time.time())
+    token = jwt.encode(
+        {
+            "iss": apple_mod.APPLE_ISSUER,
+            "aud": _AUDIENCE,
+            "sub": "001234.aabbccddeeff.5678",
+            "email": "stale@example.com",
+            "email_verified": "true",
+            "iat": now,
+            "exp": now + 600,
+        },
+        private_pem,
+        algorithm="RS256",
+        headers={"kid": _KID},
+    )
+
+    claims = apple_mod.verify_apple_identity_token(token, audiences=[_AUDIENCE])
+    assert claims["email"] == "stale@example.com"
+
+
+def test_no_cache_and_fetch_fails_still_raises(rsa_keys, monkeypatch):
+    """If there is no cached JWKS AND the fetch fails, the verifier
+    must raise — there's nothing valid to serve. This guards against
+    the stale-fallback accidentally swallowing total failure.
+    """
+    import httpx
+    import importlib
+    importlib.reload(apple_mod)
+    apple_mod._cache["keys"] = None
+    apple_mod._cache["fetched_at"] = 0.0
+
+    def boom(*args, **kwargs):
+        raise httpx.ConnectError("simulated apple outage")
+
+    monkeypatch.setattr(httpx, "get", boom)
+
+    # Mint a syntactically valid token so the verifier reaches the
+    # JWKS-fetch step rather than failing earlier on header parse.
+    private_pem, _ = rsa_keys
+    now = int(time.time())
+    token = jwt.encode(
+        {"iss": apple_mod.APPLE_ISSUER, "aud": _AUDIENCE, "sub": "x", "iat": now, "exp": now + 60},
+        private_pem,
+        algorithm="RS256",
+        headers={"kid": _KID},
+    )
+
+    with pytest.raises(apple_mod.AppleVerificationError) as exc:
+        apple_mod.verify_apple_identity_token(token, audiences=[_AUDIENCE])
+    assert "fetch failed" in str(exc.value).lower()

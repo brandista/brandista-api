@@ -163,9 +163,19 @@ async def google_native(req: GoogleNativeRequest) -> V2TokenResponse:
 
 class AppleNativeRequest(BaseModel):
     """Mirror of the mobile-side payload that Veyra / Continuity / future
-    iOS clients send. `identity_token` is required; `email` and full-name
-    fields are forwarded from the client because Apple omits them from
-    the token on return sign-ins.
+    iOS clients send.
+
+    `identity_token` is the only field used for identity resolution.
+    `email`, `given_name`, and `family_name` are accepted in the schema
+    so that existing mobile clients (Veyra TestFlight Build 9, future
+    Continuity iOS) don't 422 — but **they are intentionally NOT used
+    for resolving or provisioning a canonical user**. Trusting them
+    would open an account-takeover vector: on a return sign-in Apple
+    omits the email claim, so a hostile or compromised client could
+    forge a victim's email and we'd link this attacker's `apple_id`
+    to the victim's row via the email-match backfill path. Only the
+    verified token `email` claim is trusted; everything else is
+    informational and used at most for logging.
     """
     identity_token: str
     email: EmailStr | None = None
@@ -195,14 +205,20 @@ def _apple_audiences() -> list[str]:
 async def apple_native(req: AppleNativeRequest) -> V2TokenResponse:
     """Verify an Apple identity token via Apple JWKS, resolve or
     auto-provision the canonical user (keyed by `apple_id`-sub for
-    return sign-ins; falls back to email for first-time cross-provider
-    linking), return a v2 JWT.
+    return sign-ins, by token-verified email for first sign-ins),
+    return a v2 JWT.
 
     Per Apple's contract, the `email` claim on the identity token is
-    only present on the first sign-in. On returns we accept the email
-    forwarded by the client (it has it saved from the first sign-in)
-    only if we don't already have this Apple `sub` on record. The
-    `sub` itself is the durable identifier.
+    only present on the first sign-in. On returns Apple omits it. We
+    resolve return sign-ins by `apple_sub` alone — client-forwarded
+    email is intentionally NOT consulted because it would let a hostile
+    client forge a victim's email and pin the attacker's `apple_id` to
+    the victim's existing row via the email-match backfill path.
+
+    A user whose `apple_sub` is not yet on record AND whose token
+    carries no email cannot complete sign-in. The remediation (rare
+    path) is to revoke the app in iCloud Settings → Sign in with Apple,
+    which makes Apple's next token carry the email claim again.
     """
     from app.auth.apple import (
         AppleVerificationError,
@@ -237,13 +253,6 @@ async def apple_native(req: AppleNativeRequest) -> V2TokenResponse:
     else:
         token_email = None
 
-    # On return sign-ins Apple omits the email; fall back to whatever
-    # the client forwarded. We can only auto-provision a NEW user if
-    # we have an email from one of these two places, but we can resolve
-    # an existing one from apple_sub alone.
-    client_email = req.email.lower().strip() if req.email else None
-    chosen_email = token_email or client_email
-
     if token_email and not coerce_apple_bool(claims.get("email_verified")):
         # Token carried an email that Apple says is NOT verified — refuse.
         # (Apple should only emit `email_verified=false` for the rare
@@ -251,20 +260,28 @@ async def apple_native(req: AppleNativeRequest) -> V2TokenResponse:
         # has not been confirmed.)
         raise HTTPException(status_code=400, detail="Apple email not verified")
 
-    if chosen_email is None:
-        # No email available anywhere — only viable if the user already
-        # exists by apple_sub. provision_canonical_user with email=''
-        # would create a malformed row, so we look up directly.
+    if token_email is None:
+        # Return sign-in (Apple omits email after the first sign-in).
+        # The ONLY way to resolve identity here is via apple_sub on a
+        # row we've already seen — `req.email` is untrusted and must
+        # not feed identity decisions. See AppleNativeRequest docstring.
         existing_by_sub = await _lookup_user_by_apple_sub(apple_sub)
         if existing_by_sub is None:
             raise HTTPException(
                 status_code=400,
-                detail="Apple token has no email and no client-forwarded fallback",
+                detail=(
+                    "Apple sign-in has no email in the token and no existing "
+                    "record for this Apple ID. Revoke the app in iCloud "
+                    "Settings → Sign in with Apple, then sign in again to "
+                    "have Apple include the email claim."
+                ),
             )
         return _issue_v2_token_for(existing_by_sub, source="apple/native")
 
+    # token_email is present and verified — safe to use for provisioning
+    # and for backfilling apple_id onto an existing email-matched row.
     user_row = await provision_canonical_user(
-        email=chosen_email,
+        email=token_email,
         source="apple",
         apple_id=apple_sub,
     )
