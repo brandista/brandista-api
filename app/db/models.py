@@ -27,7 +27,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import UUID as PgUUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -147,6 +147,64 @@ class Credits(Base):
     )
 
     organization: Mapped[Organization] = relationship(back_populates="credits")
+
+
+class ProfileFact(Base):
+    """A user-scoped semantic fact shared across Brandista products.
+
+    One product writes (e.g. Continuity records a safety constraint),
+    other products read (Veyra's coach drops impact exercises before
+    plan generation). See
+    `docs/superpowers/specs/2026-05-15-phase-4-2-facts-api-design.md`
+    for the full design.
+
+    `(user_id, scope, key)` is the natural key — a second write upserts
+    the same row rather than creating a duplicate. `source_product`
+    records which product introduced the fact, enabling per-product
+    bulk delete on offboarding.
+    """
+
+    __tablename__ = "profile_facts"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "scope", "key", name="uq_profile_facts_user_scope_key"
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    org_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    scope: Mapped[str] = mapped_column(String(32), nullable=False)
+    key: Mapped[str] = mapped_column(String(120), nullable=False)
+    value: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    source_product: Mapped[str] = mapped_column(
+        String(64), nullable=False, index=True
+    )
+    provenance: Mapped[str] = mapped_column(String(16), nullable=False)
+    confidence: Mapped[str] = mapped_column(String(8), nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
 
 
 class Entitlement(Base):

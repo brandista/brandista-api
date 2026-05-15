@@ -263,6 +263,13 @@ try:
 except Exception as e:  # noqa: BLE001 — never crash boot over a failed mount
     logger.error(f"❌ Failed to mount auth_v2 router: {e}")
 
+try:
+    from app.routers.facts import router as facts_router
+    app.include_router(facts_router, prefix="/api/v1/profile/facts", tags=["facts"])
+    logger.info("✅ Mounted profile facts router at /api/v1/profile/facts")
+except Exception as e:  # noqa: BLE001
+    logger.error(f"❌ Failed to mount facts router: {e}")
+
 # Import legacy routers from main.py
 # These will be gradually migrated to app/routers/
 
