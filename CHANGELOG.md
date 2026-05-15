@@ -5,6 +5,84 @@ Muoto: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [unreleased] - 2026-05-15 — Profile facts API (Phase 4.2 step 2)
+
+Cross-product semantic facts. Continuity records a safety constraint
+once → Veyra's coach reads it before plan generation → user never
+repeats themselves. See
+`docs/superpowers/specs/2026-05-15-phase-4-2-facts-api-design.md`.
+
+### Added
+- **Migration `0006_profile_facts`** — `profile_facts` table with
+  `id` UUID PK, `org_id` / `user_id` FKs with CASCADE delete, `scope`
+  (`safety` | `nutrition` | `training` | `general`), `key`,
+  `value` JSONB, `source_product`, `provenance` (`user_stated` /
+  `extracted` / `inferred`), `confidence` (`high` / `medium` / `low`),
+  `expires_at`, timestamps. UNIQUE`(user_id, scope, key)` for upsert
+  semantics + indexes on the read paths.
+- **`ProfileFact` SQLAlchemy model** in `app/db/models.py`.
+- **`app/schemas/facts.py`** — `FactCreate` (request body),
+  `Fact` (read shape), `FactList` (GET envelope). Enums for scope,
+  provenance, confidence. `key` regex-validated to lowercase
+  snake_case + length range. `model_config = ConfigDict(extra="forbid")`
+  on `FactCreate` so callers can't smuggle in `user_id` / `org_id`.
+- **`app/auth/facts_safety.py: scan_for_gdpr_violations(...)`** —
+  GDPR / Article-9 defensive scan. Rejects dose-shaped strings
+  (`500 mg`, `12.5mg`, `200 IU`, `2 tablettia`) anywhere in the JSON
+  value, recursively. Rejects raw clinical-diagnosis keys
+  (`diabetes`, `cancer`, `depression`, ...). Mirrors Continuity's
+  FOUNDATION_STATUS invariant #3.
+- **`app/routers/facts.py`** — four endpoints mounted at
+  `/api/v1/profile/facts`:
+  - `POST /` — write or upsert. Validates: caller has allowlisted
+    product (else 403); `body.source_product` matches caller's JWT
+    `product` (anti-spoof); `safety` scope writes restricted to
+    Continuity only; GDPR scan on `(scope, key, value)`. Owner-wins
+    on cross-product upsert conflict (409).
+  - `GET /` — read caller's facts. Optional `scope` (comma-separated
+    filter), `min_confidence` (high / medium / low), `include_expired`
+    (default false, excludes facts with `expires_at < now`). No
+    product tag required — read tokens can be PRODUCT_UNKNOWN.
+  - `DELETE /{fact_id}` — single-fact user-initiated delete. 204 on
+    success, 404 if fact_id not owned by caller (no leak between users).
+  - `DELETE /?source_product=<name>` — bulk delete on product
+    offboarding, scoped to caller's user_id.
+
+### Tests
+- `tests/unit/test_facts_safety.py` — 14 cases covering dose patterns
+  (mg / mcg / IU / Finnish tablet count, nested arrays), false-positive
+  protection (kg / km / `mg` inside another word), raw-diagnosis-key
+  rejection (case-insensitive), and accepting derived labels
+  (`carbohydrate_restriction`, `cervical_spine_no_impact`).
+- `tests/unit/test_facts_schemas.py` — 22 cases covering scope/
+  provenance/confidence enum validation, key snake_case + length +
+  starting-with-digit + leading/trailing underscore rejection, value
+  must-be-object (not array/scalar), source_product required, extra
+  fields forbidden, expires_at default, and `_require_known_product`
+  helper (accepts allowlisted, rejects PRODUCT_UNKNOWN, rejects
+  forged values).
+
+### Deploy notes
+- Migration 0006 is additive (CREATE TABLE + indexes). Safe to apply
+  against the live DB; alembic-upgrade-on-boot (shipped 2026-05-15
+  earlier today) runs it automatically on next deploy.
+- No env-var changes. Auth is the same canonical JWT used by every
+  other v2 surface.
+- The facts API is consumed by Veyra (publisher) and Continuity
+  (reader) in separate follow-up PRs in those repos — Phase 4.2 steps
+  3 and 4. brandista-api side is server-complete with this PR.
+
+### Sprint context
+- Phase 4.2 functional core. Phase 4.1 wired *identity* across
+  products; this PR wires the *state agents reason over*. Hakemuksen
+  §02-hypoteesin "multiple domain agents reasoning over a single
+  shared organisational memory" — schema-tason perusta + agenttirajan
+  ohittava semantic-fact-tallennus toteutuu nyt brandista-api:ssa.
+  Validointi-skenaariot (MRI → Veyran plan, lactose → Continuityn
+  nutrition) testattavissa kun publisher + reader -PR:t kytkeytyvät.
+
+---
+
 ## [unreleased] - 2026-05-15 — `product` JWT claim retrofit (Phase 4.2 step 1)
 
 Prerequisite for the Phase 4.2 facts API (see
