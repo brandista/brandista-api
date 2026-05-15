@@ -5,6 +5,72 @@ Muoto: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [unreleased] - 2026-05-15 — Facts API review fixes
+
+Addresses review feedback on `feat/profile-facts-api` PR. Folded into
+the same branch so the facts API ships with the fixes applied.
+
+### Security (P1)
+- **Audience-based product resolution replaces the spoofable
+  `X-Brandista-Product` header.** Previously a Veyra-issued Google
+  token could be sent with `X-Brandista-Product: continuity` and we'd
+  bake `product=continuity` into the JWT — letting a Veyra session
+  write Continuity safety facts. Now product is derived from the
+  cryptographically-verified `aud` claim (Google client_id / Apple
+  bundle id) via a new `PRODUCT_AUDIENCE_MAP` env. Unknown audiences
+  → `PRODUCT_UNKNOWN` → no write capability. Magic-link sign-ins
+  always get `PRODUCT_UNKNOWN` (no aud to map). Continuity's iOS
+  Google flow automatically resolves to `continuity` once its
+  client_id is in the env map — no client-side code change needed.
+- **Bulk-delete now refuses cross-product source_product.** Previously
+  any allowlisted token could `DELETE ?source_product=continuity` and
+  wipe another product's facts from the user's row. Now a Veyra token
+  may only bulk-delete Veyra-owned facts; safety-fact deletion stays
+  with Continuity. Per-product offboarding still works; cross-product
+  admin cleanup is a future endpoint with its own role check.
+
+### Operational (P2)
+- **Facts router mounted on the legacy `main.py` entrypoint too.**
+  Previously only `app/main.py` mounted `/api/v1/profile/facts`; legacy
+  testing surfaces and OpenAPI schema generation that go through
+  `main.py` would have missed it. Mirrors the existing auth-v2 dual
+  mount pattern.
+- **GDPR scan now reads the `value` payload for diagnosis terms, not
+  just the `key`.** A derived label `key="carbohydrate_restriction"`
+  with `value.user_note="diagnosed with type 2 diabetes"` would
+  previously have been accepted. New `_DIAGNOSIS_TERMS_PATTERN`
+  word-boundary-scans every string in the JSON for English + Finnish
+  variants of the forbidden diagnoses (`diabetes`, `tyypin 2 diabetes`,
+  `syöpä`, `masennus`, `HIV`, …). Pattern favors false positives over
+  false negatives — callers should derive-label.
+
+### Tests
+- `tests/unit/test_facts_safety.py` +6 cases: English + Finnish
+  diagnosis terms in `value.user_note`, nested-array diagnosis,
+  cancer mention, accept-when-no-diagnosis-terms, word-bounded match.
+- `tests/unit/test_auth_v2.py` +6 cases for `product_from_audience`:
+  mapped audience returns product, unmapped → unknown, empty env
+  → unknown, malformed JSON → unknown, unallowlisted target collapses
+  → unknown, empty/None aud → unknown.
+- Net testikatto +12, 103 passing total in the canonical+facts surface.
+
+### Deploy notes — new env var required
+- **`PRODUCT_AUDIENCE_MAP`** is a JSON object mapping Google client_id
+  and Apple bundle_id strings to product names, e.g.
+  ```
+  PRODUCT_AUDIENCE_MAP={"1015...rtrpf7iej.apps.googleusercontent.com":"growth_engine","1015...j4mkjk2ta.apps.googleusercontent.com":"continuity","1015...6tgam43n6.apps.googleusercontent.com":"veyra","eu.brandista.veyra":"veyra"}
+  ```
+  **Without this env every token gets `product=unknown`** and the
+  facts API refuses writes. Set on Railway brandista-api before
+  merge, otherwise the facts API ships broken from day one.
+- `X-Brandista-Product` header continues to be accepted in the
+  request (no 4xx) for client-compat — but its value is now ignored
+  for identity. Veyra's existing header-sending code in
+  `treeniohjelma/apps/web/src/app/api/auth/*/native/route.ts` keeps
+  working unchanged.
+
+---
+
 ## [unreleased] - 2026-05-15 — Profile facts API (Phase 4.2 step 2)
 
 Cross-product semantic facts. Continuity records a safety constraint

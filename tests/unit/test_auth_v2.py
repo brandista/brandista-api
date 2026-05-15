@@ -186,6 +186,79 @@ def test_decode_canonical_token_backward_compat_no_product_claim():
     assert user.product == PRODUCT_UNKNOWN
 
 
+def test_product_from_audience_returns_mapped_product(monkeypatch):
+    """Audience-based product resolution — the only trust path. Header
+    is no longer consulted (P1 fix 2026-05-15)."""
+    from app.auth import canonical
+    monkeypatch.setenv(
+        "PRODUCT_AUDIENCE_MAP",
+        '{"abc.veyra.googleusercontent.com":"veyra",'
+        '"def.continuity.googleusercontent.com":"continuity",'
+        '"eu.brandista.veyra":"veyra"}',
+    )
+    canonical.reset_product_audience_map_cache()
+
+    assert canonical.product_from_audience("abc.veyra.googleusercontent.com") == "veyra"
+    assert canonical.product_from_audience("def.continuity.googleusercontent.com") == "continuity"
+    assert canonical.product_from_audience("eu.brandista.veyra") == "veyra"
+
+
+def test_product_from_audience_unmapped_aud_is_unknown(monkeypatch):
+    from app.auth import canonical
+    monkeypatch.setenv(
+        "PRODUCT_AUDIENCE_MAP",
+        '{"abc.veyra.googleusercontent.com":"veyra"}',
+    )
+    canonical.reset_product_audience_map_cache()
+
+    assert canonical.product_from_audience("attacker.client.googleusercontent.com") == canonical.PRODUCT_UNKNOWN
+
+
+def test_product_from_audience_empty_env_returns_unknown(monkeypatch):
+    """No PRODUCT_AUDIENCE_MAP set → every token is PRODUCT_UNKNOWN.
+    Safe failure mode — facts API refuses writes rather than silently
+    overgranting."""
+    from app.auth import canonical
+    monkeypatch.delenv("PRODUCT_AUDIENCE_MAP", raising=False)
+    canonical.reset_product_audience_map_cache()
+
+    assert canonical.product_from_audience("any.aud") == canonical.PRODUCT_UNKNOWN
+
+
+def test_product_from_audience_malformed_json_falls_back_to_unknown(monkeypatch):
+    """A typo'd PRODUCT_AUDIENCE_MAP must not crash the issuance
+    route — it just degrades to PRODUCT_UNKNOWN. The error is logged."""
+    from app.auth import canonical
+    monkeypatch.setenv("PRODUCT_AUDIENCE_MAP", '{not valid json}')
+    canonical.reset_product_audience_map_cache()
+
+    assert canonical.product_from_audience("any.aud") == canonical.PRODUCT_UNKNOWN
+
+
+def test_product_from_audience_collapses_unallowlisted_target(monkeypatch):
+    """Even if PRODUCT_AUDIENCE_MAP maps an aud to a string not in
+    ALLOWED_PRODUCTS, the result collapses to unknown. Defense in
+    depth: an operator typo in env shouldn't grant a new product tag
+    that the rest of the system doesn't recognize."""
+    from app.auth import canonical
+    monkeypatch.setenv(
+        "PRODUCT_AUDIENCE_MAP",
+        '{"abc.aud":"typo_product_not_on_allowlist"}',
+    )
+    canonical.reset_product_audience_map_cache()
+
+    assert canonical.product_from_audience("abc.aud") == canonical.PRODUCT_UNKNOWN
+
+
+def test_product_from_audience_empty_aud_is_unknown(monkeypatch):
+    from app.auth import canonical
+    monkeypatch.setenv("PRODUCT_AUDIENCE_MAP", '{"x":"veyra"}')
+    canonical.reset_product_audience_map_cache()
+
+    assert canonical.product_from_audience("") == canonical.PRODUCT_UNKNOWN
+    assert canonical.product_from_audience(None) == canonical.PRODUCT_UNKNOWN
+
+
 def test_decode_canonical_token_rejects_unknown_product_silently():
     """If a token carries `product=evil` somehow (forgery against a
     compromised SECRET_KEY, or a future code path that bypassed

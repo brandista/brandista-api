@@ -274,12 +274,30 @@ async def bulk_delete_facts_by_source_product(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, int]:
     """Bulk-delete all facts the caller has written via a specific
-    product — used when the user revokes that product's access. Only
-    deletes facts owned by `user_id == JWT.user_id`; other users'
-    facts are untouched.
+    product — used when the user revokes that product's access.
 
-    Returns `{"deleted": <count>}`.
+    Authorization rules:
+    - The caller's JWT must carry an allowlisted `product` tag (403
+      otherwise) — read-only `PRODUCT_UNKNOWN` tokens can't bulk-delete.
+    - `source_product` must equal the caller's `product` claim. A Veyra
+      token cannot delete Continuity-owned facts; if it could, a
+      compromised Veyra session would let an attacker wipe a user's
+      safety constraints.
+
+    Admin / platform-level cross-product cleanup is a separate (future)
+    endpoint with its own role check; this endpoint is for the per-
+    product revocation path only. Scoped to caller's `user_id`.
     """
+    caller_product = _require_known_product(user)
+    if source_product != caller_product:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"cannot bulk-delete facts owned by source_product="
+                f"'{source_product}' from a '{caller_product}' token"
+            ),
+        )
+
     result = await session.execute(
         delete(ProfileFact).where(
             and_(

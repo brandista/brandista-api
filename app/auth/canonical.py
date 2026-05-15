@@ -17,7 +17,9 @@ Token shape (per spec §4):
 """
 from __future__ import annotations
 
+import json as _json
 import logging
+import os
 import uuid as _uuid
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
@@ -68,13 +70,105 @@ PRODUCT_UNKNOWN = "unknown"
 
 
 def normalize_product(raw: str | None) -> str:
-    """Map a candidate `X-Brandista-Product` header value to the canonical
-    product tag stored in the JWT. Unknown values, empty, or None all
-    collapse to `PRODUCT_UNKNOWN`. Case- and whitespace-insensitive."""
+    """Map a candidate product-name string to the canonical product tag
+    stored in the JWT. Unknown values, empty, or None all collapse to
+    `PRODUCT_UNKNOWN`. Case- and whitespace-insensitive.
+
+    This is the validator used after audience-based resolution — never
+    on its own as a trust boundary. Audience is the trust boundary
+    because Google/Apple cryptographically validate it; a request
+    header is not.
+    """
     if not raw:
         return PRODUCT_UNKNOWN
     candidate = raw.strip().lower()
     return candidate if candidate in ALLOWED_PRODUCTS else PRODUCT_UNKNOWN
+
+
+def product_from_audience(aud: str | None) -> str:
+    """Resolve a verified token `aud` claim (Google client_id or Apple
+    bundle id) to a canonical product tag via the env-configured
+    `PRODUCT_AUDIENCE_MAP`.
+
+    The audience is the **trust boundary**: Google and Apple
+    cryptographically validate that the bearer is in fact a client
+    of that audience. brandista-api can therefore trust that a token
+    carrying `aud=<veyran ios client id>` was issued for Veyra's
+    iOS app and not, say, forged by a Continuity user who set an
+    HTTP header.
+
+    Env var: `PRODUCT_AUDIENCE_MAP` is a JSON object mapping audience
+    strings to product names, e.g.
+
+        {
+          "1015-...veyra.googleusercontent.com": "veyra",
+          "1015-...continuity.googleusercontent.com": "continuity",
+          "eu.brandista.veyra": "veyra"
+        }
+
+    Unmapped audiences fall back to `PRODUCT_UNKNOWN` (read-only
+    on the facts API). Empty / missing env means "no audiences are
+    mapped", i.e. every token gets PRODUCT_UNKNOWN — operationally
+    obvious enough to spot in deploy.
+    """
+    if not aud or not isinstance(aud, str):
+        return PRODUCT_UNKNOWN
+    mapping = _load_product_audience_map()
+    candidate = mapping.get(aud.strip())
+    if not candidate:
+        return PRODUCT_UNKNOWN
+    return candidate if candidate in ALLOWED_PRODUCTS else PRODUCT_UNKNOWN
+
+
+_PRODUCT_AUDIENCE_MAP_CACHE: dict[str, str] | None = None
+
+
+def _load_product_audience_map() -> dict[str, str]:
+    """Read + cache `PRODUCT_AUDIENCE_MAP` from env. Parsed once per
+    process; tests can reset the cache by clearing this module-level
+    via `reset_product_audience_map_cache`.
+
+    A malformed JSON env value logs an error and falls back to {} —
+    every token then resolves to PRODUCT_UNKNOWN, which is the safe
+    failure mode (refuses writes rather than silently overgranting).
+    """
+    global _PRODUCT_AUDIENCE_MAP_CACHE
+    if _PRODUCT_AUDIENCE_MAP_CACHE is not None:
+        return _PRODUCT_AUDIENCE_MAP_CACHE
+
+    raw = os.getenv("PRODUCT_AUDIENCE_MAP", "").strip()
+    if not raw:
+        _PRODUCT_AUDIENCE_MAP_CACHE = {}
+        return _PRODUCT_AUDIENCE_MAP_CACHE
+
+    try:
+        parsed = _json.loads(raw)
+    except _json.JSONDecodeError as e:
+        logger.error(
+            "PRODUCT_AUDIENCE_MAP env is not valid JSON; treating as empty. %s", e
+        )
+        _PRODUCT_AUDIENCE_MAP_CACHE = {}
+        return _PRODUCT_AUDIENCE_MAP_CACHE
+
+    if not isinstance(parsed, dict):
+        logger.error(
+            "PRODUCT_AUDIENCE_MAP env must be a JSON object; got %s",
+            type(parsed).__name__,
+        )
+        _PRODUCT_AUDIENCE_MAP_CACHE = {}
+        return _PRODUCT_AUDIENCE_MAP_CACHE
+
+    _PRODUCT_AUDIENCE_MAP_CACHE = {
+        str(k): str(v) for k, v in parsed.items() if isinstance(v, str)
+    }
+    return _PRODUCT_AUDIENCE_MAP_CACHE
+
+
+def reset_product_audience_map_cache() -> None:
+    """Test helper. Clears the parsed env cache so a test can change
+    `PRODUCT_AUDIENCE_MAP` between cases."""
+    global _PRODUCT_AUDIENCE_MAP_CACHE
+    _PRODUCT_AUDIENCE_MAP_CACHE = None
 
 
 class CanonicalUser(BaseModel):

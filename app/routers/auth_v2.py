@@ -106,16 +106,22 @@ def _verify_google_id_token(credential: str) -> dict:
         raise HTTPException(status_code=500, detail="Google token verification failed")
 
 
-def _resolve_product(request: Request) -> str:
-    """Read and normalize the `X-Brandista-Product` request header.
+def _resolve_product_from_audience(aud: str | None) -> str:
+    """Resolve product from the **token's** audience claim — the only
+    cryptographically-validated identifier we have for which client
+    minted this sign-in.
 
-    Centralized so every issuance route handles the header identically.
-    Unknown/missing values normalize to `PRODUCT_UNKNOWN`, which still
-    yields a valid token — the request just won't be allowed to write
-    `source_product`-bound rows on the facts API.
+    The previous header-based approach (`X-Brandista-Product`) was
+    spoofable: any client could send `X-Brandista-Product: continuity`
+    with a Veyra-issued Google token and get a Continuity-tagged JWT
+    back. Audience cannot be spoofed because Google / Apple sign their
+    tokens against a specific client_id / bundle_id at issuance.
+
+    See `app.auth.canonical.product_from_audience` for the env-based
+    aud→product map.
     """
-    from app.auth.canonical import normalize_product
-    return normalize_product(request.headers.get("x-brandista-product"))
+    from app.auth.canonical import product_from_audience
+    return product_from_audience(aud)
 
 
 def _issue_v2_token_for(
@@ -154,14 +160,13 @@ def _issue_v2_token_for(
     response_model=V2TokenResponse,
     summary="Native Google sign-in → canonical v2 token",
 )
-async def google_native(req: GoogleNativeRequest, request: Request) -> V2TokenResponse:
+async def google_native(req: GoogleNativeRequest) -> V2TokenResponse:
     """Verify a Google id_token, look up or auto-provision the canonical
     user, return a v2 JWT.
 
     Ports legacy /auth/google/native (main.py:7209) onto the canonical
     schema and token shape.
     """
-    product = _resolve_product(request)
     credential = (req.credential or "").strip()
     if not credential:
         raise HTTPException(status_code=400, detail="missing 'credential' (Google id_token)")
@@ -173,6 +178,9 @@ async def google_native(req: GoogleNativeRequest, request: Request) -> V2TokenRe
         raise HTTPException(status_code=400, detail="Google email not verified")
 
     google_sub = idinfo.get("sub")
+    # Product is derived from the verified Google `aud` claim — NOT from
+    # any request header. See _resolve_product_from_audience.
+    product = _resolve_product_from_audience(idinfo.get("aud"))
     user_row = await provision_canonical_user(
         email=email,
         source="google",
@@ -222,7 +230,7 @@ def _apple_audiences() -> list[str]:
     response_model=V2TokenResponse,
     summary="Native Apple sign-in → canonical v2 token",
 )
-async def apple_native(req: AppleNativeRequest, request: Request) -> V2TokenResponse:
+async def apple_native(req: AppleNativeRequest) -> V2TokenResponse:
     """Verify an Apple identity token via Apple JWKS, resolve or
     auto-provision the canonical user (keyed by `apple_id`-sub for
     return sign-ins, by token-verified email for first sign-ins),
@@ -246,7 +254,6 @@ async def apple_native(req: AppleNativeRequest, request: Request) -> V2TokenResp
         verify_apple_identity_token,
     )
 
-    product = _resolve_product(request)
     token = (req.identity_token or "").strip()
     if not token:
         raise HTTPException(
@@ -263,6 +270,16 @@ async def apple_native(req: AppleNativeRequest, request: Request) -> V2TokenResp
     except AppleVerificationError as e:
         # Single 401 surface; verifier already logged the verbose reason.
         raise HTTPException(status_code=401, detail="invalid Apple token") from e
+
+    # Product is derived from the verified Apple `aud` (bundle id) —
+    # NOT from any request header. Apple has cryptographically tied
+    # the audience to the iOS client.
+    token_aud = claims.get("aud")
+    if isinstance(token_aud, list):
+        # Apple sometimes emits aud as a single-element list when there
+        # are multiple Service IDs configured. Take the first match.
+        token_aud = next((a for a in token_aud if isinstance(a, str)), None)
+    product = _resolve_product_from_audience(token_aud)
 
     apple_sub = claims.get("sub")
     if not isinstance(apple_sub, str) or not apple_sub:
@@ -420,9 +437,18 @@ async def magic_link_verify(
         raise HTTPException(status_code=400, detail="Invalid magic link response")
     email = email.lower().strip()
 
-    product = _resolve_product(request)
+    # Magic-link sign-in carries no Google/Apple `aud` claim — there is
+    # no cryptographically verified product identifier to map. We tag
+    # the token PRODUCT_UNKNOWN: the user is signed in (can READ facts)
+    # but cannot write source_product-bound rows. If a future product
+    # needs magic-link-issued write capability, it must arrive over a
+    # server-to-server channel that proves its identity (mTLS, signed
+    # secret, etc.) — header-based trust does not return.
+    from app.auth.canonical import PRODUCT_UNKNOWN
     user_row = await provision_canonical_user(email=email, source="magic_link")
-    return _issue_v2_token_for(user_row, source="magic-link/verify", product=product)
+    return _issue_v2_token_for(
+        user_row, source="magic-link/verify", product=PRODUCT_UNKNOWN
+    )
 
 
 def _get_oauth():
