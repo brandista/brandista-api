@@ -5,6 +5,62 @@ Muoto: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [unreleased] - 2026-05-15 — Apple Sign In review fixes
+
+Addresses cubic-dev-ai review feedback on PR #3 (Apple Sign In).
+
+### Security (P0)
+- **`/api/auth/v2/apple/native` no longer accepts client-forwarded
+  email for identity resolution.** Previously, when Apple omitted the
+  `email` claim on a return sign-in, the route fell back to
+  `req.email` from the mobile payload. A hostile or compromised client
+  could have forged a victim's email there and, via the email-match
+  backfill path in `provision_canonical_user`, pinned the attacker's
+  `apple_id` to the victim's canonical row → full account takeover.
+- New behavior: only the verified token `email` claim feeds identity.
+  Return sign-ins (token has no email) are resolved by `apple_sub`
+  against an already-known canonical row; if the sub is unknown AND
+  the token has no email, the request is refused with a 400 carrying
+  the iCloud-revoke remediation hint. `AppleNativeRequest.email` and
+  the name fields stay in the schema (so existing mobile clients
+  don't 422) but are documented as informational-only.
+
+### Operational (P2)
+- **`_fetch_jwks` falls back to stale cache on transient Apple
+  failures.** When `https://appleid.apple.com/auth/keys` is briefly
+  unreachable or returns garbage, the previously-cached JWKS is
+  served (with a `WARNING` log) instead of blocking every Apple
+  sign-in. Apple rotates keys on a months-long cadence, so the prior
+  set is almost certainly still valid. Cache miss + fetch failure
+  still raises.
+- **`provision_canonical_user` backfill is now race-safe.** The
+  email-match → set-provider-tag path catches `IntegrityError` from
+  the unique constraint on `apple_id` / `google_id`, rolls back, and
+  re-queries by the relevant provider tag. Mirrors the existing
+  IntegrityError handling on the create path.
+
+### Schema (P2)
+- **Migration `0005_drop_redundant_idx`** drops three explicit indexes
+  that duplicated their UNIQUE constraint's auto-created btree:
+  `ix_users_email`, `ix_users_google_id`, `ix_users_apple_id`. Postgres
+  builds an index to back every UNIQUE constraint; the explicit
+  `ix_*` versions just added INSERT/UPDATE overhead with no query
+  benefit. Lookups by email / google_id / apple_id keep using the
+  UNIQUE-backing index.
+
+### Tests
+- `tests/unit/test_apple_verifier.py` grows by 2: stale-cache served
+  when fetch fails (positive path), and outright failure when no
+  cache AND fetch fails (negative path — guards against the fallback
+  swallowing genuine outages).
+
+### Deploy notes
+- Migration 0005 is purely DROP INDEX — fast, no row-level locks,
+  safe to apply against the live `users` table.
+- No env var changes.
+
+---
+
 ## [unreleased] - 2026-05-15 — Apple Sign In on canonical (Phase 4.1 step 3.5)
 
 ### Added

@@ -61,13 +61,36 @@ def _fetch_jwks(force: bool = False) -> list[dict]:
         response = httpx.get(APPLE_JWKS_URL, timeout=5.0)
         response.raise_for_status()
         body = response.json()
-    except httpx.HTTPError as e:
-        raise AppleVerificationError(f"Apple JWKS fetch failed: {type(e).__name__}") from e
-    except ValueError as e:
-        raise AppleVerificationError("Apple JWKS response not JSON") from e
+    except (httpx.HTTPError, ValueError) as e:
+        # Apple's keys endpoint is transiently unreachable or returned
+        # a non-JSON body. If we already have a cached JWKS — even one
+        # past its TTL — serve it. Apple rotates keys on a months-long
+        # cadence, so the previous set is almost certainly still valid;
+        # better than blocking every Apple sign-in on a brief Apple-side
+        # outage. The first successful fetch after recovery refreshes
+        # the cache and the staleness window ends.
+        if _cache["keys"] is not None:
+            logger.warning(
+                "auth-v2 apple: JWKS fetch failed (%s); serving stale cached keys",
+                type(e).__name__,
+            )
+            return _cache["keys"]
+        if isinstance(e, ValueError):
+            raise AppleVerificationError("Apple JWKS response not JSON") from e
+        raise AppleVerificationError(
+            f"Apple JWKS fetch failed: {type(e).__name__}"
+        ) from e
 
     keys = body.get("keys")
     if not isinstance(keys, list) or not keys:
+        # The response parsed as JSON but didn't carry a usable key list.
+        # Same fallback principle: if we have a cached set, keep using
+        # it rather than failing every sign-in.
+        if _cache["keys"] is not None:
+            logger.warning(
+                "auth-v2 apple: JWKS response missing 'keys'; serving stale cached keys"
+            )
+            return _cache["keys"]
         raise AppleVerificationError("Apple JWKS response missing 'keys'")
 
     _cache["keys"] = keys

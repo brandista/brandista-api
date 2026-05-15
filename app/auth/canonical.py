@@ -215,12 +215,42 @@ async def provision_canonical_user(
                 existing.google_id = google_id
                 backfilled = True
             if backfilled:
-                async with _txn():
-                    session.add(existing)
-                await session.refresh(existing)
-                logger.info(
-                    f"auth-v2: backfilled provider tag for {email} (source={source})"
-                )
+                try:
+                    async with _txn():
+                        session.add(existing)
+                    await session.refresh(existing)
+                    logger.info(
+                        f"auth-v2: backfilled provider tag for {email} (source={source})"
+                    )
+                except IntegrityError:
+                    # Concurrent backfill won the unique race — another
+                    # request set the same apple_id / google_id on a row
+                    # first. Roll back, re-query by the provider tag we
+                    # tried to write; if that resolves, return it (the
+                    # other request landed on the same row). Otherwise
+                    # the other request landed on a different row that
+                    # happens to share this email — fall back to email
+                    # lookup.
+                    await session.rollback()
+                    if apple_id:
+                        winner = (
+                            await session.execute(
+                                select(User).where(User.apple_id == apple_id)
+                            )
+                        ).scalar_one_or_none()
+                        if winner is not None:
+                            return winner
+                    if google_id:
+                        winner = (
+                            await session.execute(
+                                select(User).where(User.google_id == google_id)
+                            )
+                        ).scalar_one_or_none()
+                        if winner is not None:
+                            return winner
+                    return (
+                        await session.execute(select(User).where(User.email == email))
+                    ).scalar_one()
             return existing
 
         # 4. create
