@@ -5,6 +5,53 @@ Muoto: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [unreleased] - 2026-05-15 — Safety scope confidence policy (Phase 4.2 step 2.5)
+
+Adjusts the safety-scope write policy so non-Continuity products
+(specifically Veyra) can publish user-stated injuries and other safety-
+relevant findings into shared state without overriding Continuity's
+medical-grade constraints. Sets the stage for Phase 4.2 step 3
+(Veyran coach-publisher), where Veyran `LIM_ADD` markers will surface
+in the facts API.
+
+### Changed
+- `app/routers/facts.py: _SAFETY_SCOPE_WRITERS` renamed to
+  `_SAFETY_HIGH_CONFIDENCE_WRITERS = {"continuity"}`. The check is now
+  conditional on `confidence` — scope=safety writes at confidence=high
+  remain Continuity-only (403 for everyone else); confidence=medium
+  and confidence=low are accepted from any allowlisted product.
+- Continuity's SBE filter `min_confidence=high` continues to ignore
+  the lower-confidence rows, so the medical-decision pathway is
+  unchanged. Other consumers can read all safety facts and decide
+  per-key how to treat lower-confidence inputs.
+
+### Why
+- Pure `_SAFETY_SCOPE_WRITERS = {continuity}` siloed Veyra's user-
+  stated injuries into Veyra's own coach-context — a user telling
+  Veyra "I have a cervical-spine injury" still had to repeat it to
+  Continuity. That defeats the purpose of cross-product facts.
+- Pure "everyone can write safety" collapsed the medical-vs-coach
+  trust distinction. Confidence-gating restores it: same scope, but
+  Continuity is the only product whose claims pass the
+  `min_confidence=high` filter that the SBE applies before deriving
+  `blocked_actions[]`.
+
+### Tests
+- Existing GDPR + schema tests unchanged. Integration tests for the
+  new confidence-gated path will be added with Phase 4.2 step 3 PR
+  once Veyran publisher exists to exercise the medium-confidence
+  branch end-to-end.
+
+### Deploy notes
+- Pure logic change, no schema or env. After deploy:
+  - Veyra-token `POST scope=safety confidence=high` → 403 (same as
+    before).
+  - Veyra-token `POST scope=safety confidence=medium` → 200 (previously
+    403).
+  - Continuity-token any-confidence safety → 200 (unchanged).
+
+---
+
 ## [unreleased] - 2026-05-15 — Facts API review fixes
 
 Addresses review feedback on `feat/profile-facts-api` PR. Folded into
