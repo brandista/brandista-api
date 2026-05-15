@@ -259,6 +259,26 @@ def test_product_from_audience_empty_aud_is_unknown(monkeypatch):
     assert canonical.product_from_audience(None) == canonical.PRODUCT_UNKNOWN
 
 
+def test_product_from_audience_normalizes_env_value_case(monkeypatch):
+    """An operator typo capitalising or padding the env-value side of
+    `PRODUCT_AUDIENCE_MAP` should not downgrade legitimate users to
+    PRODUCT_UNKNOWN. The mapper runs the value through
+    `normalize_product` so 'Veyra', 'veyra ', 'VEYRA' all land on
+    canonical 'veyra'."""
+    from app.auth import canonical
+    monkeypatch.setenv(
+        "PRODUCT_AUDIENCE_MAP",
+        '{"a.veyra.aud":"Veyra",'
+        '"b.veyra.aud":"  veyra  ",'
+        '"c.continuity.aud":"CONTINUITY"}',
+    )
+    canonical.reset_product_audience_map_cache()
+
+    assert canonical.product_from_audience("a.veyra.aud") == "veyra"
+    assert canonical.product_from_audience("b.veyra.aud") == "veyra"
+    assert canonical.product_from_audience("c.continuity.aud") == "continuity"
+
+
 def test_decode_canonical_token_rejects_unknown_product_silently():
     """If a token carries `product=evil` somehow (forgery against a
     compromised SECRET_KEY, or a future code path that bypassed

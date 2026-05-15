@@ -276,9 +276,17 @@ async def apple_native(req: AppleNativeRequest) -> V2TokenResponse:
     # the audience to the iOS client.
     token_aud = claims.get("aud")
     if isinstance(token_aud, list):
-        # Apple sometimes emits aud as a single-element list when there
-        # are multiple Service IDs configured. Take the first match.
-        token_aud = next((a for a in token_aud if isinstance(a, str)), None)
+        # Apple may emit aud as a list when multiple Service IDs are
+        # configured. Pick the one that's both string-shaped AND on
+        # the accepted-audiences list — picking just the first string
+        # could land on a stale audience entry and mis-tag the token's
+        # product. Fall back to the first string if none matched (so
+        # token verification stays consistent with verify_apple_identity_token,
+        # which already accepted at least one entry from the list).
+        token_aud = next(
+            (a for a in token_aud if isinstance(a, str) and a in audiences),
+            next((a for a in token_aud if isinstance(a, str)), None),
+        )
     product = _resolve_product_from_audience(token_aud)
 
     apple_sub = claims.get("sub")

@@ -5,6 +5,44 @@ Muoto: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [unreleased] - 2026-05-15 — Audience-mapping edge-case fixes
+
+Two cubic-dev-ai P2 findings on the audience-based product resolver.
+Both surface only under operator typo / multi-audience Apple
+configuration, but the fixes are cheap and defensive.
+
+### Changed
+- **`product_from_audience` runs env-map values through
+  `normalize_product`** before the ALLOWED_PRODUCTS check. Previously
+  an operator who wrote `"Veyra"` (capitalised) or `"veyra "` (trailing
+  space) in `PRODUCT_AUDIENCE_MAP` would silently downgrade every
+  veyra-token to PRODUCT_UNKNOWN — the exact-match check on the
+  frozenset would miss them. Now case + whitespace are normalised the
+  same way they are for inbound header values.
+- **Apple `aud` list-shaped claim now picks the entry that actually
+  matched the accepted-audiences allowlist**, not just the first
+  string. Apple's docs allow `aud` to be a list when multiple Service
+  IDs are configured against one app; under that config, the old
+  `next(string)` pick could land on a stale audience entry and tag
+  the JWT with the wrong product. New pick prefers a string from
+  `audiences`, falls back to the first string if none matched (which
+  preserves the prior behavior when no audience-list config is in
+  play).
+
+### Tests
+- `tests/unit/test_auth_v2.py` gains
+  `test_product_from_audience_normalizes_env_value_case` — env map
+  with `"Veyra"`, `"  veyra  "`, `"CONTINUITY"` all land on canonical
+  product tags. The Apple-aud-list pick is small enough to verify by
+  smoke test in production (the env config is rare); deferred unit
+  test there.
+
+### Deploy notes
+- Pure logic change, no schema / env. Production behaviour for the
+  current `PRODUCT_AUDIENCE_MAP` (all-lowercase values) is unchanged.
+
+---
+
 ## [unreleased] - 2026-05-15 — Safety scope confidence policy (Phase 4.2 step 2.5)
 
 Adjusts the safety-scope write policy so non-Continuity products
