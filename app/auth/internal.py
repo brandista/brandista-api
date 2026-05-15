@@ -43,12 +43,16 @@ def require_internal_auth(
 ) -> None:
     """FastAPI dependency that validates the server-to-server secret.
 
-    Refuses (401) if:
-      - The header is missing.
-      - `BRANDISTA_INTERNAL_SECRET` is not configured (treated as a
-        deployment misconfiguration, refused fail-loud rather than
-        accidentally accepting any header).
-      - The supplied value does not match in constant time.
+    Status codes intentionally distinguish two failure modes:
+
+    - **503 Service Unavailable** when `BRANDISTA_INTERNAL_SECRET` is
+      not configured (or only whitespace). This is a deployment
+      misconfiguration, not a caller error — surface it as a
+      service-state problem so on-call sees the right signal (the
+      endpoint is *unavailable*, not *unauthorised*) and fixes the
+      env rather than chasing a credential mismatch.
+    - **401 Unauthorized** when the header is missing or the supplied
+      value does not match (constant-time comparison).
     """
     expected = os.getenv("BRANDISTA_INTERNAL_SECRET", "").strip()
     if not expected:
