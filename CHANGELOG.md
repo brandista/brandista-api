@@ -5,6 +5,75 @@ Muoto: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [unreleased] - 2026-05-15 — Apple Sign In on canonical (Phase 4.1 step 3.5)
+
+### Added
+- **Migration `0004_apple_id`** — `users.apple_id text UNIQUE NULL`,
+  indexed. Stores Apple's `sub` claim, which is the only stable
+  identifier across return sign-ins (Apple's private-relay email can
+  rotate when the user toggles email forwarding).
+- **`app/auth/apple.py`** — Apple identity-token verifier:
+  - JWKS fetch from `https://appleid.apple.com/auth/keys` with 1-hour
+    in-process cache + `kid`-miss → forced refresh.
+  - Validates RS256 alg + issuer + signature + expiry via `python-jose`.
+  - Manual `aud` validation against a list (python-jose's `audience=`
+    only accepts a single string), supporting multiple Brandista
+    products on one endpoint.
+  - Explicit non-RS256 refusal — if Apple ever rotates algorithm, we
+    fail loudly rather than silently accept an attacker-forged HS256.
+  - `coerce_apple_bool` helper — Apple sometimes returns booleans as
+    the string `"true"` / `"false"`.
+- **`POST /api/auth/v2/apple/native`** in `app/routers/auth_v2.py`.
+  Accepts `{identity_token, email?, given_name?, family_name?}` — the
+  client forwards email + name fields because Apple omits them from
+  the token on return sign-ins. Resolution by `apple_id` (sub) → email
+  → new. Refuses if neither token nor client provides an email AND no
+  existing user matches the sub.
+- **`provision_canonical_user` extended** with `google_id` and
+  `apple_id` keyword arguments. New lookup order: apple_id → google_id
+  → email (with lazy backfill of missing provider tags). Existing
+  one-arg callers continue to work; the only behavior change for them
+  is that a freshly-created user now has the provider tag persisted.
+
+### Changed
+- **`/api/auth/v2/google/native` now stores `google_id`** on
+  provisioning. Previously the `users.google_id` column existed in the
+  schema but was never written. Backfill happens lazily on existing
+  users' next sign-in.
+
+### Tests
+- `tests/unit/test_apple_verifier.py` — 9 tests covering happy path,
+  multi-audience accept, wrong audience, wrong issuer, expired,
+  unknown `kid` (with cache-refresh fallback), non-RS256 algorithm
+  refusal, malformed header, and `coerce_apple_bool` string-vs-bool.
+  Uses a per-session RSA keypair to mint real RS256 tokens; stubs
+  `_fetch_jwks` so no network call.
+
+### Deploy notes
+- Migration `0004` is additive (ADD COLUMN + UNIQUE + index). Safe to
+  apply against the live `users` table; `alembic upgrade head` runs in
+  a transaction.
+- New env var required: **`APPLE_BUNDLE_IDS`** — comma-separated list
+  of every Brandista product's Apple bundle id / Service ID that will
+  use this endpoint. Today: `eu.brandista.veyra`. When Continuity adds
+  Apple Sign In, append its bundle id with a comma.
+- Falls back to a single `APPLE_BUNDLE_ID` env var if `APPLE_BUNDLE_IDS`
+  is not set.
+- No frontend changes in brandista-api — endpoint is consumed by Veyra
+  (and any future iOS product) via thin proxy.
+
+### Sprint context
+- Phase 4.1 step 3.5 closes the Apple gap: Apple-Sign-In users now also
+  receive canonical platform JWTs and a `platform_user_id` UUID. Prior
+  to this, Apple users on Veyra stayed siloed (better-auth-only) and
+  fell outside the shared identity layer that Phase 4.1 §02-hypothesis
+  validation depends on.
+- All three Veyra auth paths (Google, Apple, email/password) are now
+  either on canonical (Google, Apple) or planned to migrate (email/
+  password — step 5+).
+
+---
+
 ## [unreleased] - 2026-05-14 — Canonical auth v2 (Phase 4.1 step 2)
 
 ### Added

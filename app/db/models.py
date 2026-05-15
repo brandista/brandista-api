@@ -85,6 +85,9 @@ class User(Base):
     google_id: Mapped[str | None] = mapped_column(
         String(255), unique=True, nullable=True, index=True
     )
+    apple_id: Mapped[str | None] = mapped_column(
+        String(255), unique=True, nullable=True, index=True
+    )
 
     # Profile
     full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
