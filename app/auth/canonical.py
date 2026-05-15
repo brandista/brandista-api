@@ -117,7 +117,12 @@ def product_from_audience(aud: str | None) -> str:
     candidate = mapping.get(aud.strip())
     if not candidate:
         return PRODUCT_UNKNOWN
-    return candidate if candidate in ALLOWED_PRODUCTS else PRODUCT_UNKNOWN
+    # Run the env-map value through the same normalizer as the
+    # (no-longer-used) header path. Operator typos like "Veyra" or
+    # "veyra " in PRODUCT_AUDIENCE_MAP shouldn't downgrade legitimate
+    # users to PRODUCT_UNKNOWN — they should land on the canonical tag.
+    # Strings outside ALLOWED_PRODUCTS still collapse to PRODUCT_UNKNOWN.
+    return normalize_product(candidate)
 
 
 _PRODUCT_AUDIENCE_MAP_CACHE: dict[str, str] | None = None
