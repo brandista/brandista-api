@@ -5,6 +5,56 @@ Muoto: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [unreleased] - 2026-05-15 — Internal server-to-server facts read endpoint (Phase 4.2 step 4 server side)
+
+Adds a deliberately narrow read-only endpoint for trusted Brandista
+backends (today: Continuity-api's SBE pipeline) to fetch a user's
+profile facts without a per-request user JWT. The async background
+task that runs `safety.engine.bound()` has no user token in hand —
+only a `user_id`.
+
+### Added
+- **`app/auth/internal.py`** — `require_internal_auth` FastAPI
+  dependency. Validates `X-Brandista-Internal-Auth: <secret>` against
+  `BRANDISTA_INTERNAL_SECRET` env in constant time. Fails LOUD: if the
+  env is unset/whitespace, every request gets 503 (deploy mistake
+  surfaces immediately rather than silently accepting). Empty header
+  or wrong value → 401.
+- **`GET /api/v1/internal/profile/facts`** — same query semantics as
+  the user-facing GET (`scope`, `min_confidence`, `include_expired`)
+  but takes `user_id` as an explicit query param. Auth via the
+  internal dependency. Mounted on both modular and legacy
+  entrypoints.
+
+### Why read-only
+- The internal channel is deliberately GET-only. If
+  `BRANDISTA_INTERNAL_SECRET` ever leaks, the blast radius is bounded
+  to data exfiltration — not arbitrary writes under any user's
+  identity. POST/DELETE always go through the canonical-JWT path
+  with anti-spoof `source_product` checks.
+- No `/internal/POST` path. No future PR should add one without an
+  explicit threat-model review.
+
+### Tests
+- `tests/unit/test_internal_auth.py` — 7 cases covering accept, reject
+  on wrong / missing / empty / shorter / longer headers, refuse on
+  unconfigured env (503 not silent pass), whitespace-only env treated
+  as misconfigured, header-side whitespace trimmed before compare.
+
+### Deploy notes
+- New env var required for Phase 4.2 step 4 to function:
+  ```
+  BRANDISTA_INTERNAL_SECRET=<long-random-string>
+  ```
+  Set on brandista-api Railway, and the SAME value on continuity-api
+  Railway (continuity-api ships the matching client in its own PR).
+- Without this env set, the endpoint returns 503 to every caller —
+  failure mode is "internal sync is dark", not "internal sync is
+  insecure". Continuity-api's pipeline degrades gracefully (proceeds
+  with local data only) when the call fails.
+
+---
+
 ## [unreleased] - 2026-05-15 — Audience-mapping edge-case fixes
 
 Two cubic-dev-ai P2 findings on the audience-based product resolver.

@@ -1917,6 +1917,17 @@ try:
 except Exception as e:  # noqa: BLE001
     logger.error(f"❌ Failed to mount facts router: {e}")
 
+try:
+    from app.routers.internal_facts import router as internal_facts_router
+    app.include_router(
+        internal_facts_router,
+        prefix="/api/v1/internal/profile/facts",
+        tags=["internal-facts"],
+    )
+    logger.info("✅ Mounted internal facts router at /api/v1/internal/profile/facts")
+except Exception as e:  # noqa: BLE001
+    logger.error(f"❌ Failed to mount internal facts router: {e}")
+
 @app.options("/{full_path:path}")
 async def options_handler():
     return {}
