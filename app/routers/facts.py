@@ -39,10 +39,16 @@ router = APIRouter()
 #: Confidence ordering for `min_confidence` filtering. higher → lower.
 _CONFIDENCE_RANK = {"high": 2, "medium": 1, "low": 0}
 
-#: Only Continuity is allowed to write `safety`-scope facts. Other
-#: products' safety claims must be ignored — a coach's heuristic
-#: should not override an explicit medical safety constraint.
-_SAFETY_SCOPE_WRITERS: frozenset[str] = frozenset({"continuity"})
+#: Products allowed to write `safety`-scope facts at `confidence=high`.
+#: Continuity is the only product whose safety claims carry the medical
+#: provenance to be acted on directly. Other products may still write
+#: safety-scope facts, but only at `confidence=medium` or `low` — they
+#: surface as informational tags that Continuity's SBE filter
+#: (`min_confidence=high`) ignores by default. This keeps the cross-
+#: product information flow open (Veyra's coach can still report a
+#: user-stated injury into the safety scope) without overriding a
+#: real medical constraint.
+_SAFETY_HIGH_CONFIDENCE_WRITERS: frozenset[str] = frozenset({"continuity"})
 
 
 def _require_known_product(user: CanonicalUser) -> str:
@@ -83,8 +89,12 @@ async def create_or_upsert_fact(
     - The caller's JWT must carry an allowlisted `product` tag (403 if not).
     - `body.source_product` must match the caller's JWT `product` —
       a Veyra token cannot post a fact tagged source_product=continuity.
-    - Only Continuity may write `scope='safety'` facts. Other products'
-      safety claims are refused with 403.
+    - `scope='safety'` writes at `confidence='high'` are restricted to
+      products with verified medical provenance (today: Continuity only).
+      Other products may write safety-scope facts at medium / low
+      confidence; Continuity's SBE filter (`min_confidence=high`) won't
+      consume them, but the data is available to other readers and can
+      be promoted to high-confidence by a future review flow.
 
     GDPR boundary (see `app/auth/facts_safety.py`):
     - Dose patterns in the JSON value (e.g. "500 mg") are refused.
@@ -101,12 +111,21 @@ async def create_or_upsert_fact(
             ),
         )
 
-    if body.scope == "safety" and caller_product not in _SAFETY_SCOPE_WRITERS:
+    if (
+        body.scope == "safety"
+        and body.confidence == "high"
+        and caller_product not in _SAFETY_HIGH_CONFIDENCE_WRITERS
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=(
-                "Only Continuity may write safety-scope facts. Other products "
-                "should record their constraints in nutrition / training / general."
+                "high-confidence safety facts may only be written by "
+                f"products with verified medical provenance "
+                f"({sorted(_SAFETY_HIGH_CONFIDENCE_WRITERS)}). "
+                f"'{caller_product}' may still record safety facts at "
+                "confidence=medium or confidence=low — Continuity's SBE "
+                "filter on min_confidence=high will not consume them, "
+                "but other consumers can."
             ),
         )
 
