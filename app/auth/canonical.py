@@ -145,16 +145,35 @@ def _session_maker_for_provision():
     return get_session_maker()
 
 
-async def provision_canonical_user(*, email: str, source: str) -> User:
-    """Create canonical user + org + credits + growth_engine entitlement
-    for a verified email. Single transaction.
+async def provision_canonical_user(
+    *,
+    email: str,
+    source: str,
+    google_id: str | None = None,
+    apple_id: str | None = None,
+) -> User:
+    """Resolve or create the canonical user + org + credits +
+    growth_engine entitlement for a verified email. Single transaction.
+
+    Lookup order (each is short-circuiting):
+      1. `apple_id` match — Apple's `sub` is the only stable identifier
+         when the email is a private relay that can rotate.
+      2. `google_id` match — same role as apple_id for Google sign-in.
+      3. `email` match — for both the legacy admin/super seeded rows
+         and for cross-provider account linking (sign in with Google
+         once, then with Apple on the same email → same canonical row).
+      4. None — create a fresh user + org + credits + entitlement.
+
+    When a user is resolved by email (case 3) and they have no
+    `google_id` / `apple_id` recorded yet, the provider tag is
+    backfilled so the next sign-in takes the fast path.
 
     Idempotent under race: if another request creates the user between
     our SELECT and INSERT, the unique(email) constraint fires and we
     re-query to return whoever won.
 
-    source: 'google' | 'magic_link' — used only in the log line emitted
-            on successful provisioning. Not stored on any row today.
+    source: 'google' | 'apple' | 'magic_link' — used in the log line
+            emitted on successful provisioning.
     """
     email = email.lower().strip()
     maker = _session_maker_for_provision()
@@ -167,12 +186,44 @@ async def provision_canonical_user(*, email: str, source: str) -> User:
         def _txn():
             return session.begin_nested() if session.in_transaction() else session.begin()
 
+        # 1. apple_id match
+        if apple_id:
+            existing = (
+                await session.execute(select(User).where(User.apple_id == apple_id))
+            ).scalar_one_or_none()
+            if existing is not None:
+                return existing
+
+        # 2. google_id match
+        if google_id:
+            existing = (
+                await session.execute(select(User).where(User.google_id == google_id))
+            ).scalar_one_or_none()
+            if existing is not None:
+                return existing
+
+        # 3. email match — possibly backfill missing provider tag
         existing = (
             await session.execute(select(User).where(User.email == email))
         ).scalar_one_or_none()
         if existing is not None:
+            backfilled = False
+            if apple_id and not existing.apple_id:
+                existing.apple_id = apple_id
+                backfilled = True
+            if google_id and not existing.google_id:
+                existing.google_id = google_id
+                backfilled = True
+            if backfilled:
+                async with _txn():
+                    session.add(existing)
+                await session.refresh(existing)
+                logger.info(
+                    f"auth-v2: backfilled provider tag for {email} (source={source})"
+                )
             return existing
 
+        # 4. create
         try:
             async with _txn():
                 org = Organization(name=email)
@@ -184,6 +235,8 @@ async def provision_canonical_user(*, email: str, source: str) -> User:
                     org_id=org.id,
                     is_active=True,
                     role="user",
+                    google_id=google_id,
+                    apple_id=apple_id,
                 )
                 session.add(user)
                 await session.flush()

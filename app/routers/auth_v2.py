@@ -152,8 +152,138 @@ async def google_native(req: GoogleNativeRequest) -> V2TokenResponse:
     if not email or not idinfo.get("email_verified", False):
         raise HTTPException(status_code=400, detail="Google email not verified")
 
-    user_row = await provision_canonical_user(email=email, source="google")
+    google_sub = idinfo.get("sub")
+    user_row = await provision_canonical_user(
+        email=email,
+        source="google",
+        google_id=google_sub if isinstance(google_sub, str) and google_sub else None,
+    )
     return _issue_v2_token_for(user_row, source="google/native")
+
+
+class AppleNativeRequest(BaseModel):
+    """Mirror of the mobile-side payload that Veyra / Continuity / future
+    iOS clients send. `identity_token` is required; `email` and full-name
+    fields are forwarded from the client because Apple omits them from
+    the token on return sign-ins.
+    """
+    identity_token: str
+    email: EmailStr | None = None
+    given_name: str | None = None
+    family_name: str | None = None
+
+
+def _apple_audiences() -> list[str]:
+    """Audiences accepted on `/apple/native` — one entry per product's
+    iOS bundle id (or web Service ID). Sourced from `APPLE_BUNDLE_IDS`
+    env (comma-separated). Falls back to a single `APPLE_BUNDLE_ID`
+    var for symmetry with how other Brandista services expect a single
+    value.
+    """
+    multi = os.getenv("APPLE_BUNDLE_IDS", "")
+    if multi.strip():
+        return [a.strip() for a in multi.split(",") if a.strip()]
+    single = os.getenv("APPLE_BUNDLE_ID", "").strip()
+    return [single] if single else []
+
+
+@router.post(
+    "/apple/native",
+    response_model=V2TokenResponse,
+    summary="Native Apple sign-in → canonical v2 token",
+)
+async def apple_native(req: AppleNativeRequest) -> V2TokenResponse:
+    """Verify an Apple identity token via Apple JWKS, resolve or
+    auto-provision the canonical user (keyed by `apple_id`-sub for
+    return sign-ins; falls back to email for first-time cross-provider
+    linking), return a v2 JWT.
+
+    Per Apple's contract, the `email` claim on the identity token is
+    only present on the first sign-in. On returns we accept the email
+    forwarded by the client (it has it saved from the first sign-in)
+    only if we don't already have this Apple `sub` on record. The
+    `sub` itself is the durable identifier.
+    """
+    from app.auth.apple import (
+        AppleVerificationError,
+        coerce_apple_bool,
+        verify_apple_identity_token,
+    )
+
+    token = (req.identity_token or "").strip()
+    if not token:
+        raise HTTPException(
+            status_code=400, detail="missing 'identity_token' (Apple)"
+        )
+
+    audiences = _apple_audiences()
+    if not audiences:
+        logger.error("auth-v2 apple/native: APPLE_BUNDLE_IDS / APPLE_BUNDLE_ID not configured")
+        raise HTTPException(status_code=500, detail="Apple sign-in not configured")
+
+    try:
+        claims = verify_apple_identity_token(token, audiences=audiences)
+    except AppleVerificationError as e:
+        # Single 401 surface; verifier already logged the verbose reason.
+        raise HTTPException(status_code=401, detail="invalid Apple token") from e
+
+    apple_sub = claims.get("sub")
+    if not isinstance(apple_sub, str) or not apple_sub:
+        raise HTTPException(status_code=401, detail="Apple token missing 'sub'")
+
+    token_email = claims.get("email")
+    if isinstance(token_email, str):
+        token_email = token_email.lower().strip()
+    else:
+        token_email = None
+
+    # On return sign-ins Apple omits the email; fall back to whatever
+    # the client forwarded. We can only auto-provision a NEW user if
+    # we have an email from one of these two places, but we can resolve
+    # an existing one from apple_sub alone.
+    client_email = req.email.lower().strip() if req.email else None
+    chosen_email = token_email or client_email
+
+    if token_email and not coerce_apple_bool(claims.get("email_verified")):
+        # Token carried an email that Apple says is NOT verified — refuse.
+        # (Apple should only emit `email_verified=false` for the rare
+        # case of corporate / federated Apple IDs whose backing email
+        # has not been confirmed.)
+        raise HTTPException(status_code=400, detail="Apple email not verified")
+
+    if chosen_email is None:
+        # No email available anywhere — only viable if the user already
+        # exists by apple_sub. provision_canonical_user with email=''
+        # would create a malformed row, so we look up directly.
+        existing_by_sub = await _lookup_user_by_apple_sub(apple_sub)
+        if existing_by_sub is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Apple token has no email and no client-forwarded fallback",
+            )
+        return _issue_v2_token_for(existing_by_sub, source="apple/native")
+
+    user_row = await provision_canonical_user(
+        email=chosen_email,
+        source="apple",
+        apple_id=apple_sub,
+    )
+    return _issue_v2_token_for(user_row, source="apple/native")
+
+
+async def _lookup_user_by_apple_sub(apple_sub: str):
+    """Direct DB lookup for an existing user by their Apple `sub`. Used
+    on return sign-ins where Apple omits the email claim; we have to be
+    able to resolve identity from the `sub` alone."""
+    from app.auth.canonical import _session_maker_for_provision
+    from app.db.models import User
+    from sqlalchemy import select
+
+    maker = _session_maker_for_provision()
+    async with maker() as session:
+        return (
+            await session.execute(select(User).where(User.apple_id == apple_sub))
+        ).scalar_one_or_none()
 
 
 class MagicLinkRequestBody(BaseModel):
