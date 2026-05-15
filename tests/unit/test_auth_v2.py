@@ -87,6 +87,130 @@ def test_create_canonical_token_returns_string_with_canonical_claims():
     assert decoded["exp"] > decoded["iat"]
 
 
+def test_create_canonical_token_includes_product_claim():
+    """Phase 4.2 prerequisite: every issued token carries a `product`
+    string claim so the facts API can anti-spoof source_product writes."""
+    from app.auth.canonical import create_canonical_token
+    from agents.config import SECRET_KEY, ALGORITHM
+
+    token = create_canonical_token(
+        user_id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        email="user@example.com",
+        role="user",
+        product="veyra",
+    )
+    decoded = pyjwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    assert decoded["product"] == "veyra"
+
+
+def test_create_canonical_token_product_defaults_to_unknown():
+    """Callers that don't pass product (e.g. legacy code paths during
+    migration) must still get a usable token — product falls back to
+    the sentinel that the facts API treats as read-only."""
+    from app.auth.canonical import create_canonical_token, PRODUCT_UNKNOWN
+    from agents.config import SECRET_KEY, ALGORITHM
+
+    token = create_canonical_token(
+        user_id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        email="user@example.com",
+        role="user",
+    )
+    decoded = pyjwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    assert decoded["product"] == PRODUCT_UNKNOWN
+
+
+def test_normalize_product_accepts_allowlisted_values():
+    from app.auth.canonical import normalize_product
+
+    assert normalize_product("veyra") == "veyra"
+    assert normalize_product("continuity") == "continuity"
+    assert normalize_product("growth_engine") == "growth_engine"
+
+
+def test_normalize_product_is_case_and_whitespace_insensitive():
+    from app.auth.canonical import normalize_product
+
+    assert normalize_product("VEYRA") == "veyra"
+    assert normalize_product("  Veyra  ") == "veyra"
+
+
+def test_normalize_product_unknown_values_collapse_to_unknown():
+    from app.auth.canonical import normalize_product, PRODUCT_UNKNOWN
+
+    assert normalize_product("") == PRODUCT_UNKNOWN
+    assert normalize_product(None) == PRODUCT_UNKNOWN
+    assert normalize_product("evil_product") == PRODUCT_UNKNOWN
+    # Crucially, a client can't inject an arbitrary string — only the
+    # frozenset members survive. Otherwise the facts-API anti-spoof
+    # is bypassable.
+    assert normalize_product("veyra; DROP TABLE users") == PRODUCT_UNKNOWN
+
+
+def test_decode_canonical_token_reads_product_claim():
+    from app.auth.canonical import create_canonical_token, decode_canonical_token
+
+    token = create_canonical_token(
+        user_id=uuid.uuid4(),
+        org_id=uuid.uuid4(),
+        email="x@y.com",
+        role="user",
+        product="continuity",
+    )
+    user = decode_canonical_token(token)
+    assert user.product == "continuity"
+
+
+def test_decode_canonical_token_backward_compat_no_product_claim():
+    """A token minted before the product claim was added (or with an
+    unrecognized value) must still decode successfully — the user just
+    can't write to the facts API. This protects in-flight tokens
+    during the retrofit."""
+    from app.auth.canonical import decode_canonical_token, PRODUCT_UNKNOWN
+    from agents.config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
+
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": str(uuid.uuid4()),
+        "email": "old@example.com",
+        "org_id": str(uuid.uuid4()),
+        "role": "user",
+        "jti": str(uuid.uuid4()),
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)).timestamp()),
+        # NB: no `product` claim — pre-retrofit shape
+    }
+    token = pyjwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+    user = decode_canonical_token(token)
+    assert user.product == PRODUCT_UNKNOWN
+
+
+def test_decode_canonical_token_rejects_unknown_product_silently():
+    """If a token carries `product=evil` somehow (forgery against a
+    compromised SECRET_KEY, or a future code path that bypassed
+    normalize_product on issuance), we still decode but collapse to
+    unknown — never trust the wire value verbatim for the in-memory
+    CanonicalUser."""
+    from app.auth.canonical import decode_canonical_token, PRODUCT_UNKNOWN
+    from agents.config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
+
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": str(uuid.uuid4()),
+        "email": "evil@example.com",
+        "org_id": str(uuid.uuid4()),
+        "role": "user",
+        "product": "evil_product_not_on_allowlist",
+        "jti": str(uuid.uuid4()),
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)).timestamp()),
+    }
+    token = pyjwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+    user = decode_canonical_token(token)
+    assert user.product == PRODUCT_UNKNOWN
+
+
 def test_create_canonical_token_each_call_has_unique_jti():
     from app.auth.canonical import create_canonical_token
     from agents.config import SECRET_KEY, ALGORITHM
