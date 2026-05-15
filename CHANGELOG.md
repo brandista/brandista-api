@@ -61,6 +61,42 @@ Addresses cubic-dev-ai review feedback on PR #3 (Apple Sign In).
 
 ---
 
+## [unreleased] - 2026-05-15 — Auto-run alembic upgrade on boot
+
+### Changed
+- **`start.py` now runs `alembic upgrade head` before binding the
+  uvicorn socket.** Fail-fast on any migration error — Railway will
+  restart the container rather than serve traffic against an
+  out-of-date schema.
+- Logs migration progress through the same `[start]` prefix as the
+  rest of the boot output. Alembic's per-revision `INFO` lines (which
+  Alembic emits to stderr) are captured and re-emitted at `INFO`.
+- Escape hatch: setting `SKIP_ALEMBIC_UPGRADE=1` skips the upgrade
+  step. Off by default. Use only for emergency rollback drills.
+
+### Why
+- The 0004_apple_id migration shipped with the Apple Sign In PR
+  (merged 2026-05-15) did NOT apply automatically on production deploy
+  because the previous `start.py` only invoked uvicorn. The first
+  Apple sign-in request hit 500 → "platform_error" until the migration
+  was run manually with `DATABASE_URL=… alembic upgrade head`.
+- Going forward every brandista-api deploy gets schema parity at boot
+  time — same as Veyra's `tsx scripts/migrate.ts && next start` pattern.
+
+### Operational notes
+- The DATABASE_URL env must be reachable from inside the container at
+  boot. Railway sets `DATABASE_URL` from the linked Postgres service;
+  no action needed in normal operation.
+- If a migration fails (e.g. data conflict, manual schema drift), the
+  container exits non-zero and Railway will restart it. The container
+  will keep failing until the migration is fixed — that's the intended
+  fail-fast behavior. To unblock without fixing the migration (e.g.
+  to roll back to the previous revision), set `SKIP_ALEMBIC_UPGRADE=1`
+  temporarily and use `alembic downgrade <prev_rev>` from a one-off
+  shell.
+
+---
+
 ## [unreleased] - 2026-05-15 — Apple Sign In on canonical (Phase 4.1 step 3.5)
 
 ### Added
