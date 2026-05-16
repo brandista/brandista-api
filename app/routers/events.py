@@ -220,7 +220,12 @@ async def publish_event(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
                 "error": "payload_validation_failed",
-                "errors": exc.inner.errors(include_url=False),
+                # include_context=False drops the original exception
+                # object out of `ctx`; otherwise model_validator-raised
+                # ValueErrors propagate as non-JSON-serialisable refs
+                # and FastAPI's response encoder raises TypeError
+                # before returning the 422 to the client.
+                "errors": exc.inner.errors(include_url=False, include_context=False),
             },
         ) from exc
 
