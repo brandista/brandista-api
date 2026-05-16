@@ -91,7 +91,7 @@ curl -sS -X POST https://api.brandista.eu/api/v1/internal/events \
     "event_version": 1,
     "source_product": "continuity",
     "occurred_at": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'",
-    "idempotency_key": "smoke:rollout-'"$(date +%s)"'",
+    "idempotency_key": "smoke:rollout:'"$TEST_USER_EMAIL"':'"$(date -u +%Y-%m-%d)"'",
     "email": "'"$TEST_USER_EMAIL"'",
     "payload": {
       "observed_at": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'",
@@ -105,10 +105,18 @@ curl -sS -X POST https://api.brandista.eu/api/v1/internal/events \
 
 Expected: `201 Created`, body has `event_id`, `event_seq` (integer ≥ 1), `envelope_sig_hex` (64-char hex), `resolved_user_id` (UUID), `idempotent: false`.
 
+The `idempotency_key` deliberately bakes in `$TEST_USER_EMAIL` and the
+UTC date (`YYYY-MM-DD`) — so re-running the same `curl` within the
+same UTC day produces the exact same key and brandista-api's dedup
+fires. Crossing midnight UTC, the key rolls and you get a fresh event
+(intended — daily smoke audit row, not perpetual collision).
+
 ```bash
-# Smoke 2 — re-POST the same body → idempotent dedup, 200, idempotent: true.
-# (Re-run the same curl above; brandista-api dedups on the
-# (source_product, event_type, user_id, idempotency_key) tuple.)
+# Smoke 2 — re-POST the exact same body → idempotent dedup, 200, idempotent: true.
+# Re-run the curl above; the key resolves to the same string within
+# the UTC day, so brandista-api dedups on
+# (source_product, event_type, user_id, idempotency_key) and returns
+# the original row's event_seq + envelope_sig_hex with idempotent=true.
 ```
 
 Verify in Railway logs:
