@@ -236,7 +236,17 @@ async def publish_event_internal(
     try:
         await session.flush()
         savepoint_committed = True
-    except IntegrityError:
+    except IntegrityError as exc:
+        # Only collapse to the idempotency-dedup branch on the
+        # specific per-(source_product, event_type, user_id,
+        # idempotency_key) constraint. Any other IntegrityError (FK
+        # breakage, NOT NULL trip, future constraint additions)
+        # propagates — `concurrent_modification_retry` would be the
+        # wrong story.
+        from app.routers.events import _is_idempotency_violation
+        if not _is_idempotency_violation(exc):
+            await savepoint.rollback()
+            raise
         await savepoint.rollback()
         savepoint_committed = False
 
