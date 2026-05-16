@@ -281,6 +281,13 @@ try:
 except Exception as e:  # noqa: BLE001
     logger.error(f"❌ Failed to mount internal facts router: {e}")
 
+try:
+    from app.routers.events import router as events_router
+    app.include_router(events_router, prefix="/api/v1/events", tags=["events"])
+    logger.info("✅ Mounted event bus router at /api/v1/events")
+except Exception as e:  # noqa: BLE001
+    logger.error(f"❌ Failed to mount events router: {e}")
+
 # Import legacy routers from main.py
 # These will be gradually migrated to app/routers/
 
