@@ -1935,6 +1935,17 @@ try:
 except Exception as e:  # noqa: BLE001
     logger.error(f"❌ Failed to mount events router: {e}")
 
+try:
+    from app.routers.internal_events import router as internal_events_router
+    app.include_router(
+        internal_events_router,
+        prefix="/api/v1/internal/events",
+        tags=["internal-events"],
+    )
+    logger.info("✅ Mounted internal events router at /api/v1/internal/events")
+except Exception as e:  # noqa: BLE001
+    logger.error(f"❌ Failed to mount internal events router: {e}")
+
 @app.options("/{full_path:path}")
 async def options_handler():
     return {}

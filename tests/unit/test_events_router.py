@@ -337,7 +337,7 @@ async def test_r1_subscriber_pull_and_ack_roundtrip(db_session, session_maker, s
         body = pull.json()
         assert len(body["events"]) == 1
         assert body["events"][0]["event_seq"] == published_seq
-        assert body["next_event_seq"] is None  # only one page
+        assert body["has_more"] is False  # only one page
 
         # Ack.
         ack = await client.post(
@@ -584,3 +584,90 @@ async def test_a2_ack_overshoot_refused(db_session, session_maker, seeded_user):
     body = ack_overshoot.json()
     # Detail body echoes the cap so the caller can correct.
     assert body["detail"]["max_eligible_event_seq"] == seq
+
+
+@pytest.mark.asyncio
+async def test_a3_ack_unseen_middle_event_seq_refused(
+    db_session, session_maker, seeded_user
+):
+    """Regression for the P1 caught pre-merge: ack referencing a
+    value ≤ max_eligible_event_seq but NOT an event_seq the
+    subscriber's filter could have seen would advance the checkpoint
+    and silently skip real events below that value.
+
+    Scenario: Veyra publishes a workout → seq=1.
+              Continuity publishes a recovery_pressure event → seq=2
+                (NOT in continuity-sbe-pipeline's allowed_event_types).
+              Veyra publishes another workout → seq=3.
+    The subscriber's filter sees 1 and 3; seq=2 is a "phantom" hole.
+    Ack value=2 must be refused even though 2 ≤ max(3) — otherwise
+    the next pull at `event_seq > 2` skips seq=1.
+    """
+    user_id, org_id, email = seeded_user
+    app = _build_events_test_app(db_session)
+    veyra_token = _veyra_token(user_id, org_id, email)
+    continuity_token = _continuity_token(user_id, org_id, email)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        # 1) Veyra workout — visible to continuity-sbe-pipeline.
+        pub1 = await client.post(
+            "/api/v1/events",
+            headers={"Authorization": f"Bearer {veyra_token}"},
+            json=_publish_body(idempotency_key="veyra:workout-a:scheduled"),
+        )
+        seq_visible_1 = pub1.json()["event_seq"]
+
+        # 2) Continuity recovery_pressure — same user, different
+        # source_product + event_type → continuity-sbe-pipeline's
+        # filter (allowed_event_types=workout.*, allowed_source_products=veyra)
+        # excludes this. The row IS in the events table; just invisible
+        # to this subscriber.
+        rp = await client.post(
+            "/api/v1/events",
+            headers={"Authorization": f"Bearer {continuity_token}"},
+            json={
+                "event_type": "health.recovery_pressure",
+                "event_version": 1,
+                "source_product": "continuity",
+                "occurred_at": "2026-05-16T06:14:00Z",
+                "idempotency_key": "continuity:rp-middle",
+                "payload": {
+                    "observed_at": "2026-05-16T06:14:00Z",
+                    "severity": "significant",
+                    "severity_rank": 3,
+                    "hrv_drop_pct": -27.0,
+                    "contributing_signals": ["hrv_below_baseline"],
+                },
+            },
+        )
+        seq_phantom = rp.json()["event_seq"]
+        assert seq_phantom > seq_visible_1
+
+        # 3) Second Veyra workout — visible to continuity-sbe-pipeline,
+        # creates a real "after the phantom" upper bound.
+        pub2 = await client.post(
+            "/api/v1/events",
+            headers={"Authorization": f"Bearer {veyra_token}"},
+            json=_publish_body(idempotency_key="veyra:workout-b:scheduled"),
+        )
+        seq_visible_2 = pub2.json()["event_seq"]
+        assert seq_visible_2 > seq_phantom
+
+        # Ack the phantom seq. It's ≤ max_eligible (visible_2) but
+        # the subscriber's filter never returned it on a GET.
+        ack = await client.post(
+            "/api/v1/events/ack",
+            headers=INTERNAL,
+            json={
+                "subscriber_id": "continuity-sbe-pipeline",
+                "user_id": str(user_id),
+                "advance_to_event_seq": seq_phantom,
+            },
+        )
+    assert ack.status_code == 400, ack.text
+    body = ack.json()
+    assert body["detail"]["error"] == "cursor_unseen_event_seq_refused"
+    # Cap still echoed for the caller to recover.
+    assert body["detail"]["max_eligible_event_seq"] == seq_visible_2
