@@ -18,16 +18,22 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
     ForeignKey,
+    Identity,
     Integer,
+    LargeBinary,
+    PrimaryKeyConstraint,
+    Sequence,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PgUUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -235,3 +241,221 @@ class Entitlement(Base):
     )
 
     organization: Mapped[Organization] = relationship(back_populates="entitlements")
+
+
+# ---------------------------------------------------------------------------
+# Phase 4.3 — cross-product behavioural event ledger
+#
+# See `docs/superpowers/specs/2026-05-16-phase-4-3-event-bus-design-v0-2.md`.
+# Migration `0007_event_bus.py` owns the DDL; these models are read/write
+# helpers for the producer + subscriber routers. Hot-path columns
+# (`workout_starts_at`, `workout_ends_at`, `severity_rank`) are populated
+# by the producer router from a Pydantic-validated payload — not by the
+# database — because PostgreSQL STORED generated columns require IMMUTABLE
+# expressions and `text::timestamptz` is only STABLE.
+# ---------------------------------------------------------------------------
+
+
+class Event(Base):
+    """A single row in the pull-based ledger.
+
+    Two keys, different jobs:
+    - `event_id` (UUID) — identity, dedup, envelope-signing.
+    - `event_seq` (BIGSERIAL) — cursor, ordering, checkpoint.
+
+    Both are server-side, but the producer router consumes them
+    *before* INSERT (uuid4 + `nextval('events_event_seq_seq')`) so
+    `envelope_sig BYTEA NOT NULL` is populated in the same statement.
+    """
+
+    __tablename__ = "events"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_product",
+            "event_type",
+            "user_id",
+            "idempotency_key",
+            name="uq_events_idempotency",
+        ),
+    )
+
+    event_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        primary_key=True,
+        server_default=func.gen_random_uuid(),
+    )
+    event_seq: Mapped[int] = mapped_column(
+        BigInteger,
+        Sequence("events_event_seq_seq"),
+        unique=True,
+        nullable=False,
+    )
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    event_version: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, default=1
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    org_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    source_product: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    envelope_sig: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    workout_starts_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    workout_ends_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    severity_rank: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+
+
+class EventSubscriber(Base):
+    """Technical access-control registry.
+
+    Adding a subscriber, or extending an existing one's
+    `allowed_event_types`, is a deliberate operational action — INSERT
+    /UPDATE here is the choke point that turns "medication.taken stays
+    off in v1" from a process promise into a code-enforced refusal.
+    """
+
+    __tablename__ = "event_subscribers"
+
+    subscriber_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    allowed_event_types: Mapped[list[str]] = mapped_column(
+        ARRAY(Text()), nullable=False
+    )
+    allowed_source_products: Mapped[list[str]] = mapped_column(
+        ARRAY(Text()), nullable=False
+    )
+    allowed_scope: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="user_self"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+class EventSubscriberCheckpoint(Base):
+    """Per-(subscriber, user) cursor state.
+
+    Global cursor was rejected (v0.2 r2 §1): pulling user A's events to
+    seq=1000 would silently skip user B's events with seq < 1000.
+    """
+
+    __tablename__ = "event_subscriber_checkpoints"
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "subscriber_id",
+            "user_id",
+            name="pk_event_subscriber_checkpoints",
+        ),
+    )
+
+    subscriber_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("event_subscribers.subscriber_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    last_processed_event_seq: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
+    last_processed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class EventHandlerAttempt(Base):
+    """Per-(event, subscriber) retry + dead-letter state.
+
+    Counter advances on handler raise; cursor does NOT advance until
+    attempts >= 5 or success. Then the row's `dead_lettered_at` is set
+    and the cursor moves past.
+    """
+
+    __tablename__ = "event_handler_attempts"
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "event_id", "subscriber_id", name="pk_event_handler_attempts"
+        ),
+    )
+
+    event_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("events.event_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    subscriber_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("event_subscribers.subscriber_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    attempts: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, default=0
+    )
+    last_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_error: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    dead_lettered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class EventAudit(Base):
+    """Denormalised audit log, retention-independent of `events`.
+
+    FK is SET NULL so audit outlives events after retention sweep.
+    Denormalised columns let Sprint loppuraportti reconstruct timelines
+    even after the source events row has been purged.
+    """
+
+    __tablename__ = "event_audit"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger, Identity(always=False), primary_key=True
+    )
+    event_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("events.event_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    event_seq_at_audit: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_product: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), nullable=False)
+    org_id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), nullable=False)
+    payload_summary: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    actor_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor_meta: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
