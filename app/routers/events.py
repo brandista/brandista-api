@@ -112,7 +112,13 @@ class EventListResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     events: list[EventListItem]
-    next_event_seq: int | None
+    # True when the subscriber's filter has more events beyond this
+    # page. The GET endpoint paginates by checkpoint position; the
+    # caller's next pull is a fresh GET (NOT a cursor parameter) —
+    # so what matters is just "should I poll again right now?".
+    # Document the pattern explicitly: ack the last successfully
+    # handled event_seq from this page, then re-pull.
+    has_more: bool
 
 
 class EventAckRequest(BaseModel):
@@ -277,13 +283,20 @@ async def publish_event(
 
     # SAVEPOINT around the INSERT so a unique-violation doesn't poison
     # the outer transaction — the follow-up SELECT and audit-row write
-    # must still run.
+    # must still run. Only collapse to the idempotency path on the
+    # specific `uq_events_idempotency` constraint; any other
+    # IntegrityError (FK breakage, NOT NULL trip, future constraint
+    # additions) should bubble as a 500 rather than silently turn into
+    # a misleading `concurrent_modification_retry`.
     savepoint = await session.begin_nested()
     session.add(row)
     try:
         await session.flush()
         savepoint_committed = True
-    except IntegrityError:
+    except IntegrityError as exc:
+        if not _is_idempotency_violation(exc):
+            await savepoint.rollback()
+            raise
         await savepoint.rollback()
         savepoint_committed = False
 
@@ -455,7 +468,6 @@ async def list_events(
 
     has_more = len(rows) > limit
     page = rows[:limit]
-    next_event_seq = page[-1].event_seq if has_more else None
 
     items = [
         EventListItem(
@@ -474,7 +486,7 @@ async def list_events(
         )
         for r in page
     ]
-    return EventListResponse(events=items, next_event_seq=next_event_seq)
+    return EventListResponse(events=items, has_more=has_more)
 
 
 # ---------------------------------------------------------------------------
@@ -538,23 +550,42 @@ async def ack_events(
             advanced=False,
         )
 
-    # Overshoot guard: ack must reference a real eligible event_seq
-    # the subscriber's filter could have seen for this user.
-    max_eligible = (
+    # Overshoot + middle-seq guard: ack must reference a real eligible
+    # event_seq the subscriber's filter could have seen for this user,
+    # not merely a value `<= max(event_seq)`. Otherwise a caller can
+    # ack 15 when the only eligible seqs in the gap are 10 and 20:
+    # checkpoint moves to 15 → next pull `event_seq > 15` returns
+    # only 20, silently skipping 10.
+    eligible_exists = (
         await session.execute(
-            select(func.max(Event.event_seq)).where(
+            select(Event.event_seq).where(
+                Event.event_seq == body.advance_to_event_seq,
                 Event.user_id == body.user_id,
                 Event.event_type.in_(subscriber.allowed_event_types),
                 Event.source_product.in_(subscriber.allowed_source_products),
             )
         )
-    ).scalar_one()
-    max_eligible = max_eligible or 0
-    if body.advance_to_event_seq > max_eligible:
+    ).scalar_one_or_none()
+    if eligible_exists is None:
+        # Compute max_eligible for the 400 body so the caller can correct.
+        max_eligible = (
+            await session.execute(
+                select(func.max(Event.event_seq)).where(
+                    Event.user_id == body.user_id,
+                    Event.event_type.in_(subscriber.allowed_event_types),
+                    Event.source_product.in_(subscriber.allowed_source_products),
+                )
+            )
+        ).scalar_one()
+        max_eligible = max_eligible or 0
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
-                "error": "cursor_overshoot_refused",
+                "error": (
+                    "cursor_overshoot_refused"
+                    if body.advance_to_event_seq > max_eligible
+                    else "cursor_unseen_event_seq_refused"
+                ),
                 "max_eligible_event_seq": max_eligible,
                 "requested": body.advance_to_event_seq,
             },
@@ -615,6 +646,38 @@ async def ack_events(
 # ---------------------------------------------------------------------------
 # Local helpers
 # ---------------------------------------------------------------------------
+
+
+def _is_idempotency_violation(exc: IntegrityError) -> bool:
+    """True iff this IntegrityError comes from the per-(source_product,
+    event_type, user_id, idempotency_key) unique constraint.
+
+    Used by the producer path to decide whether to collapse the error
+    into the idempotency-dedup branch. Any other IntegrityError
+    (FK breakage, NOT NULL trip, future constraint additions) should
+    propagate — `concurrent_modification_retry` would be the wrong
+    response and `idempotency_payload_mismatch` an outright lie.
+    """
+    # asyncpg surfaces the constraint name on the wrapped error.
+    # Defensive: walk both `orig` and `__cause__` chains and look for
+    # the constraint name in any error attribute or stringified body.
+    targets = {"uq_events_idempotency"}
+    for source in (exc.orig, exc.__cause__, exc):
+        if source is None:
+            continue
+        name = getattr(source, "constraint_name", None)
+        if isinstance(name, str) and name in targets:
+            return True
+        for attr in ("diag", "args"):
+            value = getattr(source, attr, None)
+            if value is None:
+                continue
+            constraint = getattr(value, "constraint_name", None)
+            if isinstance(constraint, str) and constraint in targets:
+                return True
+        if any(t in str(source) for t in targets):
+            return True
+    return False
 
 
 def _jsonify(value: Any) -> Any:
