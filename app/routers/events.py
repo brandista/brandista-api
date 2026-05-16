@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from typing import Annotated, Any
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, func, select
 from sqlalchemy.exc import IntegrityError
@@ -181,6 +181,7 @@ async def _resolve_subscriber(
 )
 async def publish_event(
     body: EventPublishRequest,
+    response: Response,
     user: CanonicalUser = Depends(get_current_canonical_user),
     session: AsyncSession = Depends(get_session),
 ) -> EventPublishResponse:
@@ -331,8 +332,18 @@ async def publish_event(
             detail="concurrent_modification_retry",
         )
 
+    # Snapshot the columns we need BEFORE rolling back — rollback
+    # expires every ORM attribute, and the next access would trigger a
+    # refresh-from-DB (lazy load), which is expensive and in async
+    # session land fails with MissingGreenlet outside a fresh
+    # connection acquire.
+    existing_event_id = existing.event_id
+    existing_event_seq = existing.event_seq
+    existing_payload = existing.payload
+    existing_envelope_sig = existing.envelope_sig
+
     incoming_canonical = canonical_payload_json(payload_json)
-    existing_canonical = canonical_payload_json(existing.payload)
+    existing_canonical = canonical_payload_json(existing_payload)
     if incoming_canonical != existing_canonical:
         await session.rollback()
         raise HTTPException(
@@ -342,16 +353,18 @@ async def publish_event(
 
     # True idempotent return — same key, same payload. The allocated
     # event_seq is intentionally not used; the sequence advances, the
-    # row does not duplicate.
+    # row does not duplicate. Spec §5 step 10: dedup returns 200, not
+    # 201 — override the decorator default.
     await session.rollback()
+    response.status_code = status.HTTP_200_OK
     logger.info(
         "events: idempotent dedup (event_id=%s, seq=%d, type=%s, user=%s)",
-        existing.event_id, existing.event_seq, body.event_type, user.user_id,
+        existing_event_id, existing_event_seq, body.event_type, user.user_id,
     )
     return EventPublishResponse(
-        event_id=existing.event_id,
-        event_seq=existing.event_seq,
-        envelope_sig_hex=existing.envelope_sig.hex(),
+        event_id=existing_event_id,
+        event_seq=existing_event_seq,
+        envelope_sig_hex=existing_envelope_sig.hex(),
         idempotent=True,
     )
 

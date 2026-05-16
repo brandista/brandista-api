@@ -48,6 +48,14 @@ depends_on = None
 
 def upgrade() -> None:
     # ---- events ---------------------------------------------------------
+    #
+    # The cursor sequence is created explicitly so the producer router
+    # can call `SELECT nextval('events_event_seq_seq')` *before* INSERT
+    # and include `event_seq` in the envelope signature (spec §5 step 5
+    # + §7). The sequence is then OWNED BY the column so dropping the
+    # table also drops the sequence — same lifetime as BIGSERIAL would
+    # have, but explicit ownership for downstream tooling clarity.
+    op.execute("CREATE SEQUENCE events_event_seq_seq")
     op.create_table(
         "events",
         sa.Column(
@@ -56,14 +64,9 @@ def upgrade() -> None:
             primary_key=True,
             server_default=sa.text("gen_random_uuid()"),
         ),
-        # BIGSERIAL: cursor / ordering key. The application consumes the
-        # underlying sequence via explicit nextval() *before* INSERT so
-        # the envelope signature can include event_seq in the same
-        # statement — see spec §5 step 5 + §7.
         sa.Column(
             "event_seq",
             sa.BigInteger,
-            sa.Sequence("events_event_seq_seq"),
             unique=True,
             nullable=False,
             server_default=sa.text("nextval('events_event_seq_seq')"),
@@ -120,6 +123,9 @@ def upgrade() -> None:
             name="uq_events_idempotency",
         ),
     )
+    # Tie sequence lifetime to the table — DROP TABLE cleans up the
+    # sequence too.
+    op.execute("ALTER SEQUENCE events_event_seq_seq OWNED BY events.event_seq")
     # Cursor scan per user (steady-state pull pattern).
     op.create_index("ix_events_user_seq", "events", ["user_id", "event_seq"])
     # Type-wide scans (Sprint loppuraportti, replay CLI by type).
