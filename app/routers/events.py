@@ -382,25 +382,53 @@ async def publish_event(
 )
 async def list_events(
     subscriber_id: Annotated[str, Query(min_length=1, max_length=64)],
-    user_id: Annotated[UUID, Query()],
+    user_id: Annotated[UUID | None, Query()] = None,
+    email: Annotated[str | None, Query(min_length=1, max_length=320)] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     session: AsyncSession = Depends(get_session),
 ) -> EventListResponse:
     """Return events newer than the (subscriber, user) checkpoint that
     match the subscriber's registry filter, ordered by `event_seq`.
 
+    Identity hint: exactly one of `user_id` or `email`. The email
+    fallback matches the internal-facts contract — Continuity-side
+    callers know only email locally and resolve to user_id server-side.
+
     Does NOT advance the checkpoint — the caller acks explicitly via
     POST `/ack` after successful handling. The response carries
     `envelope_sig_hex` so subscribers can verify signatures locally.
     """
+    if (user_id is None) == (email is None):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="exactly one of user_id or email must be provided",
+        )
+
     subscriber = await _resolve_subscriber(session, subscriber_id)
+
+    resolved_user_id: UUID
+    if user_id is not None:
+        resolved_user_id = user_id
+    else:
+        normalized = (email or "").strip().lower()
+        row = (
+            await session.execute(
+                select(User.id).where(User.email == normalized)
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="user not found for given email",
+            )
+        resolved_user_id = row
 
     checkpoint_row = (
         await session.execute(
             select(EventSubscriberCheckpoint).where(
                 and_(
                     EventSubscriberCheckpoint.subscriber_id == subscriber_id,
-                    EventSubscriberCheckpoint.user_id == user_id,
+                    EventSubscriberCheckpoint.user_id == resolved_user_id,
                 )
             )
         )
@@ -410,7 +438,7 @@ async def list_events(
     stmt = (
         select(Event)
         .where(
-            Event.user_id == user_id,
+            Event.user_id == resolved_user_id,
             Event.event_seq > last_seq,
             Event.event_type.in_(subscriber.allowed_event_types),
             Event.source_product.in_(subscriber.allowed_source_products),
