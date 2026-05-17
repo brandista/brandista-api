@@ -137,8 +137,11 @@ async def create_or_upsert_fact(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)
         ) from e
 
-    # Upsert pattern: try INSERT, on unique-violation re-SELECT and
-    # UPDATE the columns that this caller is allowed to change.
+    # Upsert pattern: try INSERT, on the specific natural-key unique
+    # violation re-SELECT and UPDATE the columns that this caller is
+    # allowed to change. Other IntegrityErrors (FK breakage, NOT NULL,
+    # future constraints) must bubble as real server errors; otherwise a
+    # missing canonical user is misreported as "concurrent modification".
     new_fact = ProfileFact(
         org_id=user.org_id,
         user_id=user.user_id,
@@ -159,8 +162,10 @@ async def create_or_upsert_fact(
             user.user_id, body.scope, body.key, caller_product,
         )
         return Fact.model_validate(new_fact)
-    except IntegrityError:
+    except IntegrityError as exc:
         await session.rollback()
+        if not _is_fact_unique_violation(exc):
+            raise
 
     # Row already exists for this (user, scope, key) → upsert.
     existing = (
@@ -332,3 +337,24 @@ async def bulk_delete_facts_by_source_product(
         user.user_id, source_product, deleted,
     )
     return {"deleted": deleted}
+
+
+def _is_fact_unique_violation(exc: IntegrityError) -> bool:
+    """True iff this IntegrityError is the profile facts upsert key."""
+    targets = {"uq_profile_facts_user_scope_key"}
+    for source in (exc.orig, exc.__cause__, exc):
+        if source is None:
+            continue
+        name = getattr(source, "constraint_name", None)
+        if isinstance(name, str) and name in targets:
+            return True
+        for attr in ("diag", "args"):
+            value = getattr(source, attr, None)
+            if value is None:
+                continue
+            constraint = getattr(value, "constraint_name", None)
+            if isinstance(constraint, str) and constraint in targets:
+                return True
+        if any(t in str(source) for t in targets):
+            return True
+    return False

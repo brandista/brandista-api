@@ -331,14 +331,6 @@ async def provision_canonical_user(
     email = email.lower().strip()
     maker = _session_maker_for_provision()
     async with maker() as session:
-        # Pick the right transaction primitive based on whether we own
-        # the session (production: fresh, no autobegun txn → begin())
-        # or share it with a caller (tests: outer txn already open →
-        # begin_nested() = SAVEPOINT, so we still get atomicity without
-        # double-begin).
-        def _txn():
-            return session.begin_nested() if session.in_transaction() else session.begin()
-
         # 1. apple_id match
         if apple_id:
             existing = (
@@ -369,9 +361,7 @@ async def provision_canonical_user(
                 backfilled = True
             if backfilled:
                 try:
-                    async with _txn():
-                        session.add(existing)
-                    await session.refresh(existing)
+                    await session.commit()
                     logger.info(
                         f"auth-v2: backfilled provider tag for {email} (source={source})"
                     )
@@ -408,25 +398,24 @@ async def provision_canonical_user(
 
         # 4. create
         try:
-            async with _txn():
-                org = Organization(name=email)
-                session.add(org)
-                await session.flush()
+            org = Organization(name=email)
+            session.add(org)
+            await session.flush()
 
-                user = User(
-                    email=email,
-                    org_id=org.id,
-                    is_active=True,
-                    role="user",
-                    google_id=google_id,
-                    apple_id=apple_id,
-                )
-                session.add(user)
-                await session.flush()
+            user = User(
+                email=email,
+                org_id=org.id,
+                is_active=True,
+                role="user",
+                google_id=google_id,
+                apple_id=apple_id,
+            )
+            session.add(user)
+            await session.flush()
 
-                session.add(Credits(org_id=org.id, balance=0, plan_monthly_limit=0))
-                session.add(Entitlement(org_id=org.id, module="growth_engine"))
-            await session.refresh(user)
+            session.add(Credits(org_id=org.id, balance=0, plan_monthly_limit=0))
+            session.add(Entitlement(org_id=org.id, module="growth_engine"))
+            await session.commit()
             logger.info(f"auth-v2: provisioned canonical user {email} (source={source})")
             return user
         except IntegrityError:

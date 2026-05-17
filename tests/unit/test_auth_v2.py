@@ -703,6 +703,39 @@ async def test_provision_creates_full_set(db_session, monkeypatch):
     assert ent.is_active is True
 
 
+@pytest.mark.asyncio
+async def test_provision_commits_when_using_fresh_session_maker(db_engine, monkeypatch):
+    """Regression: SELECTs before INSERT autobegin a transaction. The
+    provisioning path must still commit the created canonical user
+    before returning a JWT for it."""
+    from app.auth import canonical
+    from app.db.models import User
+    from sqlalchemy import select, text
+
+    maker = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+    async with maker() as session:
+        await session.execute(text(
+            "TRUNCATE TABLE entitlements, credits, users, organizations "
+            "RESTART IDENTITY CASCADE"
+        ))
+        await session.commit()
+
+    monkeypatch.setattr(canonical, "_session_maker_for_provision", lambda: maker)
+
+    user = await canonical.provision_canonical_user(
+        email="committed@example.com",
+        source="apple",
+        apple_id="apple-sub-commit-test",
+    )
+
+    async with maker() as verify:
+        row = (await verify.execute(
+            select(User).where(User.id == user.id)
+        )).scalar_one_or_none()
+    assert row is not None
+    assert row.email == "committed@example.com"
+
+
 class _OneShotSessionMaker:
     """Test helper: a 'session maker' that returns the same already-open
     session via async context manager. Lets provision_canonical_user
