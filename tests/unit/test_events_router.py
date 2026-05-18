@@ -95,7 +95,8 @@ async def db_session(session_maker):
         await session.execute(
             text(
                 "TRUNCATE TABLE "
-                "entitlements, credits, profile_facts, users, organizations "
+                "entitlements, credits, profile_facts, user_email_aliases, "
+                "users, organizations "
                 "RESTART IDENTITY CASCADE"
             )
         )
@@ -363,6 +364,48 @@ async def test_r1_subscriber_pull_and_ack_roundtrip(db_session, session_maker, s
         )
     assert pull2.status_code == 200
     assert pull2.json()["events"] == []
+
+
+@pytest.mark.asyncio
+async def test_subscriber_pull_resolves_email_alias(
+    db_session, session_maker, seeded_user
+):
+    user_id, org_id, email = seeded_user
+    alias = f"alias-{user_id}@example.com"
+    await db_session.execute(
+        text(
+            "INSERT INTO user_email_aliases (email, user_id) "
+            "VALUES (:email, :user_id)"
+        ),
+        {"email": alias, "user_id": user_id},
+    )
+    await db_session.commit()
+
+    app = _build_events_test_app(db_session)
+    token = _veyra_token(user_id, org_id, email)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        publish = await client.post(
+            "/api/v1/events", headers=headers, json=_publish_body()
+        )
+        assert publish.status_code == 201, publish.text
+
+        pull = await client.get(
+            "/api/v1/events",
+            headers=INTERNAL,
+            params={
+                "subscriber_id": "continuity-sbe-pipeline",
+                "email": alias.upper(),
+            },
+        )
+
+    assert pull.status_code == 200, pull.text
+    events = pull.json()["events"]
+    assert len(events) == 1
+    assert events[0]["user_id"] == str(user_id)
 
 
 # ---------- §11 S1 / S2 / GDPR ----------

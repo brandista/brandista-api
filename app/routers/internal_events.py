@@ -46,6 +46,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.internal import require_internal_auth
+from app.auth.identity import resolve_user_by_email
 from app.db.models import Event, EventAudit, User
 from app.db.session import get_session
 from app.events import (
@@ -153,12 +154,7 @@ async def publish_event_internal(
         resolved_user_id = row.id
         resolved_org_id = row.org_id
     else:
-        normalized = (body.email or "").strip().lower()
-        row = (
-            await session.execute(
-                select(User).where(User.email == normalized)
-            )
-        ).scalar_one_or_none()
+        row = await resolve_user_by_email(session, body.email or "")
         if row is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

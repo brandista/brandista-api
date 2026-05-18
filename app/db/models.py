@@ -124,6 +124,34 @@ class User(Base):
     )
 
     organization: Mapped[Organization] = relationship(back_populates="users")
+    email_aliases: Mapped[list[UserEmailAlias]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+class UserEmailAlias(Base):
+    """Secondary email addresses that resolve to one canonical user.
+
+    The canonical user row keeps a single primary `users.email`, but
+    server-to-server integrations often only know an address from their
+    own local identity store. Aliases let those integrations resolve
+    old or short-form addresses without creating duplicate users.
+    """
+
+    __tablename__ = "user_email_aliases"
+
+    email: Mapped[str] = mapped_column(String(255), primary_key=True)
+    user_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    user: Mapped[User] = relationship(back_populates="email_aliases")
 
 
 class Credits(Base):

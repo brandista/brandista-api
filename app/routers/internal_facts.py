@@ -29,7 +29,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException, status
 
 from app.auth.internal import require_internal_auth
-from app.db.models import ProfileFact, User
+from app.auth.identity import resolve_user_by_email
+from app.db.models import ProfileFact
 from app.db.session import get_session
 from app.routers.facts import _CONFIDENCE_RANK
 from app.schemas.facts import Fact, FactConfidence, FactList
@@ -80,10 +81,7 @@ async def list_facts_internal(
         )
 
     if email is not None:
-        normalized = email.strip().lower()
-        row = (
-            await session.execute(select(User).where(User.email == normalized))
-        ).scalar_one_or_none()
+        row = await resolve_user_by_email(session, email)
         if row is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

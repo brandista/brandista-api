@@ -36,6 +36,7 @@ from app.auth.canonical import (
     PRODUCT_UNKNOWN,
 )
 from app.auth.dependencies import get_current_canonical_user
+from app.auth.identity import resolve_user_by_email
 from app.auth.internal import require_internal_auth
 from app.db.models import (
     Event,
@@ -428,18 +429,13 @@ async def list_events(
     if user_id is not None:
         resolved_user_id = user_id
     else:
-        normalized = (email or "").strip().lower()
-        row = (
-            await session.execute(
-                select(User.id).where(User.email == normalized)
-            )
-        ).scalar_one_or_none()
+        row = await resolve_user_by_email(session, email or "")
         if row is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="user not found for given email",
             )
-        resolved_user_id = row
+        resolved_user_id = row.id
 
     checkpoint_row = (
         await session.execute(

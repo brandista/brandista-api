@@ -63,7 +63,8 @@ async def db_session(db_engine):
         await session.execute(
             text(
                 "TRUNCATE TABLE "
-                "entitlements, credits, profile_facts, users, organizations "
+                "entitlements, credits, profile_facts, user_email_aliases, "
+                "users, organizations "
                 "RESTART IDENTITY CASCADE"
             )
         )
@@ -186,6 +187,33 @@ async def test_publish_by_email_resolves_to_user_id(db_session, seeded_user):
     assert r.status_code == 201, r.text
     body = r.json()
     assert body["resolved_user_id"] == str(user_id)
+
+
+@pytest.mark.asyncio
+async def test_publish_by_email_alias_resolves_to_user_id(db_session, seeded_user):
+    user_id, _, _ = seeded_user
+    alias = f"alias-{user_id}@example.com"
+    await db_session.execute(
+        text(
+            "INSERT INTO user_email_aliases (email, user_id) "
+            "VALUES (:email, :user_id)"
+        ),
+        {"email": alias, "user_id": user_id},
+    )
+    await db_session.commit()
+    app = _build_internal_events_app(db_session)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        r = await client.post(
+            "/api/v1/internal/events",
+            headers=INTERNAL,
+            json={**_publish_body(), "email": alias.upper()},
+        )
+
+    assert r.status_code == 201, r.text
+    assert r.json()["resolved_user_id"] == str(user_id)
 
 
 # ---------- idempotency ----------
